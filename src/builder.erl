@@ -530,13 +530,16 @@ build_table_data(Scalars, Refs, TablePos, Defs) ->
     TableSize = BaseTableSize + RefPadding,
     RefDataStart = TablePos + TableSize,
 
-    {RefDataBin, RefPositions} = build_ref_data(RefFieldsOrdered, RefDataStart, Defs),
+    {RefDataIo, RefPositions} = build_ref_data(RefFieldsOrdered, RefDataStart, Defs),
 
     %% Build table inline data with padding
-    TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
-    PadBin = <<0:(RefPadding * 8)>>,
+    TableDataIo = build_inline_data(SortedLayout, TablePos, RefPositions),
 
-    {<<TableData/binary, PadBin/binary>>, RefDataBin}.
+    %% Return as iolists
+    case RefPadding of
+        0 -> {TableDataIo, RefDataIo};
+        _ -> {[TableDataIo, <<0:(RefPadding * 8)>>], RefDataIo}
+    end.
 
 %% Calculate padding needed before ref data
 %% Ensure nested table's SOFFSET is 4-byte aligned (Pos + VTableSize must be 4-byte aligned)
@@ -763,15 +766,15 @@ calc_vtable_size(Scalars, Refs) ->
     end.
 
 %% Build inline table data (scalars inline, refs as uoffsets)
+%% Returns iolist to avoid intermediate binary creation
 build_inline_data(FieldLayout, TablePos, RefPositions) ->
-    {Data, _} = lists:foldl(
+    {DataReversed, _} = lists:foldl(
         fun({_Id, Type, Value, FieldOff}, {Acc, CurOff}) ->
             %% Add padding if needed
             Pad = FieldOff - CurOff,
-            PadBin = <<0:(Pad * 8)>>,
 
             %% Encode the field
-            FieldBin =
+            FieldIo =
                 case is_scalar_type(Type) of
                     true ->
                         encode_scalar(Value, Type);
@@ -782,28 +785,28 @@ build_inline_data(FieldLayout, TablePos, RefPositions) ->
                         UOffset = RefDataPos - FieldAbsPos,
                         <<UOffset:32/little-signed>>
                 end,
-            {<<Acc/binary, PadBin/binary, FieldBin/binary>>, FieldOff + byte_size(FieldBin)}
+            FieldSize = iolist_size(FieldIo),
+            case Pad of
+                0 -> {[FieldIo | Acc], FieldOff + FieldSize};
+                _ -> {[FieldIo, <<0:(Pad * 8)>> | Acc], FieldOff + FieldSize}
+            end
         end,
         %% Start at offset 4
-        {<<>>, 4},
+        {[], 4},
         FieldLayout
     ),
-    Data.
+    lists:reverse(DataReversed).
 
+%% Encode string as iolist - preserves sub-binary references
 encode_string(Bin) ->
     Len = byte_size(Bin),
     TotalLen = 4 + Len + 1,
     PadLen = (4 - (TotalLen rem 4)) rem 4,
-    <<Len:32/little, Bin/binary, 0, 0:(PadLen * 8)>>.
+    [<<Len:32/little>>, Bin, <<0, 0:(PadLen * 8)>>].
 
 encode_ref(string, Bin, _Defs) when is_binary(Bin) ->
-    Len = byte_size(Bin),
-    %% Pad string to 4-byte boundary
-
-    %% length + data + null
-    TotalLen = 4 + Len + 1,
-    PadLen = (4 - (TotalLen rem 4)) rem 4,
-    <<Len:32/little, Bin/binary, 0, 0:(PadLen * 8)>>;
+    %% Return iolist to preserve sub-binary references
+    encode_string(Bin);
 encode_ref({vector, ElemType}, Values, Defs) when is_list(Values) ->
     encode_vector(ElemType, Values, Defs);
 encode_ref({union_value, UnionName}, #{type := MemberType, value := Value}, Defs) ->
@@ -821,11 +824,12 @@ encode_vector(ElemType, Values, Defs) ->
             %% Scalar vector: length + inline elements
             Len = length(Values),
             Elements = [encode_scalar(V, ResolvedType) || V <- Values],
-            ElementsBin = iolist_to_binary(Elements),
+            %% Calculate size without flattening
+            ElementsSize = iolist_size(Elements),
             %% Pad to 4-byte boundary
-            TotalLen = 4 + byte_size(ElementsBin),
+            TotalLen = 4 + ElementsSize,
             PadLen = (4 - (TotalLen rem 4)) rem 4,
-            <<Len:32/little, ElementsBin/binary, 0:(PadLen * 8)>>;
+            [<<Len:32/little>>, Elements, <<0:(PadLen * 8)>>];
         false ->
             %% Reference vector (e.g., strings, tables): length + offsets, then data
             encode_ref_vector(ElemType, Values, Defs)
@@ -847,12 +851,12 @@ encode_string_vector_dedup(Values) ->
 
     %% Encode strings in reverse order (like flatc does)
     ReversedValues = lists:reverse(Values),
-    {DataBins, PosByValue, _} = lists:foldl(
+    {DataIoLists, PosByValue, _} = lists:foldl(
         fun(Str, {DataAcc, PosMap, DataPos}) ->
             case maps:get(Str, PosMap, undefined) of
                 undefined ->
-                    DataBin = encode_string(Str),
-                    {[DataBin | DataAcc], PosMap#{Str => DataPos}, DataPos + byte_size(DataBin)};
+                    DataIo = encode_string(Str),
+                    {[DataIo | DataAcc], PosMap#{Str => DataPos}, DataPos + iolist_size(DataIo)};
                 _CachedPos ->
                     %% Already encoded, reuse position
                     {DataAcc, PosMap, DataPos}
@@ -873,11 +877,8 @@ encode_string_vector_dedup(Values) ->
         lists:zip(lists:seq(0, Len - 1), Values)
     ),
 
-    iolist_to_binary([
-        <<Len:32/little>>,
-        Offsets,
-        lists:reverse(DataBins)
-    ]).
+    %% Return as iolist - preserves sub-binary references until final flatten
+    [<<Len:32/little>>, Offsets, lists:reverse(DataIoLists)].
 
 encode_ref_vector_standard(ElemType, Values, Defs) ->
     %% Check if this is a table vector that needs vtable sharing
@@ -1164,20 +1165,22 @@ build_table_data_minimal_padding(Scalars, Refs, TablePos, Defs) ->
     RefPadding = calc_ref_padding(RefFieldsOrdered, TablePos + BaseTableSize, Defs),
     TableSize = BaseTableSize + RefPadding,
     RefDataStart = TablePos + TableSize,
-    {RefDataBin, RefPositions} = build_ref_data_minimal_padding(
+    {RefDataIo, RefPositions} = build_ref_data_minimal_padding(
         RefFieldsOrdered, RefDataStart, Defs
     ),
-    TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
-    PadBin = <<0:(RefPadding * 8)>>,
-    {<<TableData/binary, PadBin/binary>>, RefDataBin}.
+    TableDataIo = build_inline_data(SortedLayout, TablePos, RefPositions),
+    case RefPadding of
+        0 -> {TableDataIo, RefDataIo};
+        _ -> {[TableDataIo, <<0:(RefPadding * 8)>>], RefDataIo}
+    end.
 
 %% Build ref data with minimal string padding
 build_ref_data_minimal_padding(RefFields, RefDataStart, Defs) ->
-    {DataBins, Positions, _} = lists:foldl(
+    {DataIoLists, Positions, _} = lists:foldl(
         fun({_Id, Type, Value, FieldOff}, {DataAcc, PosAcc, DataPos}) ->
             AlignPad = calc_vector_alignment_padding(Type, DataPos, Defs),
             PaddedPos = DataPos + AlignPad,
-            DataBin = encode_ref_minimal_padding(Type, Value, Defs),
+            DataIo = encode_ref_minimal_padding(Type, Value, Defs),
             RefTargetPos =
                 case is_nested_table_type(Type, Value, Defs) of
                     {true, VTableSize} -> PaddedPos + VTableSize;
@@ -1185,21 +1188,22 @@ build_ref_data_minimal_padding(RefFields, RefDataStart, Defs) ->
                 end,
             PadBin = <<0:(AlignPad * 8)>>,
             {
-                [DataBin, PadBin | DataAcc],
+                [DataIo, PadBin | DataAcc],
                 PosAcc#{FieldOff => RefTargetPos},
-                PaddedPos + byte_size(DataBin)
+                PaddedPos + iolist_size(DataIo)
             }
         end,
         {[], #{}, RefDataStart},
         RefFields
     ),
-    {iolist_to_binary(lists:reverse(DataBins)), Positions}.
+    {lists:reverse(DataIoLists), Positions}.
 
 %% Encode ref with minimal string padding (no 4-byte alignment padding)
+%% Returns iolist to preserve sub-binary references
 encode_ref_minimal_padding(string, Bin, _Defs) when is_binary(Bin) ->
     Len = byte_size(Bin),
     %% No padding - just length + data + null terminator
-    <<Len:32/little, Bin/binary, 0>>;
+    [<<Len:32/little>>, Bin, <<0>>];
 encode_ref_minimal_padding(Type, Value, Defs) ->
     encode_ref(Type, Value, Defs).
 
@@ -1282,25 +1286,30 @@ encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
 encode_scalar(TypeIndex, {union_type, _UnionName}) when is_integer(TypeIndex) ->
     <<TypeIndex:8/unsigned>>.
 
-%% Encode struct as inline data
+%% Encode struct as inline data (returns iolist)
 encode_struct(Map, Fields) ->
-    {Bin, _} = lists:foldl(
+    {IoReversed, EndOff} = lists:foldl(
         fun({Name, Type}, {Acc, Off}) ->
             Size = type_size(Type),
             AlignedOff = align_offset(Off, Size),
             Pad = AlignedOff - Off,
             Value = get_field_value(Map, Name),
-            ValBin = encode_scalar(Value, Type),
-            {<<Acc/binary, 0:(Pad * 8), ValBin/binary>>, AlignedOff + Size}
+            ValIo = encode_scalar(Value, Type),
+            case Pad of
+                0 -> {[ValIo | Acc], AlignedOff + Size};
+                _ -> {[ValIo, <<0:(Pad * 8)>> | Acc], AlignedOff + Size}
+            end
         end,
-        {<<>>, 0},
+        {[], 0},
         Fields
     ),
     %% Pad to struct alignment
     StructSize = calc_struct_size(Fields),
-    CurrentSize = byte_size(Bin),
-    TrailingPad = StructSize - CurrentSize,
-    <<Bin/binary, 0:(TrailingPad * 8)>>.
+    TrailingPad = StructSize - EndOff,
+    case TrailingPad of
+        0 -> lists:reverse(IoReversed);
+        _ -> lists:reverse([<<0:(TrailingPad * 8)>> | IoReversed])
+    end.
 
 %% =============================================================================
 %% Helpers
@@ -1384,5 +1393,56 @@ vtable_sharing_test() ->
     ?assertEqual(1.5, maps:get(x, Pos)),
     ?assertEqual(2.5, maps:get(y, Pos)),
     ?assertEqual(3.5, maps:get(z, Pos)).
+
+%% Test zero-copy: re-encoding should not create new refc binaries
+zero_copy_reencode_test() ->
+    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
+
+    %% Create a message with a large string (>64 bytes to be a refc binary)
+    LargeString = list_to_binary(lists:duplicate(200, $X)),
+    Map = #{name => LargeString, hp => 100, mana => 50},
+
+    %% Encode to flatbuffer
+    Buffer = iolist_to_binary(from_map(Map, Defs, 'Monster', <<"MONS">>)),
+
+    %% Run in isolated process to measure binaries accurately
+    Result = run_in_isolated_process(fun() ->
+        %% Receive buffer - should have 1 refc binary
+        erlang:garbage_collect(),
+        Bins1 = get_refc_binary_ids(),
+
+        %% Deserialize - should still have same binary (zero-copy decode)
+        Ctx = eflatbuffers:new(Buffer, Defs, 'Monster'),
+        DecodedMap = eflatbuffers:to_map(Ctx),
+        erlang:garbage_collect(),
+        Bins2 = get_refc_binary_ids(),
+
+        %% Re-encode to iolist - should NOT create new refc binaries
+        ReEncoded = from_map(DecodedMap, Defs, 'Monster', <<"MONS">>),
+        erlang:garbage_collect(),
+        Bins3 = get_refc_binary_ids(),
+
+        %% Use ReEncoded to prevent it being optimized away before GC check
+        _ = iolist_size(ReEncoded),
+
+        {Bins1, Bins2, Bins3}
+    end),
+
+    {Bins1, Bins2, Bins3} = Result,
+
+    %% Assertions
+    ?assertEqual(1, length(Bins1), "Should have exactly 1 refc binary (the buffer)"),
+    ?assertEqual(Bins1, Bins2, "Deserialize should not create new refc binaries"),
+    ?assertEqual(Bins1, Bins3, "Re-encode should not create new refc binaries").
+
+get_refc_binary_ids() ->
+    {binary, Bins} = erlang:process_info(self(), binary),
+    lists:usort([Id || {Id, _, _} <- Bins]).
+
+run_in_isolated_process(Fun) ->
+    Parent = self(),
+    Ref = make_ref(),
+    spawn_link(fun() -> Parent ! {Ref, Fun()} end),
+    receive {Ref, Result} -> Result after 5000 -> error(timeout) end.
 
 -endif.

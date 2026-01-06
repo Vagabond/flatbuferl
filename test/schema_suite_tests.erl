@@ -340,3 +340,71 @@ verify_values_equal(Key, Exp, Act) when is_float(Exp); is_float(Act) ->
     ?assert(abs(Exp - Act) < 0.0001, {Key, expected, Exp, got, Act});
 verify_values_equal(Key, Exp, Act) ->
     ?assertEqual(Exp, Act, {field, Key}).
+
+%% =============================================================================
+%% Zero-Copy Tests
+%% Verify that decode/re-encode cycle doesn't create new refc binaries
+%% =============================================================================
+
+zero_copy_test_cases() ->
+    %% Test cases with large strings (>64 bytes to be refc binaries)
+    LargeString = list_to_binary(lists:duplicate(200, $X)),
+    [
+        {monster_zero_copy, "test/vectors/test_monster.fbs", 'Monster', <<"MONS">>,
+            #{name => LargeString, hp => 100, mana => 50}},
+        {string_table_zero_copy, "test/schemas/string_table.fbs", string_table, no_file_id,
+            #{my_string => LargeString, my_bool => true}},
+        {nested_zero_copy, "test/vectors/test_nested.fbs", 'Entity', <<"NEST">>,
+            #{name => LargeString, hp => 100, pos => #{x => 1.0, y => 2.0, z => 3.0}}}
+    ].
+
+zero_copy_test_() ->
+    [
+        {atom_to_list(Name), fun() -> test_zero_copy(SchemaPath, RootType, FileId, Data) end}
+     || {Name, SchemaPath, RootType, FileId, Data} <- zero_copy_test_cases()
+    ].
+
+test_zero_copy(SchemaPath, RootType, FileId, SampleData) ->
+    {ok, {Defs, _}} = schema:parse_file(SchemaPath),
+
+    %% Encode initial buffer
+    Buffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Defs, RootType, FileId)),
+
+    %% Run decode/re-encode in isolated process to measure binaries
+    Result = run_in_isolated_process(fun() ->
+        erlang:garbage_collect(),
+        Bins1 = get_refc_binary_ids(),
+
+        %% Decode
+        Ctx = eflatbuffers:new(Buffer, Defs, RootType),
+        DecodedMap = eflatbuffers:to_map(Ctx),
+        erlang:garbage_collect(),
+        Bins2 = get_refc_binary_ids(),
+
+        %% Re-encode - keep reference to iolist to prevent GC of sub-binaries
+        ReEncoded = eflatbuffers:from_map(DecodedMap, Defs, RootType, FileId),
+        erlang:garbage_collect(),
+        Bins3 = get_refc_binary_ids(),
+
+        %% Use ReEncoded to ensure it's not optimized away
+        _ = iolist_size(ReEncoded),
+
+        {Bins1, Bins2, Bins3}
+    end),
+
+    {Bins1, Bins2, Bins3} = Result,
+
+    %% Should have exactly 1 refc binary throughout (the original buffer)
+    ?assertEqual(1, length(Bins1), "Should start with 1 refc binary"),
+    ?assertEqual(Bins1, Bins2, "Decode should not create new refc binaries"),
+    ?assertEqual(Bins1, Bins3, "Re-encode should not create new refc binaries").
+
+get_refc_binary_ids() ->
+    {binary, Bins} = erlang:process_info(self(), binary),
+    lists:usort([Id || {Id, _, _} <- Bins]).
+
+run_in_isolated_process(Fun) ->
+    Parent = self(),
+    Ref = make_ref(),
+    spawn_link(fun() -> Parent ! {Ref, Fun()} end),
+    receive {Ref, Res} -> Res after 5000 -> error(timeout) end.
