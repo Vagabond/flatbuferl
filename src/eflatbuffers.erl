@@ -9,11 +9,22 @@
     file_id/1,
     has/2,
     to_map/1,
+    to_map/2,
     from_map/3,
-    from_map/4
+    from_map/4,
+    from_map/5
 ]).
 
--export_type([ctx/0, path/0]).
+-export_type([ctx/0, path/0, decode_opts/0]).
+
+%% Options for decoding:
+%%   deprecated => skip | allow | error
+%%     - skip: silently omit deprecated fields from output (default)
+%%     - allow: include deprecated fields in output
+%%     - error: raise error if deprecated field is present in buffer
+-type decode_opts() :: #{
+    deprecated => skip | allow | error
+}.
 
 -record(ctx, {
     buffer :: binary(),
@@ -83,8 +94,12 @@ has(Ctx, Path) ->
 %% =============================================================================
 
 -spec to_map(ctx()) -> map().
-to_map(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}) ->
-    table_to_map(Root, Defs, RootType, Buffer).
+to_map(Ctx) ->
+    to_map(Ctx, #{}).
+
+-spec to_map(ctx(), decode_opts()) -> map().
+to_map(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}, Opts) ->
+    table_to_map(Root, Defs, RootType, Buffer, Opts).
 
 -spec from_map(map(), schema:definitions(), atom()) -> iodata().
 from_map(Map, Defs, RootType) ->
@@ -94,62 +109,89 @@ from_map(Map, Defs, RootType) ->
 from_map(Map, Defs, RootType, FileId) ->
     builder:from_map(Map, Defs, RootType, FileId).
 
-table_to_map(TableRef, Defs, TableType, Buffer) ->
+-spec from_map(map(), schema:definitions(), atom(), binary() | no_file_id, builder:encode_opts()) -> iodata().
+from_map(Map, Defs, RootType, FileId, Opts) ->
+    builder:from_map(Map, Defs, RootType, FileId, Opts).
+
+table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     {table, Fields} = maps:get(TableType, Defs),
+    DeprecatedOpt = maps:get(deprecated, Opts, skip),
     lists:foldl(
         fun(FieldDef, Acc) ->
-            {FieldName, FieldId, Type, Default} = parse_field_def(FieldDef),
-            ResolvedType = resolve_type(Type, Defs),
-            case Type of
-                {union_type, UnionName} ->
-                    %% Union type field - output as <field>_type with the member name
-                    case reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
-                        {ok, 0} ->
-                            %% NONE type - skip
-                            Acc;
-                        {ok, TypeIndex} ->
-                            {union, Members} = maps:get(UnionName, Defs),
-                            MemberType = lists:nth(TypeIndex, Members),
-                            Acc#{FieldName => MemberType};
-                        missing ->
-                            Acc
-                    end;
-                {union_value, UnionName} ->
-                    %% Union value field - output the nested table directly
-                    TypeFieldId = FieldId - 1,
-                    case reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
-                        {ok, 0} ->
-                            %% NONE type
-                            Acc;
-                        {ok, TypeIndex} ->
-                            case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                                {ok, TableValueRef} ->
-                                    {union, Members} = maps:get(UnionName, Defs),
-                                    MemberType = lists:nth(TypeIndex, Members),
-                                    ConvertedValue = table_to_map(
-                                        TableValueRef, Defs, MemberType, Buffer
-                                    ),
-                                    Acc#{FieldName => ConvertedValue};
-                                missing ->
-                                    Acc
-                            end;
-                        missing ->
-                            Acc
+            {FieldName, FieldId, Type, Default, Deprecated} = parse_field_def_full(FieldDef),
+            %% Handle deprecated fields
+            case {Deprecated, DeprecatedOpt} of
+                {true, skip} ->
+                    Acc;
+                {true, error} ->
+                    %% Check if field is present in buffer
+                    case reader:get_field(TableRef, FieldId, resolve_type(Type, Defs), Buffer) of
+                        {ok, _} -> error({deprecated_field_present, TableType, FieldName});
+                        missing -> Acc
                     end;
                 _ ->
-                    case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                        {ok, Value} ->
-                            Acc#{FieldName => convert_value(Value, Type, Defs, Buffer)};
-                        missing when Default =/= undefined ->
-                            Acc#{FieldName => Default};
-                        missing ->
-                            Acc
-                    end
+                    decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc)
             end
         end,
         #{},
         Fields
     ).
+
+parse_field_def_full({Name, Type, Attrs}) ->
+    FieldId = maps:get(id, Attrs, 0),
+    Deprecated = maps:get(deprecated, Attrs, false),
+    Default = extract_default(Type),
+    {Name, FieldId, normalize_type(Type), Default, Deprecated};
+parse_field_def_full({Name, Type}) ->
+    Default = extract_default(Type),
+    {Name, 0, normalize_type(Type), Default, false}.
+
+decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc) ->
+    ResolvedType = resolve_type(Type, Defs),
+    case Type of
+        {union_type, UnionName} ->
+            %% Union type field - output as <field>_type with the member name
+            case reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
+                {ok, 0} ->
+                    %% NONE type - skip
+                    Acc;
+                {ok, TypeIndex} ->
+                    {union, Members} = maps:get(UnionName, Defs),
+                    MemberType = lists:nth(TypeIndex, Members),
+                    Acc#{FieldName => MemberType};
+                missing ->
+                    Acc
+            end;
+        {union_value, UnionName} ->
+            %% Union value field - output the nested table directly
+            TypeFieldId = FieldId - 1,
+            case reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
+                {ok, 0} ->
+                    %% NONE type
+                    Acc;
+                {ok, TypeIndex} ->
+                    case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                        {ok, TableValueRef} ->
+                            {union, Members} = maps:get(UnionName, Defs),
+                            MemberType = lists:nth(TypeIndex, Members),
+                            ConvertedValue = table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts),
+                            Acc#{FieldName => ConvertedValue};
+                        missing ->
+                            Acc
+                    end;
+                missing ->
+                    Acc
+            end;
+        _ ->
+            case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                {ok, Value} ->
+                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
+                missing when Default =/= undefined ->
+                    Acc#{FieldName => Default};
+                missing ->
+                    Acc
+            end
+    end.
 
 %% Resolve type name to its definition (for enums and structs)
 resolve_type(Type, Defs) when is_atom(Type) ->
@@ -163,27 +205,19 @@ resolve_type({vector, ElemType}, Defs) ->
 resolve_type(Type, _Defs) ->
     Type.
 
-convert_value({table, _, _} = TableRef, Type, Defs, Buffer) when is_atom(Type) ->
+convert_value({table, _, _} = TableRef, Type, Defs, Buffer, Opts) when is_atom(Type) ->
     %% Nested table - recursively convert
-    table_to_map(TableRef, Defs, Type, Buffer);
-convert_value(Values, {vector, ElemType}, Defs, Buffer) when is_list(Values), is_atom(ElemType) ->
+    table_to_map(TableRef, Defs, Type, Buffer, Opts);
+convert_value(Values, {vector, ElemType}, Defs, Buffer, Opts) when is_list(Values), is_atom(ElemType) ->
     %% Vector of tables - convert each element
     case maps:get(ElemType, Defs, undefined) of
         {table, _} ->
-            [table_to_map(V, Defs, ElemType, Buffer) || V <- Values];
+            [table_to_map(V, Defs, ElemType, Buffer, Opts) || V <- Values];
         _ ->
             Values
     end;
-convert_value(Value, _Type, _Defs, _Buffer) ->
+convert_value(Value, _Type, _Defs, _Buffer, _Opts) ->
     Value.
-
-parse_field_def({Name, Type, Attrs}) ->
-    FieldId = maps:get(id, Attrs),
-    Default = extract_default(Type),
-    {Name, FieldId, normalize_type(Type), Default};
-parse_field_def({Name, Type}) ->
-    Default = extract_default(Type),
-    {Name, 0, normalize_type(Type), Default}.
 
 %% =============================================================================
 %% Raw Bytes Access

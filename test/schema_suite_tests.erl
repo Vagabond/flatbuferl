@@ -408,3 +408,133 @@ run_in_isolated_process(Fun) ->
     Ref = make_ref(),
     spawn_link(fun() -> Parent ! {Ref, Fun()} end),
     receive {Ref, Res} -> Res after 5000 -> error(timeout) end.
+
+%% =============================================================================
+%% Required and Deprecated Field Tests
+%% =============================================================================
+
+required_field_test_() ->
+    Defs = #{
+        'TestTable' => {table, [
+            {name, string, #{id => 0, required => true}},
+            {value, int, #{id => 1}}
+        ]}
+    },
+    [
+        {"required field present passes",
+         fun() ->
+             Map = #{name => <<"test">>, value => 42},
+             Data = builder:from_map(Map, Defs, 'TestTable'),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Defs, 'TestTable'),
+             Result = eflatbuffers:to_map(Ctx),
+             ?assertEqual(<<"test">>, maps:get(name, Result)),
+             ?assertEqual(42, maps:get(value, Result))
+         end},
+        {"required field missing errors",
+         fun() ->
+             Map = #{value => 42},
+             ?assertError({required_field_missing, 'TestTable', name},
+                          builder:from_map(Map, Defs, 'TestTable'))
+         end},
+        {"required field empty string still valid",
+         fun() ->
+             Map = #{name => <<>>, value => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable'),
+             ?assert(is_list(Data) orelse is_binary(Data))
+         end}
+    ].
+
+deprecated_encode_test_() ->
+    Defs = #{
+        'TestTable' => {table, [
+            {name, string, #{id => 0}},
+            {old_field, int, #{id => 1, deprecated => true}},
+            {new_field, int, #{id => 2}}
+        ]}
+    },
+    [
+        {"deprecated field skipped by default",
+         fun() ->
+             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable'),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Defs, 'TestTable'),
+             %% Field wasn't encoded, so won't appear even with allow
+             Result = eflatbuffers:to_map(Ctx, #{deprecated => allow}),
+             ?assertEqual(false, maps:is_key(old_field, Result)),
+             ?assertEqual(10, maps:get(new_field, Result))
+         end},
+        {"deprecated field allowed with option",
+         fun() ->
+             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable', no_file_id, #{deprecated => allow}),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Defs, 'TestTable'),
+             Result = eflatbuffers:to_map(Ctx, #{deprecated => allow}),
+             ?assertEqual(42, maps:get(old_field, Result))
+         end},
+        {"deprecated field errors with option",
+         fun() ->
+             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+             ?assertError({deprecated_field_set, 'TestTable', old_field},
+                          builder:from_map(Map, Defs, 'TestTable', no_file_id, #{deprecated => error}))
+         end},
+        {"deprecated field not set passes error option",
+         fun() ->
+             Map = #{name => <<"test">>, new_field => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable', no_file_id, #{deprecated => error}),
+             ?assert(is_list(Data) orelse is_binary(Data))
+         end}
+    ].
+
+deprecated_decode_test_() ->
+    Defs = #{
+        'TestTable' => {table, [
+            {name, string, #{id => 0}},
+            {old_field, int, #{id => 1, deprecated => true}},
+            {new_field, int, #{id => 2}}
+        ]}
+    },
+    [
+        {"deprecated field skipped by default",
+         fun() ->
+             %% First encode with deprecated field (allow it)
+             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable', no_file_id, #{deprecated => allow}),
+             Bin = iolist_to_binary(Data),
+             %% Now decode with default options - should skip
+             Ctx = eflatbuffers:new(Bin, Defs, 'TestTable'),
+             Result = eflatbuffers:to_map(Ctx),
+             ?assertEqual(false, maps:is_key(old_field, Result)),
+             ?assertEqual(10, maps:get(new_field, Result))
+         end},
+        {"deprecated field allowed with option",
+         fun() ->
+             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable', no_file_id, #{deprecated => allow}),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Defs, 'TestTable'),
+             Result = eflatbuffers:to_map(Ctx, #{deprecated => allow}),
+             ?assertEqual(42, maps:get(old_field, Result)),
+             ?assertEqual(10, maps:get(new_field, Result))
+         end},
+        {"deprecated field errors on decode if present",
+         fun() ->
+             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable', no_file_id, #{deprecated => allow}),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Defs, 'TestTable'),
+             ?assertError({deprecated_field_present, 'TestTable', old_field},
+                          eflatbuffers:to_map(Ctx, #{deprecated => error}))
+         end},
+        {"deprecated field not present passes error option",
+         fun() ->
+             Map = #{name => <<"test">>, new_field => 10},
+             Data = builder:from_map(Map, Defs, 'TestTable'),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Defs, 'TestTable'),
+             Result = eflatbuffers:to_map(Ctx, #{deprecated => error}),
+             ?assertEqual(10, maps:get(new_field, Result))
+         end}
+    ].

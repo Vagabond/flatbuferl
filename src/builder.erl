@@ -1,17 +1,36 @@
 -module(builder).
 
--export([from_map/3, from_map/4]).
+-export([from_map/3, from_map/4, from_map/5]).
+-export_type([encode_opts/0]).
+
+%% Options for encoding:
+%%   deprecated => skip | allow | error
+%%     - skip: silently ignore deprecated fields (default)
+%%     - allow: encode deprecated fields if present
+%%     - error: raise error if deprecated field has value
+-type encode_opts() :: #{
+    deprecated => skip | allow | error
+}.
 
 %% =============================================================================
 %% Public API
 %% =============================================================================
 
+-spec from_map(map(), schema:definitions(), atom()) -> iodata().
 from_map(Map, Defs, RootType) ->
-    from_map(Map, Defs, RootType, no_file_id).
+    from_map(Map, Defs, RootType, no_file_id, #{}).
 
-from_map(Map, Defs, RootType, FileId) ->
+-spec from_map(map(), schema:definitions(), atom(), binary() | no_file_id | encode_opts()) -> iodata().
+from_map(Map, Defs, RootType, FileId) when is_binary(FileId); FileId =:= no_file_id ->
+    from_map(Map, Defs, RootType, FileId, #{});
+from_map(Map, Defs, RootType, Opts) when is_map(Opts) ->
+    from_map(Map, Defs, RootType, no_file_id, Opts).
+
+-spec from_map(map(), schema:definitions(), atom(), binary() | no_file_id, encode_opts()) -> iodata().
+from_map(Map, Defs, RootType, FileId, Opts) ->
     {table, Fields} = maps:get(RootType, Defs),
-    FieldValues = collect_fields(Map, Fields, Defs),
+    validate_fields(Map, Fields, RootType, Opts),
+    FieldValues = collect_fields(Map, Fields, Defs, Opts),
     {Scalars, Refs} = lists:partition(
         fun({_Id, Type, _Val}) -> is_scalar_type(Type) end,
         FieldValues
@@ -170,63 +189,112 @@ file_id_bin(B) when byte_size(B) =:= 4 -> B;
 file_id_bin(_) -> error(invalid_file_id).
 
 %% =============================================================================
-%% Field Collection
+%% Field Validation
 %% =============================================================================
 
-collect_fields(Map, Fields, Defs) ->
-    lists:flatmap(
+validate_fields(Map, Fields, TableType, Opts) ->
+    lists:foreach(
         fun(FieldDef) ->
-            {Name, FieldId, Type, Default} = parse_field_def(FieldDef),
-            case Type of
-                {union_type, UnionName} ->
-                    %% Union type field - look for <field>_type key directly
-                    %% The type is an atom/string of the member name
-                    case get_field_value(Map, Name) of
-                        undefined ->
-                            [];
-                        MemberType when is_atom(MemberType) ->
-                            {union, Members} = maps:get(UnionName, Defs),
-                            TypeIndex = find_union_index(MemberType, Members, 1),
-                            [{FieldId, {union_type, UnionName}, TypeIndex}];
-                        MemberType when is_binary(MemberType) ->
-                            {union, Members} = maps:get(UnionName, Defs),
-                            TypeIndex = find_union_index(binary_to_atom(MemberType), Members, 1),
-                            [{FieldId, {union_type, UnionName}, TypeIndex}];
-                        _ ->
-                            []
-                    end;
-                {union_value, UnionName} ->
-                    %% Union value field - the map is the table value directly
-                    %% Get the type from the corresponding _type field
-                    TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
-                    case get_field_value(Map, Name) of
-                        undefined ->
-                            [];
-                        TableValue when is_map(TableValue) ->
-                            MemberType =
-                                case get_field_value(Map, TypeFieldName) of
-                                    T when is_atom(T) -> T;
-                                    T when is_binary(T) -> binary_to_atom(T);
-                                    _ -> error({missing_union_type_field, TypeFieldName})
-                                end,
-                            [
-                                {FieldId, {union_value, UnionName}, #{
-                                    type => MemberType, value => TableValue
-                                }}
-                            ];
-                        _ ->
-                            []
-                    end;
+            {Name, _FieldId, _Type, _Default, Required, Deprecated} = parse_field_def_full(FieldDef),
+            HasValue = has_field_value(Map, Name),
+            %% Check required
+            case {Required, HasValue} of
+                {true, false} ->
+                    error({required_field_missing, TableType, Name});
                 _ ->
-                    case get_field_value(Map, Name) of
-                        undefined -> [];
-                        Value when Value =:= Default -> [];
-                        Value -> [{FieldId, resolve_type(Type, Defs), Value}]
-                    end
+                    ok
+            end,
+            %% Check deprecated
+            case {Deprecated, HasValue, maps:get(deprecated, Opts, skip)} of
+                {true, true, error} ->
+                    error({deprecated_field_set, TableType, Name});
+                _ ->
+                    ok
             end
         end,
         Fields
     ).
+
+has_field_value(Map, Name) when is_atom(Name) ->
+    maps:is_key(Name, Map) orelse maps:is_key(atom_to_binary(Name), Map).
+
+parse_field_def_full({Name, Type, Attrs}) ->
+    FieldId = maps:get(id, Attrs, 0),
+    Required = maps:get(required, Attrs, false),
+    Deprecated = maps:get(deprecated, Attrs, false),
+    Default = extract_default(Type),
+    {Name, FieldId, normalize_type(Type), Default, Required, Deprecated};
+parse_field_def_full({Name, Type}) ->
+    Default = extract_default(Type),
+    {Name, 0, normalize_type(Type), Default, false, false}.
+
+%% =============================================================================
+%% Field Collection
+%% =============================================================================
+
+collect_fields(Map, Fields, Defs, Opts) ->
+    DeprecatedOpt = maps:get(deprecated, Opts, skip),
+    lists:flatmap(
+        fun(FieldDef) ->
+            {Name, FieldId, Type, Default, _Required, Deprecated} = parse_field_def_full(FieldDef),
+            %% Skip deprecated fields if option says to
+            case {Deprecated, DeprecatedOpt} of
+                {true, skip} ->
+                    [];
+                _ ->
+                    collect_field(Map, Name, FieldId, Type, Default, Defs)
+            end
+        end,
+        Fields
+    ).
+
+collect_fields(Map, Fields, Defs) ->
+    collect_fields(Map, Fields, Defs, #{}).
+
+collect_field(Map, Name, FieldId, Type, Default, Defs) ->
+    case Type of
+        {union_type, UnionName} ->
+            %% Union type field - look for <field>_type key directly
+            %% The type is an atom/string of the member name
+            case get_field_value(Map, Name) of
+                undefined ->
+                    [];
+                MemberType when is_atom(MemberType) ->
+                    {union, Members} = maps:get(UnionName, Defs),
+                    TypeIndex = find_union_index(MemberType, Members, 1),
+                    [{FieldId, {union_type, UnionName}, TypeIndex}];
+                MemberType when is_binary(MemberType) ->
+                    {union, Members} = maps:get(UnionName, Defs),
+                    TypeIndex = find_union_index(binary_to_atom(MemberType), Members, 1),
+                    [{FieldId, {union_type, UnionName}, TypeIndex}];
+                _ ->
+                    []
+            end;
+        {union_value, UnionName} ->
+            %% Union value field - the map is the table value directly
+            %% Get the type from the corresponding _type field
+            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+            case get_field_value(Map, Name) of
+                undefined ->
+                    [];
+                TableValue when is_map(TableValue) ->
+                    MemberType =
+                        case get_field_value(Map, TypeFieldName) of
+                            T when is_atom(T) -> T;
+                            T when is_binary(T) -> binary_to_atom(T);
+                            _ -> error({missing_union_type_field, TypeFieldName})
+                        end,
+                    [{FieldId, {union_value, UnionName}, #{type => MemberType, value => TableValue}}];
+                _ ->
+                    []
+            end;
+        _ ->
+            case get_field_value(Map, Name) of
+                undefined -> [];
+                Value when Value =:= Default -> [];
+                Value -> [{FieldId, resolve_type(Type, Defs), Value}]
+            end
+    end.
 
 find_union_index(Type, [Type | _], Index) -> Index;
 %% Handle enum with explicit value
@@ -1361,11 +1429,6 @@ align_offset(Off, Align) ->
         0 -> Off;
         R -> Off + (Align - R)
     end.
-
-parse_field_def({Name, Type, Attrs}) ->
-    {Name, maps:get(id, Attrs), normalize_type(Type), extract_default(Type)};
-parse_field_def({Name, Type}) ->
-    {Name, 0, normalize_type(Type), extract_default(Type)}.
 
 extract_default({_, D}) when is_number(D); is_boolean(D) -> D;
 extract_default(_) -> undefined.
