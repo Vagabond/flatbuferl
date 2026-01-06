@@ -7,22 +7,22 @@
 
 monster_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     flatbuferl:new(Buffer, Schema).
 
 defaults_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_defaults.bin"),
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     flatbuferl:new(Buffer, Schema).
 
 nested_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
-    {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_nested.fbs"),
     flatbuferl:new(Buffer, Schema).
 
 vector_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
-    {ok, Schema} = schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
     flatbuferl:new(Buffer, Schema).
 
 %% =============================================================================
@@ -31,13 +31,13 @@ vector_ctx() ->
 
 new_with_root_type_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     Ctx = flatbuferl:new(Buffer, Schema),
     ?assertEqual(<<"MONS">>, flatbuferl:file_id(Ctx)).
 
 new_auto_root_type_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     %% Should auto-detect root type
     Ctx = flatbuferl:new(Buffer, Schema),
     ?assertEqual(<<"MONS">>, flatbuferl:file_id(Ctx)).
@@ -230,7 +230,7 @@ to_map_vectors_test() ->
 %% =============================================================================
 
 from_map_basic_test() ->
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Goblin">>, hp => 50, mana => 25},
     Buffer = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
     ?assert(is_binary(Buffer)),
@@ -244,7 +244,7 @@ from_map_roundtrip_test() ->
     %% Read existing buffer, convert to map, build new buffer, verify
     OrigCtx = monster_ctx(),
     Map = flatbuferl:to_map(OrigCtx),
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     NewBuffer = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
     NewCtx = flatbuferl:new(NewBuffer, Schema),
     ?assertEqual(<<"Orc">>, flatbuferl:get(NewCtx, [name])),
@@ -252,7 +252,7 @@ from_map_roundtrip_test() ->
     ?assertEqual(30, flatbuferl:get(NewCtx, [mana])).
 
 from_map_file_id_test() ->
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Test">>},
     Buffer = iolist_to_binary(flatbuferl:from_map(Map, Schema, #{file_id => <<"TEST">>})),
     ?assertEqual(<<"TEST">>, flatbuferl:file_id(Buffer)).

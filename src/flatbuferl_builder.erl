@@ -1,9 +1,9 @@
--module(builder).
+-module(flatbuferl_builder).
 
 -export([from_map/2, from_map/3]).
 -export_type([encode_opts/0]).
 
--type schema() :: {schema:definitions(), schema:options()}.
+-type schema() :: {flatbuferl_schema:definitions(), flatbuferl_schema:options()}.
 
 %% Options for encoding:
 %%   file_id => boolean() | <<_:32>>
@@ -1491,7 +1491,7 @@ normalize_type(T) -> T.
 
 %% Test vtable sharing between root and nested table with identical structure
 vtable_sharing_test() ->
-    {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_nested.fbs"),
     Map = #{name => <<"Player">>, hp => 200, pos => #{x => 1.5, y => 2.5, z => 3.5}},
 
     %% Encode and decode roundtrip
@@ -1508,7 +1508,7 @@ vtable_sharing_test() ->
 
 %% Test zero-copy: re-encoding should not create new refc binaries
 zero_copy_reencode_test() ->
-    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
 
     %% Create a message with a large string (>64 bytes to be a refc binary)
     LargeString = list_to_binary(lists:duplicate(200, $X)),

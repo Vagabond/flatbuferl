@@ -26,9 +26,9 @@ root_type Entity;
 
 Parsing the schema:
 ```erlang
-{ok, Schema} = schema:parse_file("entity.fbs").
+{ok, Schema} = flatbuferl_schema:parse_file("entity.fbs").
 %% or inline
-{ok, Schema} = schema:parse("table Monster { name: string; hp: int = 100; } root_type Monster;").
+{ok, Schema} = flatbuferl_schema:parse("table Monster { name: string; hp: int = 100; } root_type Monster;").
 ```
 
 Encoding data:
@@ -76,8 +76,8 @@ flatbuferl:has(Ctx, [pos]).               %% true or false
 ## API
 
 ```erlang
-schema:parse(String | Binary) -> {ok, Schema} | {error, Reason}.
-schema:parse_file(Filename) -> {ok, Schema} | {error, Reason}.
+flatbuferl_schema:parse(String | Binary) -> {ok, Schema} | {error, Reason}.
+flatbuferl_schema:parse_file(Filename) -> {ok, Schema} | {error, Reason}.
 
 flatbuferl:new(Buffer, Schema) -> Ctx.
 flatbuferl:get(Ctx, Path) -> Value.

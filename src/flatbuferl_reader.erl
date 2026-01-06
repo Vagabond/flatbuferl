@@ -1,4 +1,4 @@
--module(reader).
+-module(flatbuferl_reader).
 -export([
     get_root/1,
     get_file_id/1,
@@ -32,7 +32,7 @@ get(TableRef, Schema, [FieldName]) ->
 get(TableRef, Schema, [FieldName | Rest]) ->
     case get_field_by_name(TableRef, Schema, FieldName) of
         {ok, NestedTableRef} when element(1, NestedTableRef) == table ->
-            %% Nested path access not supported via reader:get/3
+            %% Nested path access not supported via flatbuferl_reader:get/3
             %% Use flatbuferl:get/2 for nested paths
 
             %% Suppress unused warnings

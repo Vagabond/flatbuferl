@@ -15,7 +15,7 @@
 
 -export_type([ctx/0, path/0, decode_opts/0, schema/0]).
 
--type schema() :: {schema:definitions(), schema:options()}.
+-type schema() :: {flatbuferl_schema:definitions(), flatbuferl_schema:options()}.
 
 %% Options for decoding:
 %%   deprecated => skip | allow | error
@@ -28,7 +28,7 @@
 
 -record(ctx, {
     buffer :: binary(),
-    defs :: schema:definitions(),
+    defs :: flatbuferl_schema:definitions(),
     root_type :: atom(),
     root :: {table, non_neg_integer(), binary()}
 }).
@@ -43,7 +43,7 @@
 -spec new(binary(), schema()) -> ctx().
 new(Buffer, {Defs, SchemaOpts}) ->
     RootType = maps:get(root_type, SchemaOpts),
-    Root = reader:get_root(Buffer),
+    Root = flatbuferl_reader:get_root(Buffer),
     #ctx{
         buffer = Buffer,
         defs = Defs,
@@ -90,11 +90,11 @@ to_map(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}, Op
 
 -spec from_map(map(), schema()) -> iodata().
 from_map(Map, Schema) ->
-    builder:from_map(Map, Schema).
+    flatbuferl_builder:from_map(Map, Schema).
 
--spec from_map(map(), schema(), builder:encode_opts()) -> iodata().
+-spec from_map(map(), schema(), flatbuferl_builder:encode_opts()) -> iodata().
 from_map(Map, Schema, Opts) ->
-    builder:from_map(Map, Schema, Opts).
+    flatbuferl_builder:from_map(Map, Schema, Opts).
 
 table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     {table, Fields} = maps:get(TableType, Defs),
@@ -108,7 +108,7 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
                     Acc;
                 {true, error} ->
                     %% Check if field is present in buffer
-                    case reader:get_field(TableRef, FieldId, resolve_type(Type, Defs), Buffer) of
+                    case flatbuferl_reader:get_field(TableRef, FieldId, resolve_type(Type, Defs), Buffer) of
                         {ok, _} -> error({deprecated_field_present, TableType, FieldName});
                         missing -> Acc
                     end;
@@ -134,7 +134,7 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
     case Type of
         {union_type, UnionName} ->
             %% Union type field - output as <field>_type with the member name
-            case reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
                 {ok, 0} ->
                     %% NONE type - skip
                     Acc;
@@ -148,12 +148,12 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
         {union_value, UnionName} ->
             %% Union value field - output the nested table directly
             TypeFieldId = FieldId - 1,
-            case reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
                 {ok, 0} ->
                     %% NONE type
                     Acc;
                 {ok, TypeIndex} ->
-                    case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                         {ok, TableValueRef} ->
                             {union, Members} = maps:get(UnionName, Defs),
                             MemberType = lists:nth(TypeIndex, Members),
@@ -167,7 +167,7 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
             end;
         {vector, {union_type, UnionName}} ->
             %% Vector of union types - output as list of type names
-            case reader:get_field(TableRef, FieldId, {vector, ubyte}, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, FieldId, {vector, ubyte}, Buffer) of
                 {ok, TypeIndices} ->
                     {union, Members} = maps:get(UnionName, Defs),
                     TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
@@ -178,9 +178,9 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
         {vector, {union_value, UnionName}} ->
             %% Vector of union values - decode each table using its type
             TypeFieldId = FieldId - 1,
-            case reader:get_field(TableRef, TypeFieldId, {vector, ubyte}, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, TypeFieldId, {vector, ubyte}, Buffer) of
                 {ok, TypeIndices} ->
-                    case reader:get_field(TableRef, FieldId, {vector, table}, Buffer) of
+                    case flatbuferl_reader:get_field(TableRef, FieldId, {vector, table}, Buffer) of
                         {ok, TableRefs} ->
                             {union, Members} = maps:get(UnionName, Defs),
                             DecodedValues = lists:zipwith(
@@ -197,7 +197,7 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
                     Acc
             end;
         _ ->
-            case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                 {ok, Value} ->
                     Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
                 missing when Default =/= undefined ->
@@ -256,7 +256,7 @@ get_bytes_internal(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
     {table, Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
-            case reader:get_field(TableRef, FieldId, NestedType, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                 {ok, NestedTableRef} ->
                     get_bytes_internal(NestedTableRef, Defs, NestedType, Rest, Buffer);
                 missing ->
@@ -303,9 +303,9 @@ get_field_bytes({table, TableOffset, Buffer}, FieldId, _Buffer) ->
 
 -spec file_id(ctx() | binary()) -> binary().
 file_id(#ctx{buffer = Buffer}) ->
-    reader:get_file_id(Buffer);
+    flatbuferl_reader:get_file_id(Buffer);
 file_id(Buffer) when is_binary(Buffer) ->
-    reader:get_file_id(Buffer).
+    flatbuferl_reader:get_file_id(Buffer).
 
 %% =============================================================================
 %% Internal
@@ -318,7 +318,7 @@ get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
     {table, Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, Type, Default} ->
-            case reader:get_field(TableRef, FieldId, Type, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, FieldId, Type, Buffer) of
                 {ok, Value} -> {ok, Value};
                 missing when Default =/= undefined -> {ok, Default};
                 missing -> missing
@@ -330,7 +330,7 @@ get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
     {table, Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
-            case reader:get_field(TableRef, FieldId, NestedType, Buffer) of
+            case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                 {ok, NestedTableRef} ->
                     get_path(NestedTableRef, Defs, NestedType, Rest, Buffer);
                 missing ->

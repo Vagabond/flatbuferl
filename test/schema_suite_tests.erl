@@ -170,12 +170,12 @@ generate_tests({Name, SchemaPath, RootType, FileId, SampleData}) ->
 %% =============================================================================
 
 test_parse(SchemaPath) ->
-    {ok, {Defs, _Opts}} = schema:parse_file(SchemaPath),
+    {ok, {Defs, _Opts}} = flatbuferl_schema:parse_file(SchemaPath),
     ?assert(is_map(Defs)),
     ?assert(maps:size(Defs) > 0).
 
 test_encode_decode(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
 
     %% Encode
     Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
@@ -189,7 +189,7 @@ test_encode_decode(SchemaPath, RootType, FileId, SampleData) ->
     verify_maps_equal(SampleData, Result).
 
 test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
 
     %% Encode to flatbuffer
     Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
@@ -217,7 +217,7 @@ test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
     end.
 
 test_flatc_roundtrip_with_id(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
 
     %% Build buffer
     Buffer = flatbuferl:from_map(SampleData, Schema),
@@ -245,7 +245,7 @@ test_flatc_roundtrip_with_id(SchemaPath, RootType, FileId, SampleData) ->
     file:delete(TmpJson).
 
 test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
 
     %% Build buffer
     Buffer = flatbuferl:from_map(SampleData, Schema),
@@ -277,7 +277,7 @@ test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData) ->
 %% =============================================================================
 
 test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
 
     %% Encode sample data to JSON for flatc input
     JsonBin = iolist_to_binary(json:encode(SampleData)),
@@ -365,7 +365,7 @@ zero_copy_test_() ->
     ].
 
 test_zero_copy(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
 
     %% Encode initial buffer
     Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
@@ -424,7 +424,7 @@ required_field_test_() ->
         {"required field present passes",
          fun() ->
              Map = #{name => <<"test">>, value => 42},
-             Data = builder:from_map(Map, Schema),
+             Data = flatbuferl_builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              Result = flatbuferl:to_map(Ctx),
@@ -435,12 +435,12 @@ required_field_test_() ->
          fun() ->
              Map = #{value => 42},
              ?assertError({required_field_missing, 'TestTable', name},
-                          builder:from_map(Map, Schema))
+                          flatbuferl_builder:from_map(Map, Schema))
          end},
         {"required field empty string still valid",
          fun() ->
              Map = #{name => <<>>, value => 10},
-             Data = builder:from_map(Map, Schema),
+             Data = flatbuferl_builder:from_map(Map, Schema),
              ?assert(is_list(Data) orelse is_binary(Data))
          end}
     ].
@@ -457,7 +457,7 @@ deprecated_encode_test_() ->
         {"deprecated field skipped by default",
          fun() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = builder:from_map(Map, Schema),
+             Data = flatbuferl_builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              %% Field wasn't encoded, so won't appear even with allow
@@ -468,7 +468,7 @@ deprecated_encode_test_() ->
         {"deprecated field allowed with option",
          fun() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = builder:from_map(Map, Schema, #{deprecated => allow}),
+             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
@@ -478,12 +478,12 @@ deprecated_encode_test_() ->
          fun() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
              ?assertError({deprecated_field_set, 'TestTable', old_field},
-                          builder:from_map(Map, Schema, #{deprecated => error}))
+                          flatbuferl_builder:from_map(Map, Schema, #{deprecated => error}))
          end},
         {"deprecated field not set passes error option",
          fun() ->
              Map = #{name => <<"test">>, new_field => 10},
-             Data = builder:from_map(Map, Schema, #{deprecated => error}),
+             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => error}),
              ?assert(is_list(Data) orelse is_binary(Data))
          end}
     ].
@@ -501,7 +501,7 @@ deprecated_decode_test_() ->
          fun() ->
              %% First encode with deprecated field (allow it)
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = builder:from_map(Map, Schema, #{deprecated => allow}),
+             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
              %% Now decode with default options - should skip
              Ctx = flatbuferl:new(Bin, Schema),
@@ -512,7 +512,7 @@ deprecated_decode_test_() ->
         {"deprecated field allowed with option",
          fun() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = builder:from_map(Map, Schema, #{deprecated => allow}),
+             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
@@ -522,7 +522,7 @@ deprecated_decode_test_() ->
         {"deprecated field errors on decode if present",
          fun() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = builder:from_map(Map, Schema, #{deprecated => allow}),
+             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              ?assertError({deprecated_field_present, 'TestTable', old_field},
@@ -531,7 +531,7 @@ deprecated_decode_test_() ->
         {"deprecated field not present passes error option",
          fun() ->
              Map = #{name => <<"test">>, new_field => 10},
-             Data = builder:from_map(Map, Schema),
+             Data = flatbuferl_builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              Result = flatbuferl:to_map(Ctx, #{deprecated => error}),
@@ -564,7 +564,7 @@ union_vector_test_() ->
                      #{user => <<"charlie">>}
                  ]
              },
-             Data = builder:from_map(Map, Schema),
+             Data = flatbuferl_builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              Result = flatbuferl:to_map(Ctx),
@@ -581,7 +581,7 @@ union_vector_test_() ->
                  events_type => [<<"Login">>, <<"Logout">>],
                  events => [#{user => <<"x">>}, #{user => <<"y">>}]
              },
-             Data = builder:from_map(Map, Schema),
+             Data = flatbuferl_builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              Result = flatbuferl:to_map(Ctx),
@@ -590,7 +590,7 @@ union_vector_test_() ->
         {"empty union vector",
          fun() ->
              Map = #{events_type => [], events => []},
-             Data = builder:from_map(Map, Schema),
+             Data = flatbuferl_builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
              Ctx = flatbuferl:new(Bin, Schema),
              Result = flatbuferl:to_map(Ctx),
@@ -599,7 +599,7 @@ union_vector_test_() ->
          end},
         {"union vector from parsed .fbs file",
          fun() ->
-             {ok, ParsedSchema} = schema:parse_file("test/schemas/union_vector.fbs"),
+             {ok, ParsedSchema} = flatbuferl_schema:parse_file("test/schemas/union_vector.fbs"),
              Map = #{
                  data_type => ['StringData', 'IntData'],
                  data => [
@@ -607,7 +607,7 @@ union_vector_test_() ->
                      #{data => [1, 2, 3]}
                  ]
              },
-             Encoded = builder:from_map(Map, ParsedSchema),
+             Encoded = flatbuferl_builder:from_map(Map, ParsedSchema),
              Bin = iolist_to_binary(Encoded),
              ?assertEqual(<<"UVEC">>, flatbuferl:file_id(Bin)),
              Ctx = flatbuferl:new(Bin, ParsedSchema),

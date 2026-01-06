@@ -1,4 +1,4 @@
--module(schema).
+-module(flatbuferl_schema).
 -export([parse/1, parse_file/1, process/1]).
 
 -type type_name() :: atom().
@@ -24,9 +24,9 @@
 parse(Schema) when is_binary(Schema) ->
     parse(binary_to_list(Schema));
 parse(Schema) when is_list(Schema) ->
-    case schema_lexer:string(Schema) of
+    case flatbuferl_lexer:string(Schema) of
         {ok, Tokens, _} ->
-            case schema_parser:parse(Tokens) of
+            case flatbuferl_parser:parse(Tokens) of
                 {ok, Parsed} -> {ok, process(Parsed)};
                 {error, _} = Err -> Err
             end;
@@ -42,7 +42,7 @@ parse_file(Filename) ->
         {error, _} = Err -> Err
     end.
 
-%% Post-process parsed schema: assign field IDs, validate
+%% Post-process parsed flatbuferl_schema: assign field IDs, validate
 -spec process({map(), map()}) -> {map(), map()}.
 process({Defs, Opts}) ->
     ProcessedDefs = maps:map(fun(_Name, Def) -> process_def(Def, Defs) end, Defs),

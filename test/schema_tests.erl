@@ -6,25 +6,25 @@
 %% =============================================================================
 
 simple_table_test() ->
-    {ok, {Defs, _Opts}} = schema:parse("table Monster { name: string; hp: int; }"),
+    {ok, {Defs, _Opts}} = flatbuferl_schema:parse("table Monster { name: string; hp: int; }"),
     ?assertMatch(#{'Monster' := {table, _}}, Defs),
     {table, Fields} = maps:get('Monster', Defs),
     ?assertEqual(2, length(Fields)).
 
 table_with_defaults_test() ->
-    {ok, {Defs, _Opts}} = schema:parse("table Monster { hp: int = 100; }"),
+    {ok, {Defs, _Opts}} = flatbuferl_schema:parse("table Monster { hp: int = 100; }"),
     {table, [{hp, {int, 100}, #{id := 0}}]} = maps:get('Monster', Defs).
 
 enum_test() ->
-    {ok, {Defs, _Opts}} = schema:parse("enum Color : byte { Red, Green, Blue }"),
+    {ok, {Defs, _Opts}} = flatbuferl_schema:parse("enum Color : byte { Red, Green, Blue }"),
     ?assertEqual({{enum, byte}, ['Red', 'Green', 'Blue']}, maps:get('Color', Defs)).
 
 union_test() ->
-    {ok, {Defs, _Opts}} = schema:parse("union Animal { Dog, Cat }"),
+    {ok, {Defs, _Opts}} = flatbuferl_schema:parse("union Animal { Dog, Cat }"),
     ?assertEqual({union, ['Dog', 'Cat']}, maps:get('Animal', Defs)).
 
 vector_field_test() ->
-    {ok, {Defs, _Opts}} = schema:parse("table Inventory { items: [string]; }"),
+    {ok, {Defs, _Opts}} = flatbuferl_schema:parse("table Inventory { items: [string]; }"),
     {table, [{items, {vector, string}, #{id := 0}}]} = maps:get('Inventory', Defs).
 
 %% =============================================================================
@@ -32,15 +32,15 @@ vector_field_test() ->
 %% =============================================================================
 
 namespace_test() ->
-    {ok, {_Defs, Opts}} = schema:parse("namespace MyGame; table X { }"),
+    {ok, {_Defs, Opts}} = flatbuferl_schema:parse("namespace MyGame; table X { }"),
     ?assertEqual('MyGame', maps:get(namespace, Opts)).
 
 root_type_test() ->
-    {ok, {_Defs, Opts}} = schema:parse("table X { } root_type X;"),
+    {ok, {_Defs, Opts}} = flatbuferl_schema:parse("table X { } root_type X;"),
     ?assertEqual('X', maps:get(root_type, Opts)).
 
 file_identifier_test() ->
-    {ok, {_Defs, Opts}} = schema:parse("file_identifier \"TEST\"; table X { }"),
+    {ok, {_Defs, Opts}} = flatbuferl_schema:parse("file_identifier \"TEST\"; table X { }"),
     ?assertEqual(<<"TEST">>, maps:get(file_identifier, Opts)).
 
 %% =============================================================================
@@ -48,7 +48,7 @@ file_identifier_test() ->
 %% =============================================================================
 
 sequential_ids_test() ->
-    {ok, {Defs, _}} = schema:parse("table T { a: int; b: int; c: int; }"),
+    {ok, {Defs, _}} = flatbuferl_schema:parse("table T { a: int; b: int; c: int; }"),
     {table, Fields} = maps:get('T', Defs),
     ?assertEqual(
         [
@@ -60,13 +60,13 @@ sequential_ids_test() ->
     ).
 
 explicit_ids_test() ->
-    {ok, {Defs, _}} = schema:parse("table T { a: int (id: 2); b: int (id: 0); c: int (id: 1); }"),
+    {ok, {Defs, _}} = flatbuferl_schema:parse("table T { a: int (id: 2); b: int (id: 0); c: int (id: 1); }"),
     {table, Fields} = maps:get('T', Defs),
     %% Fields keep original order, IDs as specified
     [{a, int, #{id := 2}}, {b, int, #{id := 0}}, {c, int, #{id := 1}}] = Fields.
 
 mixed_ids_test() ->
-    {ok, {Defs, _}} = schema:parse("table T { a: int (id: 0); b: int (id: 2); c: int; d: int; }"),
+    {ok, {Defs, _}} = flatbuferl_schema:parse("table T { a: int (id: 0); b: int (id: 2); c: int; d: int; }"),
     {table, Fields} = maps:get('T', Defs),
     %% c and d should fill gaps and continue after explicit IDs
     [
@@ -84,7 +84,7 @@ mixed_ids_test() ->
 %% =============================================================================
 
 deprecated_attr_test() ->
-    {ok, {Defs, _}} = schema:parse("table T { old: int (deprecated); new: int; }"),
+    {ok, {Defs, _}} = flatbuferl_schema:parse("table T { old: int (deprecated); new: int; }"),
     {table, Fields} = maps:get('T', Defs),
     [
         {old, int, #{deprecated := true, id := _}},
@@ -92,7 +92,7 @@ deprecated_attr_test() ->
     ] = Fields.
 
 multiple_attrs_test() ->
-    {ok, {Defs, _}} = schema:parse("table T { f: int (id: 5, deprecated); }"),
+    {ok, {Defs, _}} = flatbuferl_schema:parse("table T { f: int (id: 5, deprecated); }"),
     {table, [{f, int, #{id := 5, deprecated := true}}]} = maps:get('T', Defs).
 
 %% =============================================================================
@@ -100,7 +100,7 @@ multiple_attrs_test() ->
 %% =============================================================================
 
 complex_schema_file_test() ->
-    {ok, {Defs, Opts}} = schema:parse_file("test/complex_schemas/game_state.fbs"),
+    {ok, {Defs, Opts}} = flatbuferl_schema:parse_file("test/complex_schemas/game_state.fbs"),
     %% Check we got all 25 types
     ?assertEqual(25, maps:size(Defs)),
     %% Check options
