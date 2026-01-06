@@ -538,3 +538,84 @@ deprecated_decode_test_() ->
              ?assertEqual(10, maps:get(new_field, Result))
          end}
     ].
+
+%% =============================================================================
+%% Union Vector Tests
+%% =============================================================================
+
+union_vector_test_() ->
+    Schema = {#{
+        'Event' => {union, ['Login', 'Logout']},
+        'Login' => {table, [{user, string, #{id => 0}}]},
+        'Logout' => {table, [{user, string, #{id => 0}}]},
+        'EventLog' => {table, [
+            {events_type, {vector, {union_type, 'Event'}}, #{id => 0}},
+            {events, {vector, {union_value, 'Event'}}, #{id => 1}}
+        ]}
+    }, #{root_type => 'EventLog'}},
+    [
+        {"union vector encode/decode roundtrip",
+         fun() ->
+             Map = #{
+                 events_type => ['Login', 'Logout', 'Login'],
+                 events => [
+                     #{user => <<"alice">>},
+                     #{user => <<"bob">>},
+                     #{user => <<"charlie">>}
+                 ]
+             },
+             Data = builder:from_map(Map, Schema),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Schema),
+             Result = eflatbuffers:to_map(Ctx),
+             ?assertEqual(['Login', 'Logout', 'Login'], maps:get(events_type, Result)),
+             Events = maps:get(events, Result),
+             ?assertEqual(3, length(Events)),
+             ?assertEqual(#{user => <<"alice">>}, lists:nth(1, Events)),
+             ?assertEqual(#{user => <<"bob">>}, lists:nth(2, Events)),
+             ?assertEqual(#{user => <<"charlie">>}, lists:nth(3, Events))
+         end},
+        {"union vector with binary type names",
+         fun() ->
+             Map = #{
+                 events_type => [<<"Login">>, <<"Logout">>],
+                 events => [#{user => <<"x">>}, #{user => <<"y">>}]
+             },
+             Data = builder:from_map(Map, Schema),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Schema),
+             Result = eflatbuffers:to_map(Ctx),
+             ?assertEqual(['Login', 'Logout'], maps:get(events_type, Result))
+         end},
+        {"empty union vector",
+         fun() ->
+             Map = #{events_type => [], events => []},
+             Data = builder:from_map(Map, Schema),
+             Bin = iolist_to_binary(Data),
+             Ctx = eflatbuffers:new(Bin, Schema),
+             Result = eflatbuffers:to_map(Ctx),
+             ?assertEqual([], maps:get(events_type, Result)),
+             ?assertEqual([], maps:get(events, Result))
+         end},
+        {"union vector from parsed .fbs file",
+         fun() ->
+             {ok, ParsedSchema} = schema:parse_file("test/schemas/union_vector.fbs"),
+             Map = #{
+                 data_type => ['StringData', 'IntData'],
+                 data => [
+                     #{data => [<<"hello">>, <<"world">>]},
+                     #{data => [1, 2, 3]}
+                 ]
+             },
+             Encoded = builder:from_map(Map, ParsedSchema),
+             Bin = iolist_to_binary(Encoded),
+             ?assertEqual(<<"UVEC">>, eflatbuffers:file_id(Bin)),
+             Ctx = eflatbuffers:new(Bin, ParsedSchema),
+             Result = eflatbuffers:to_map(Ctx),
+             ?assertEqual(['StringData', 'IntData'], maps:get(data_type, Result)),
+             DataVals = maps:get(data, Result),
+             ?assertEqual(2, length(DataVals)),
+             ?assertEqual([<<"hello">>, <<"world">>], maps:get(data, lists:nth(1, DataVals))),
+             ?assertEqual([1, 2, 3], maps:get(data, lists:nth(2, DataVals)))
+         end}
+    ].

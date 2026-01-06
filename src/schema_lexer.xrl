@@ -26,6 +26,8 @@ file_extension{WS}  : {token, {file_extension, TokenLine}}.
 {STRING}        : {token, {string, TokenLine, TokenChars}}.
 {WS}            : skip_token.
 {NL}            : skip_token.
+//[^\n]*        : skip_token.
+/\*([^*]|\*[^/])*\*/ : skip_token.
 
 \{    : {token, {'{',  TokenLine}}.
 \}    : {token, {'}',  TokenLine}}.

@@ -60,16 +60,32 @@ expand_union_fields(Fields, Defs) ->
     lists:flatmap(
         fun(Field) ->
             {Name, Type, Attrs} = normalize_field(Field),
-            case maps:get(Type, Defs, undefined) of
-                {union, _Members} ->
-                    %% Union field becomes two fields: name_type and name
-                    TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
-                    [
-                        {TypeFieldName, {union_type, Type}, Attrs},
-                        {Name, {union_value, Type}, Attrs}
-                    ];
+            case Type of
+                {vector, ElemType} ->
+                    %% Check if element type is a union
+                    case maps:get(ElemType, Defs, undefined) of
+                        {union, _Members} ->
+                            %% Vector of union becomes two vector fields
+                            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+                            [
+                                {TypeFieldName, {vector, {union_type, ElemType}}, Attrs},
+                                {Name, {vector, {union_value, ElemType}}, Attrs}
+                            ];
+                        _ ->
+                            [Field]
+                    end;
                 _ ->
-                    [Field]
+                    case maps:get(Type, Defs, undefined) of
+                        {union, _Members} ->
+                            %% Union field becomes two fields: name_type and name
+                            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+                            [
+                                {TypeFieldName, {union_type, Type}, Attrs},
+                                {Name, {union_value, Type}, Attrs}
+                            ];
+                        _ ->
+                            [Field]
+                    end
             end
         end,
         Fields

@@ -267,6 +267,11 @@ read_vector_element(Buffer, Pos, string) ->
 read_vector_element(Buffer, Pos, {struct, Fields}) ->
     {StructMap, Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {Size, StructMap};
+%% Generic table reference in vector (for union vectors where type is determined separately)
+read_vector_element(Buffer, Pos, table) ->
+    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+    NestedTablePos = Pos + TableOffset,
+    {4, {table, NestedTablePos, Buffer}};
 %% Table in vector (offset to table)
 read_vector_element(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,

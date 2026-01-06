@@ -165,6 +165,37 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
                 missing ->
                     Acc
             end;
+        {vector, {union_type, UnionName}} ->
+            %% Vector of union types - output as list of type names
+            case reader:get_field(TableRef, FieldId, {vector, ubyte}, Buffer) of
+                {ok, TypeIndices} ->
+                    {union, Members} = maps:get(UnionName, Defs),
+                    TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
+                    Acc#{FieldName => TypeNames};
+                missing ->
+                    Acc
+            end;
+        {vector, {union_value, UnionName}} ->
+            %% Vector of union values - decode each table using its type
+            TypeFieldId = FieldId - 1,
+            case reader:get_field(TableRef, TypeFieldId, {vector, ubyte}, Buffer) of
+                {ok, TypeIndices} ->
+                    case reader:get_field(TableRef, FieldId, {vector, table}, Buffer) of
+                        {ok, TableRefs} ->
+                            {union, Members} = maps:get(UnionName, Defs),
+                            DecodedValues = lists:zipwith(
+                                fun(TypeIdx, TableValueRef) ->
+                                    MemberType = lists:nth(TypeIdx, Members),
+                                    table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
+                                end,
+                                TypeIndices, TableRefs),
+                            Acc#{FieldName => DecodedValues};
+                        missing ->
+                            Acc
+                    end;
+                missing ->
+                    Acc
+            end;
         _ ->
             case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                 {ok, Value} ->

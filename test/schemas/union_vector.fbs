@@ -1,0 +1,20 @@
+// Adapted from planus (https://github.com/planus-org/planus) test/files/valid/issue_285.fbs
+// Licensed under MIT/Apache-2.0
+
+file_identifier "UVEC";
+
+table StringData {
+    data: [string];
+}
+
+table IntData {
+    data: [ulong];
+}
+
+union ExampleUnion { StringData, IntData }
+
+table ExampleTable {
+    data: [ExampleUnion];
+}
+
+root_type ExampleTable;

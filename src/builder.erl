@@ -298,6 +298,45 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                 _ ->
                     []
             end;
+        {vector, {union_type, UnionName}} ->
+            %% Vector of union types - list of type names
+            case get_field_value(Map, Name) of
+                undefined ->
+                    [];
+                TypeList when is_list(TypeList) ->
+                    {union, Members} = maps:get(UnionName, Defs),
+                    TypeIndices = [begin
+                        T = if is_binary(MT) -> binary_to_atom(MT); true -> MT end,
+                        find_union_index(T, Members, 1)
+                    end || MT <- TypeList],
+                    [{FieldId, {vector, ubyte}, TypeIndices}];
+                _ ->
+                    []
+            end;
+        {vector, {union_value, UnionName}} ->
+            %% Vector of union values - list of table maps
+            %% Get types from corresponding _type field
+            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+            case get_field_value(Map, Name) of
+                undefined ->
+                    [];
+                ValueList when is_list(ValueList) ->
+                    TypeList = case get_field_value(Map, TypeFieldName) of
+                        TL when is_list(TL) -> TL;
+                        _ -> error({missing_union_type_field, TypeFieldName})
+                    end,
+                    length(TypeList) =:= length(ValueList) orelse
+                        error({union_vector_length_mismatch, Name, length(TypeList), length(ValueList)}),
+                    TaggedValues = lists:zipwith(
+                        fun(T, V) ->
+                            Type0 = if is_binary(T) -> binary_to_atom(T); true -> T end,
+                            #{type => Type0, value => V}
+                        end,
+                        TypeList, ValueList),
+                    [{FieldId, {vector, {union_value, UnionName}}, TaggedValues}];
+                _ ->
+                    []
+            end;
         _ ->
             case get_field_value(Map, Name) of
                 undefined -> [];
@@ -977,13 +1016,13 @@ encode_ref_vector_simple(ElemType, Values, Defs) ->
     EncodedElems = [{encode_ref(ElemType, V, Defs), V} || V <- ReversedValues],
 
     {_, ElemPositions} = lists:foldl(
-        fun({ElemBin, Value}, {DataPos, PosAcc}) ->
+        fun({ElemData, Value}, {DataPos, PosAcc}) ->
             VTableOffset =
                 case is_nested_table_type(ElemType, Value, Defs) of
                     {true, VTableSize} -> VTableSize;
                     false -> 0
                 end,
-            {DataPos + byte_size(ElemBin), [{DataPos, VTableOffset, ElemBin} | PosAcc]}
+            {DataPos + iolist_size(ElemData), [{DataPos, VTableOffset, ElemData} | PosAcc]}
         end,
         {HeaderSize, []},
         EncodedElems
@@ -1001,7 +1040,7 @@ encode_ref_vector_simple(ElemType, Values, Defs) ->
     iolist_to_binary([
         <<Len:32/little>>,
         Offsets,
-        [Bin || {Bin, _} <- EncodedElems]
+        [Data || {Data, _} <- EncodedElems]
     ]).
 
 %% Table vector encoding with vtable sharing (flatc compatible)
