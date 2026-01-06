@@ -1,6 +1,6 @@
 # flatbuferl
 
-A FlatBuffers implementation in Erlang, derived from [wooga/eflatbuffers](https://github.com/wooga/eflatbuffers).
+A FlatBuffers implementation in Erlang.
 
 No dependencies beyond kernel and stdlib. Schemas are parsed at runtime without code generation. Encoding produces iolists and decoding returns sub-binaries, both avoiding unnecessary copies.
 
@@ -110,13 +110,30 @@ Encode options:
 
 ## Supported Types
 
-Scalars: bool, byte/int8, ubyte/uint8, short/int16, ushort/uint16, int/int32, uint/uint32, long/int64, ulong/uint64, float/float32, double/float64.
+Scalars:
+ * bool
+ * byte/int8
+ * ubyte/uint8
+ * short/int16
+ * ushort/uint16
+ * int/int32
+ * uint/uint32
+ * long/int64
+ * ulong/uint64
+ * float/float32
+ * double/float64
 
-Compound: string (binary), vectors (list), tables (map), structs (map), enums (atom), unions.
+Compound:
+ * string (binary)
+ * vectors (list)
+ * tables (map)
+ * structs (map)
+ * enums (atom)
+ * unions
 
 ## Feature Support
 
-Buffers are binary-compatible with flatc. Unsupported features will fail at schema parse time or be silently ignored, but supported features produce identical wire format.
+Buffers are binary-compatible with flatc. Unsupported features will fail at schema parse time or be silently ignored, but supported features should produce identical wire format.
 
 Supported:
 - Tables, structs, enums, unions, vectors of unions
@@ -142,5 +159,7 @@ rebar3 eunit
 ```
 
 ## Acknowledgements
+
+Schema parser/lexer and test schemas adapted from [wooga/eflatbuffers](https://github.com/wooga/eflatbuffers) (MIT).
 
 Test schema `test/schemas/union_vector.fbs` adapted from [planus](https://github.com/planus-org/planus) (MIT/Apache-2.0).
