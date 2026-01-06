@@ -178,7 +178,7 @@ test_encode_decode(SchemaPath, RootType, FileId, SampleData) ->
     {ok, {Defs, _}} = schema:parse_file(SchemaPath),
 
     %% Encode
-    Buffer = eflatbuffers:from_map(SampleData, Defs, RootType, FileId),
+    Buffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Defs, RootType, FileId)),
     ?assert(is_binary(Buffer)),
 
     %% Decode
@@ -192,7 +192,7 @@ test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
     {ok, {Defs, _}} = schema:parse_file(SchemaPath),
 
     %% Encode to flatbuffer
-    Buffer = eflatbuffers:from_map(SampleData, Defs, RootType, FileId),
+    Buffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Defs, RootType, FileId)),
     Ctx = eflatbuffers:new(Buffer, Defs, RootType),
     Map = eflatbuffers:to_map(Ctx),
 
@@ -201,7 +201,7 @@ test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
     Decoded = json:decode(Json),
 
     %% Re-encode from JSON-decoded map (binary keys)
-    Buffer2 = eflatbuffers:from_map(Decoded, Defs, RootType, FileId),
+    Buffer2 = iolist_to_binary(eflatbuffers:from_map(Decoded, Defs, RootType, FileId)),
     Ctx2 = eflatbuffers:new(Buffer2, Defs, RootType),
     Result = eflatbuffers:to_map(Ctx2),
 
@@ -301,7 +301,7 @@ test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
     {ok, FlatcBuffer} = file:read_file(TmpBin),
 
     %% Encode with our Erlang builder
-    ErlBuffer = eflatbuffers:from_map(SampleData, Defs, RootType, FileId),
+    ErlBuffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Defs, RootType, FileId)),
 
     %% Compare binaries - require exact match
     ?assertEqual(

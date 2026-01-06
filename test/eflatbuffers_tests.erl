@@ -232,7 +232,7 @@ to_map_vectors_test() ->
 from_map_basic_test() ->
     {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Goblin">>, hp => 50, mana => 25},
-    Buffer = eflatbuffers:from_map(Map, Defs, 'Monster', <<"MONS">>),
+    Buffer = iolist_to_binary(eflatbuffers:from_map(Map, Defs, 'Monster', <<"MONS">>)),
     ?assert(is_binary(Buffer)),
     %% Verify we can read it back
     Ctx = eflatbuffers:new(Buffer, Defs, 'Monster'),
@@ -245,7 +245,7 @@ from_map_roundtrip_test() ->
     OrigCtx = monster_ctx(),
     Map = eflatbuffers:to_map(OrigCtx),
     {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
-    NewBuffer = eflatbuffers:from_map(Map, Defs, 'Monster', <<"MONS">>),
+    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Map, Defs, 'Monster', <<"MONS">>)),
     NewCtx = eflatbuffers:new(NewBuffer, Defs, 'Monster'),
     ?assertEqual(<<"Orc">>, eflatbuffers:get(NewCtx, [name])),
     ?assertEqual(150, eflatbuffers:get(NewCtx, [hp])),
@@ -254,5 +254,5 @@ from_map_roundtrip_test() ->
 from_map_file_id_test() ->
     {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Test">>},
-    Buffer = eflatbuffers:from_map(Map, Defs, 'Monster', <<"TEST">>),
+    Buffer = iolist_to_binary(eflatbuffers:from_map(Map, Defs, 'Monster', <<"TEST">>)),
     ?assertEqual(<<"TEST">>, eflatbuffers:file_id(Buffer)).

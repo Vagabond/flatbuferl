@@ -100,7 +100,7 @@ encode_root_vtable_before(
     VTablePos = HeaderSize + PreVTablePad,
     SOffset = TablePos - VTablePos,
 
-    iolist_to_binary([
+    [
         <<TablePos:32/little-unsigned>>,
         file_id_bin(FileId),
         <<0:(PreVTablePad * 8)>>,
@@ -108,7 +108,7 @@ encode_root_vtable_before(
         <<SOffset:32/little-signed>>,
         TableData,
         RefDataBin
-    ]).
+    ].
 
 %% Shared vtable layout: header | soffset | table | ref_data (vtable is inside ref_data)
 encode_root_vtable_after(
@@ -153,13 +153,13 @@ encode_root_vtable_after(
     %% Will be negative
     SOffset = TablePos - SharedVTablePos,
 
-    iolist_to_binary([
+    [
         <<TablePos:32/little-unsigned>>,
         file_id_bin(FileId),
         <<SOffset:32/little-signed>>,
         TableData,
         RefDataBin
-    ]).
+    ].
 
 file_id_bin(no_file_id) -> <<>>;
 file_id_bin(B) when byte_size(B) =:= 4 -> B;
@@ -989,9 +989,17 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
     ),
 
     %% Build buffer: for each vtable group (in processing order), output non-owners, vtable, owner
-    %% We need to maintain processing order across all groups
-    %% Since all elements in this test have same vtable, we can simplify:
-    %% - Sort elements: non-owners first (by OrigIdx desc), then owner
+    %% Sort vtable groups by the highest OrigIdx in each group (processing order)
+    VTableGroupList = maps:to_list(VTableGroups),
+    SortedVTableGroups = lists:sort(
+        fun({_VT1, G1}, {_VT2, G2}) ->
+            MaxIdx1 = lists:max([Idx || {Idx, _, _} <- G1]),
+            MaxIdx2 = lists:max([Idx || {Idx, _, _} <- G2]),
+            %% Descending by max index (first processed first)
+            MaxIdx1 > MaxIdx2
+        end,
+        VTableGroupList
+    ),
     SortedByVTable = lists:flatmap(
         fun({VTable, Group}) ->
             {Owners, NonOwners} = lists:partition(fun({_, _, IsOwner}) -> IsOwner end, Group),
@@ -1006,7 +1014,7 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
             %% Insert vtable before owner
             NonOwnerElems ++ [{vtable_insert, VTable}] ++ OwnerElems
         end,
-        maps:to_list(VTableGroups)
+        SortedVTableGroups
     ),
 
     %% Calculate positions with proper alignment

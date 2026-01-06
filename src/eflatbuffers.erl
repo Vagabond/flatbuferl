@@ -86,11 +86,11 @@ has(Ctx, Path) ->
 to_map(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}) ->
     table_to_map(Root, Defs, RootType, Buffer).
 
--spec from_map(map(), schema:definitions(), atom()) -> binary().
+-spec from_map(map(), schema:definitions(), atom()) -> iodata().
 from_map(Map, Defs, RootType) ->
     builder:from_map(Map, Defs, RootType).
 
--spec from_map(map(), schema:definitions(), atom(), binary()) -> binary().
+-spec from_map(map(), schema:definitions(), atom(), binary()) -> iodata().
 from_map(Map, Defs, RootType, FileId) ->
     builder:from_map(Map, Defs, RootType, FileId).
 
