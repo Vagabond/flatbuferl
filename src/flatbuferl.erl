@@ -1,4 +1,4 @@
--module(eflatbuffers).
+-module(flatbuferl).
 
 -export([
     new/2,

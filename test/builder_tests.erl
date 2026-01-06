@@ -232,8 +232,8 @@ simple_union_test() ->
     ?assertEqual(<<"cmnd">>, reader:get_file_id(Buffer)),
 
     %% Decode and verify
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Result = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Result = flatbuferl:to_map(Ctx),
 
     ?assertEqual(42, maps:get(additions_value, Result)),
     ?assertEqual(hello, maps:get(data_type, Result)),
@@ -246,8 +246,8 @@ union_bye_variant_test() ->
     Map = #{data_type => bye, data => #{greeting => 123}},
     Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Result = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Result = flatbuferl:to_map(Ctx),
 
     ?assertEqual(bye, maps:get(data_type, Result)),
     ?assertEqual(#{greeting => 123}, maps:get(data, Result)).
@@ -259,15 +259,15 @@ union_bye_variant_test() ->
 json_roundtrip_simple_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
     {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Original = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Original = flatbuferl:to_map(Ctx),
 
     %% Encode to JSON (atom keys) -> decode (binary keys) -> from_map -> to_map
     Json = iolist_to_binary(json:encode(Original)),
     Decoded = json:decode(Json),
-    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Schema)),
-    NewCtx = eflatbuffers:new(NewBuffer, Schema),
-    Result = eflatbuffers:to_map(NewCtx),
+    NewBuffer = iolist_to_binary(flatbuferl:from_map(Decoded, Schema)),
+    NewCtx = flatbuferl:new(NewBuffer, Schema),
+    Result = flatbuferl:to_map(NewCtx),
 
     ?assertEqual(maps:get(name, Original), maps:get(name, Result)),
     ?assertEqual(maps:get(hp, Original), maps:get(hp, Result)),
@@ -276,14 +276,14 @@ json_roundtrip_simple_test() ->
 json_roundtrip_nested_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
     {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Original = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Original = flatbuferl:to_map(Ctx),
 
     Json = iolist_to_binary(json:encode(Original)),
     Decoded = json:decode(Json),
-    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Schema)),
-    NewCtx = eflatbuffers:new(NewBuffer, Schema),
-    Result = eflatbuffers:to_map(NewCtx),
+    NewBuffer = iolist_to_binary(flatbuferl:from_map(Decoded, Schema)),
+    NewCtx = flatbuferl:new(NewBuffer, Schema),
+    Result = flatbuferl:to_map(NewCtx),
 
     ?assertEqual(maps:get(name, Original), maps:get(name, Result)),
     ?assertEqual(maps:get(hp, Original), maps:get(hp, Result)),
@@ -296,14 +296,14 @@ json_roundtrip_nested_test() ->
 json_roundtrip_vectors_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
     {ok, Schema} = schema:parse_file("test/vectors/test_vector.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Original = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Original = flatbuferl:to_map(Ctx),
 
     Json = iolist_to_binary(json:encode(Original)),
     Decoded = json:decode(Json),
-    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Schema)),
-    NewCtx = eflatbuffers:new(NewBuffer, Schema),
-    Result = eflatbuffers:to_map(NewCtx),
+    NewBuffer = iolist_to_binary(flatbuferl:from_map(Decoded, Schema)),
+    NewCtx = flatbuferl:new(NewBuffer, Schema),
+    Result = flatbuferl:to_map(NewCtx),
 
     ?assertEqual(maps:get(counts, Original), maps:get(counts, Result)),
     ?assertEqual(maps:get(items, Original), maps:get(items, Result)).
@@ -316,16 +316,16 @@ flatc_roundtrip_monster_test() ->
     %% Read original, modify, write new buffer, verify flatc can decode it
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
     {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Map = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Map = flatbuferl:to_map(Ctx),
 
     %% Modify the map
     Modified = Map#{name => <<"Troll">>, hp => 200, mana => 75},
 
     %% Build new buffer
-    NewBuffer = eflatbuffers:from_map(Modified, Schema),
-    TmpBin = "/tmp/eflatbuffers_test_monster.bin",
-    TmpJson = "/tmp/eflatbuffers_test_monster.json",
+    NewBuffer = flatbuferl:from_map(Modified, Schema),
+    TmpBin = "/tmp/flatbuferl_test_monster.bin",
+    TmpJson = "/tmp/flatbuferl_test_monster.json",
     ok = file:write_file(TmpBin, NewBuffer),
 
     %% Use flatc to decode our buffer (--strict-json for proper JSON)
@@ -350,8 +350,8 @@ flatc_roundtrip_nested_test() ->
     %% Test nested table roundtrip with flatc
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
     {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Map = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Map = flatbuferl:to_map(Ctx),
 
     %% Modify nested values
     Modified = Map#{
@@ -361,9 +361,9 @@ flatc_roundtrip_nested_test() ->
     },
 
     %% Build new buffer
-    NewBuffer = eflatbuffers:from_map(Modified, Schema),
-    TmpBin = "/tmp/eflatbuffers_test_nested.bin",
-    TmpJson = "/tmp/eflatbuffers_test_nested.json",
+    NewBuffer = flatbuferl:from_map(Modified, Schema),
+    TmpBin = "/tmp/flatbuferl_test_nested.bin",
+    TmpJson = "/tmp/flatbuferl_test_nested.json",
     ok = file:write_file(TmpBin, NewBuffer),
 
     %% Use flatc to decode
@@ -391,8 +391,8 @@ flatc_roundtrip_vectors_test() ->
     %% Test vector roundtrip with flatc
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
     {ok, Schema} = schema:parse_file("test/vectors/test_vector.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Map = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Map = flatbuferl:to_map(Ctx),
 
     %% Modify vectors
     Modified = Map#{
@@ -401,9 +401,9 @@ flatc_roundtrip_vectors_test() ->
     },
 
     %% Build new buffer
-    NewBuffer = eflatbuffers:from_map(Modified, Schema),
-    TmpBin = "/tmp/eflatbuffers_test_vector.bin",
-    TmpJson = "/tmp/eflatbuffers_test_vector.json",
+    NewBuffer = flatbuferl:from_map(Modified, Schema),
+    TmpBin = "/tmp/flatbuferl_test_vector.bin",
+    TmpJson = "/tmp/flatbuferl_test_vector.json",
     ok = file:write_file(TmpBin, NewBuffer),
 
     %% Use flatc to decode
@@ -481,9 +481,9 @@ string_dedup_flatc_compat_test() ->
     Map = #{items => [<<"hello">>, <<"world">>, <<"hello">>]},
     Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
-    TmpBin = "/tmp/eflatbuffers_dedup_test.bin",
-    TmpSchema = "/tmp/eflatbuffers_dedup_test.fbs",
-    TmpJson = "/tmp/eflatbuffers_dedup_test.json",
+    TmpBin = "/tmp/flatbuferl_dedup_test.bin",
+    TmpSchema = "/tmp/flatbuferl_dedup_test.fbs",
+    TmpJson = "/tmp/flatbuferl_dedup_test.json",
 
     %% Write schema
     SchemaStr = "file_identifier \"TEST\";\ntable test { items: [string]; }\nroot_type test;\n",

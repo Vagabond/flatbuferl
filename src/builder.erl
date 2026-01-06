@@ -1496,8 +1496,8 @@ vtable_sharing_test() ->
 
     %% Encode and decode roundtrip
     Buffer = iolist_to_binary(from_map(Map, Schema)),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Result = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Result = flatbuferl:to_map(Ctx),
 
     ?assertEqual(200, maps:get(hp, Result)),
     ?assertEqual(<<"Player">>, maps:get(name, Result)),
@@ -1524,8 +1524,8 @@ zero_copy_reencode_test() ->
         Bins1 = get_refc_binary_ids(),
 
         %% Deserialize - should still have same binary (zero-copy decode)
-        Ctx = eflatbuffers:new(Buffer, Schema),
-        DecodedMap = eflatbuffers:to_map(Ctx),
+        Ctx = flatbuferl:new(Buffer, Schema),
+        DecodedMap = flatbuferl:to_map(Ctx),
         erlang:garbage_collect(),
         Bins2 = get_refc_binary_ids(),
 

@@ -1,4 +1,4 @@
-# erl_flatbuf
+# flatbuferl
 
 A FlatBuffers implementation in Erlang, derived from [wooga/eflatbuffers](https://github.com/wooga/eflatbuffers).
 
@@ -39,38 +39,38 @@ Data = #{
     hp => 200,
     items => [<<"sword">>, <<"shield">>]
 },
-Iodata = eflatbuffers:from_map(Data, Schema),
+Iodata = flatbuferl:from_map(Data, Schema),
 Buffer = iolist_to_binary(Iodata).
 ```
 
 Full decode with `to_map`:
 ```erlang
-Ctx = eflatbuffers:new(Buffer, Schema),
-Map = eflatbuffers:to_map(Ctx).
+Ctx = flatbuferl:new(Buffer, Schema),
+Map = flatbuferl:to_map(Ctx).
 %% #{name => <<"Player">>, pos => #{x => 1.5, y => 2.5, z => 3.5}, hp => 200, items => [...]}
 ```
 
 Partial decode with `get` - seeks into the buffer and only deserializes the requested path:
 ```erlang
-Ctx = eflatbuffers:new(Buffer, Schema),
+Ctx = flatbuferl:new(Buffer, Schema),
 
 %% Single field
-eflatbuffers:get(Ctx, [name]).              %% <<"Player">>
-eflatbuffers:get(Ctx, [hp]).                %% 200
+flatbuferl:get(Ctx, [name]).              %% <<"Player">>
+flatbuferl:get(Ctx, [hp]).                %% 200
 
 %% Nested table field
-eflatbuffers:get(Ctx, [pos, x]).            %% 1.5
-eflatbuffers:get(Ctx, [pos, y]).            %% 2.5
+flatbuferl:get(Ctx, [pos, x]).            %% 1.5
+flatbuferl:get(Ctx, [pos, y]).            %% 2.5
 
 %% Vector field (returns full list)
-eflatbuffers:get(Ctx, [items]).             %% [<<"sword">>, <<"shield">>]
+flatbuferl:get(Ctx, [items]).             %% [<<"sword">>, <<"shield">>]
 
 %% Missing field returns schema default
-eflatbuffers:get(Ctx, [hp]).                %% 100 if hp not in buffer (schema default)
+flatbuferl:get(Ctx, [hp]).                %% 100 if hp not in buffer (schema default)
 
 %% Check if field is present
-eflatbuffers:has(Ctx, [name]).              %% true
-eflatbuffers:has(Ctx, [pos]).               %% true or false
+flatbuferl:has(Ctx, [name]).              %% true
+flatbuferl:has(Ctx, [pos]).               %% true or false
 ```
 
 ## API
@@ -79,16 +79,16 @@ eflatbuffers:has(Ctx, [pos]).               %% true or false
 schema:parse(String | Binary) -> {ok, Schema} | {error, Reason}.
 schema:parse_file(Filename) -> {ok, Schema} | {error, Reason}.
 
-eflatbuffers:new(Buffer, Schema) -> Ctx.
-eflatbuffers:get(Ctx, Path) -> Value.
-eflatbuffers:get(Ctx, Path, Default) -> Value.
-eflatbuffers:has(Ctx, Path) -> boolean().
-eflatbuffers:to_map(Ctx) -> Map.
-eflatbuffers:to_map(Ctx, Opts) -> Map.
-eflatbuffers:from_map(Map, Schema) -> iodata().
-eflatbuffers:from_map(Map, Schema, Opts) -> iodata().
-eflatbuffers:file_id(Ctx | Buffer) -> <<_:32>>.
-eflatbuffers:get_bytes(Ctx, Path) -> binary().
+flatbuferl:new(Buffer, Schema) -> Ctx.
+flatbuferl:get(Ctx, Path) -> Value.
+flatbuferl:get(Ctx, Path, Default) -> Value.
+flatbuferl:has(Ctx, Path) -> boolean().
+flatbuferl:to_map(Ctx) -> Map.
+flatbuferl:to_map(Ctx, Opts) -> Map.
+flatbuferl:from_map(Map, Schema) -> iodata().
+flatbuferl:from_map(Map, Schema, Opts) -> iodata().
+flatbuferl:file_id(Ctx | Buffer) -> <<_:32>>.
+flatbuferl:get_bytes(Ctx, Path) -> binary().
 ```
 
 Decode options:
@@ -101,7 +101,9 @@ Encode options:
 
 ```erlang
 #{
-    file_id => true | false | <<_:32>>,  %% default: true (use schema's file_identifier)
+    file_id => true | false | <<_:32>>,  %% true: use schema's file_identifier (default)
+                                        %% false: omit file identifier
+                                        %% <<_:32>>: replace with custom 4-byte identifier
     deprecated => skip | allow | error   %% default: skip
 }
 ```

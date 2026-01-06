@@ -1,4 +1,4 @@
-{application, eflatbuffers, [
+{application, flatbuferl, [
     {description, "FlatBuffers implementation for Erlang"},
     {vsn, "0.1.0"},
     {registered, []},

@@ -178,12 +178,12 @@ test_encode_decode(SchemaPath, RootType, FileId, SampleData) ->
     {ok, Schema} = schema:parse_file(SchemaPath),
 
     %% Encode
-    Buffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Schema)),
+    Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
     ?assert(is_binary(Buffer)),
 
     %% Decode
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Result = eflatbuffers:to_map(Ctx),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Result = flatbuferl:to_map(Ctx),
 
     %% Verify all fields match
     verify_maps_equal(SampleData, Result).
@@ -192,18 +192,18 @@ test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
     {ok, Schema} = schema:parse_file(SchemaPath),
 
     %% Encode to flatbuffer
-    Buffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Schema)),
-    Ctx = eflatbuffers:new(Buffer, Schema),
-    Map = eflatbuffers:to_map(Ctx),
+    Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Map = flatbuferl:to_map(Ctx),
 
     %% JSON roundtrip
     Json = iolist_to_binary(json:encode(Map)),
     Decoded = json:decode(Json),
 
     %% Re-encode from JSON-decoded map (binary keys)
-    Buffer2 = iolist_to_binary(eflatbuffers:from_map(Decoded, Schema)),
-    Ctx2 = eflatbuffers:new(Buffer2, Schema),
-    Result = eflatbuffers:to_map(Ctx2),
+    Buffer2 = iolist_to_binary(flatbuferl:from_map(Decoded, Schema)),
+    Ctx2 = flatbuferl:new(Buffer2, Schema),
+    Result = flatbuferl:to_map(Ctx2),
 
     verify_maps_equal(SampleData, Result).
 
@@ -220,9 +220,9 @@ test_flatc_roundtrip_with_id(SchemaPath, RootType, FileId, SampleData) ->
     {ok, Schema} = schema:parse_file(SchemaPath),
 
     %% Build buffer
-    Buffer = eflatbuffers:from_map(SampleData, Schema),
-    TmpBin = "/tmp/eflatbuffers_test.bin",
-    TmpJson = "/tmp/eflatbuffers_test.json",
+    Buffer = flatbuferl:from_map(SampleData, Schema),
+    TmpBin = "/tmp/flatbuferl_test.bin",
+    TmpJson = "/tmp/flatbuferl_test.json",
     ok = file:write_file(TmpBin, Buffer),
 
     %% Use flatc to decode
@@ -248,9 +248,9 @@ test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData) ->
     {ok, Schema} = schema:parse_file(SchemaPath),
 
     %% Build buffer
-    Buffer = eflatbuffers:from_map(SampleData, Schema),
-    TmpBin = "/tmp/eflatbuffers_test.bin",
-    TmpJson = "/tmp/eflatbuffers_test.json",
+    Buffer = flatbuferl:from_map(SampleData, Schema),
+    TmpBin = "/tmp/flatbuferl_test.bin",
+    TmpJson = "/tmp/flatbuferl_test.json",
     ok = file:write_file(TmpBin, Buffer),
 
     %% Use flatc with --raw-binary
@@ -282,8 +282,8 @@ test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
     %% Encode sample data to JSON for flatc input
     JsonBin = iolist_to_binary(json:encode(SampleData)),
 
-    TmpJson = "/tmp/eflatbuffers_input.json",
-    TmpBin = "/tmp/eflatbuffers_input.bin",
+    TmpJson = "/tmp/flatbuferl_input.json",
+    TmpBin = "/tmp/flatbuferl_input.bin",
 
     ok = file:write_file(TmpJson, JsonBin),
 
@@ -301,7 +301,7 @@ test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
     {ok, FlatcBuffer} = file:read_file(TmpBin),
 
     %% Encode with our Erlang builder
-    ErlBuffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Schema)),
+    ErlBuffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
 
     %% Compare binaries - require exact match
     ?assertEqual(
@@ -368,7 +368,7 @@ test_zero_copy(SchemaPath, RootType, FileId, SampleData) ->
     {ok, Schema} = schema:parse_file(SchemaPath),
 
     %% Encode initial buffer
-    Buffer = iolist_to_binary(eflatbuffers:from_map(SampleData, Schema)),
+    Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
 
     %% Run decode/re-encode in isolated process to measure binaries
     Result = run_in_isolated_process(fun() ->
@@ -376,13 +376,13 @@ test_zero_copy(SchemaPath, RootType, FileId, SampleData) ->
         Bins1 = get_refc_binary_ids(),
 
         %% Decode
-        Ctx = eflatbuffers:new(Buffer, Schema),
-        DecodedMap = eflatbuffers:to_map(Ctx),
+        Ctx = flatbuferl:new(Buffer, Schema),
+        DecodedMap = flatbuferl:to_map(Ctx),
         erlang:garbage_collect(),
         Bins2 = get_refc_binary_ids(),
 
         %% Re-encode - keep reference to iolist to prevent GC of sub-binaries
-        ReEncoded = eflatbuffers:from_map(DecodedMap, Schema),
+        ReEncoded = flatbuferl:from_map(DecodedMap, Schema),
         erlang:garbage_collect(),
         Bins3 = get_refc_binary_ids(),
 
@@ -426,8 +426,8 @@ required_field_test_() ->
              Map = #{name => <<"test">>, value => 42},
              Data = builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
              ?assertEqual(<<"test">>, maps:get(name, Result)),
              ?assertEqual(42, maps:get(value, Result))
          end},
@@ -459,9 +459,9 @@ deprecated_encode_test_() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
              Data = builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
+             Ctx = flatbuferl:new(Bin, Schema),
              %% Field wasn't encoded, so won't appear even with allow
-             Result = eflatbuffers:to_map(Ctx, #{deprecated => allow}),
+             Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
              ?assertEqual(false, maps:is_key(old_field, Result)),
              ?assertEqual(10, maps:get(new_field, Result))
          end},
@@ -470,8 +470,8 @@ deprecated_encode_test_() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
              Data = builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx, #{deprecated => allow}),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
              ?assertEqual(42, maps:get(old_field, Result))
          end},
         {"deprecated field errors with option",
@@ -504,8 +504,8 @@ deprecated_decode_test_() ->
              Data = builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
              %% Now decode with default options - should skip
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
              ?assertEqual(false, maps:is_key(old_field, Result)),
              ?assertEqual(10, maps:get(new_field, Result))
          end},
@@ -514,8 +514,8 @@ deprecated_decode_test_() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
              Data = builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx, #{deprecated => allow}),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
              ?assertEqual(42, maps:get(old_field, Result)),
              ?assertEqual(10, maps:get(new_field, Result))
          end},
@@ -524,17 +524,17 @@ deprecated_decode_test_() ->
              Map = #{name => <<"test">>, old_field => 42, new_field => 10},
              Data = builder:from_map(Map, Schema, #{deprecated => allow}),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
+             Ctx = flatbuferl:new(Bin, Schema),
              ?assertError({deprecated_field_present, 'TestTable', old_field},
-                          eflatbuffers:to_map(Ctx, #{deprecated => error}))
+                          flatbuferl:to_map(Ctx, #{deprecated => error}))
          end},
         {"deprecated field not present passes error option",
          fun() ->
              Map = #{name => <<"test">>, new_field => 10},
              Data = builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx, #{deprecated => error}),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx, #{deprecated => error}),
              ?assertEqual(10, maps:get(new_field, Result))
          end}
     ].
@@ -566,8 +566,8 @@ union_vector_test_() ->
              },
              Data = builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
              ?assertEqual(['Login', 'Logout', 'Login'], maps:get(events_type, Result)),
              Events = maps:get(events, Result),
              ?assertEqual(3, length(Events)),
@@ -583,8 +583,8 @@ union_vector_test_() ->
              },
              Data = builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
              ?assertEqual(['Login', 'Logout'], maps:get(events_type, Result))
          end},
         {"empty union vector",
@@ -592,8 +592,8 @@ union_vector_test_() ->
              Map = #{events_type => [], events => []},
              Data = builder:from_map(Map, Schema),
              Bin = iolist_to_binary(Data),
-             Ctx = eflatbuffers:new(Bin, Schema),
-             Result = eflatbuffers:to_map(Ctx),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
              ?assertEqual([], maps:get(events_type, Result)),
              ?assertEqual([], maps:get(events, Result))
          end},
@@ -609,9 +609,9 @@ union_vector_test_() ->
              },
              Encoded = builder:from_map(Map, ParsedSchema),
              Bin = iolist_to_binary(Encoded),
-             ?assertEqual(<<"UVEC">>, eflatbuffers:file_id(Bin)),
-             Ctx = eflatbuffers:new(Bin, ParsedSchema),
-             Result = eflatbuffers:to_map(Ctx),
+             ?assertEqual(<<"UVEC">>, flatbuferl:file_id(Bin)),
+             Ctx = flatbuferl:new(Bin, ParsedSchema),
+             Result = flatbuferl:to_map(Ctx),
              ?assertEqual(['StringData', 'IntData'], maps:get(data_type, Result)),
              DataVals = maps:get(data, Result),
              ?assertEqual(2, length(DataVals)),
