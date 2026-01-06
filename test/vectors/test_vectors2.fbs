@@ -1,0 +1,13 @@
+namespace TestNS;
+
+file_identifier "VEC2";
+
+table VectorTypes {
+  bytes: [ubyte];
+  shorts: [short];
+  longs: [long];
+  doubles: [double];
+  bools: [bool];
+}
+
+root_type VectorTypes;

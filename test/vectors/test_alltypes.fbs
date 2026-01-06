@@ -1,0 +1,23 @@
+namespace TestNS;
+
+file_identifier "TYPE";
+
+enum Color : byte { Red = 0, Green = 1, Blue = 2 }
+
+table AllTypes {
+  f_bool: bool;
+  f_byte: byte;
+  f_ubyte: ubyte;
+  f_short: short;
+  f_ushort: ushort;
+  f_int: int;
+  f_uint: uint;
+  f_long: long;
+  f_ulong: ulong;
+  f_float: float;
+  f_double: double;
+  f_string: string;
+  f_color: Color;
+}
+
+root_type AllTypes;

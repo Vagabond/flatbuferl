@@ -1,0 +1,5 @@
+{
+  name: "Troll",
+  hp: 200,
+  mana: 75
+}

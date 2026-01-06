@@ -1,0 +1,10 @@
+namespace TestNS;
+
+file_identifier "VECT";
+
+table Inventory {
+  items: [string];
+  counts: [int];
+}
+
+root_type Inventory;

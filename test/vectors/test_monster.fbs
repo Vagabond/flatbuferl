@@ -1,0 +1,11 @@
+namespace TestNS;
+
+file_identifier "MONS";
+
+table Monster {
+  name: string;
+  hp: int = 100;
+  mana: int = 50;
+}
+
+root_type Monster;

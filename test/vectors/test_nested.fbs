@@ -1,0 +1,17 @@
+namespace TestNS;
+
+file_identifier "NEST";
+
+table Vec3 {
+  x: float;
+  y: float;
+  z: float;
+}
+
+table Entity {
+  name: string;
+  pos: Vec3;
+  hp: int = 100;
+}
+
+root_type Entity;

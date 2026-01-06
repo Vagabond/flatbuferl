@@ -1,0 +1,15 @@
+{
+  "f_bool": true,
+  "f_byte": -42,
+  "f_ubyte": 200,
+  "f_short": -1000,
+  "f_ushort": 50000,
+  "f_int": -100000,
+  "f_uint": 3000000000,
+  "f_long": -9000000000000,
+  "f_ulong": 18000000000000000000,
+  "f_float": 3.14159,
+  "f_double": 2.718281828459045,
+  "f_string": "hello",
+  "f_color": "Green"
+}
