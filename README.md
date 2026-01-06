@@ -94,7 +94,9 @@ flatbuferl:get_bytes(Ctx, Path) -> binary().
 Decode options:
 
 ```erlang
-#{deprecated => skip | allow | error}  %% default: skip
+#{deprecated => skip | allow | error}  %% skip: ignore deprecated fields (default)
+                                       %% allow: parse deprecated fields
+                                       %% error: fail to decode messages containing deprecated fields
 ```
 
 Encode options:
@@ -102,9 +104,11 @@ Encode options:
 ```erlang
 #{
     file_id => true | false | <<_:32>>,  %% true: use schema's file_identifier (default)
-                                        %% false: omit file identifier
-                                        %% <<_:32>>: replace with custom 4-byte identifier
-    deprecated => skip | allow | error   %% default: skip
+                                         %% false: omit file identifier
+                                         %% <<_:32>>: replace with custom 4-byte identifier
+    deprecated => skip | allow | error   %% skip: do not encode deprecated fields (default)
+                                         %% allow: encode deprecated fields, if supplied
+                                         %% error: fail to encode if deprecated fields are present
 }
 ```
 
