@@ -2,7 +2,6 @@
 
 -export([
     new/2,
-    new/3,
     get/2,
     get/3,
     get_bytes/2,
@@ -10,12 +9,13 @@
     has/2,
     to_map/1,
     to_map/2,
-    from_map/3,
-    from_map/4,
-    from_map/5
+    from_map/2,
+    from_map/3
 ]).
 
--export_type([ctx/0, path/0, decode_opts/0]).
+-export_type([ctx/0, path/0, decode_opts/0, schema/0]).
+
+-type schema() :: {schema:definitions(), schema:options()}.
 
 %% Options for decoding:
 %%   deprecated => skip | allow | error
@@ -40,14 +40,9 @@
 %% Context Creation
 %% =============================================================================
 
--spec new(binary(), schema:definitions()) -> ctx().
-new(Buffer, Defs) ->
-    %% Try to find root_type from schema options, or use first table
-    RootType = find_root_type(Defs),
-    new(Buffer, Defs, RootType).
-
--spec new(binary(), schema:definitions(), atom()) -> ctx().
-new(Buffer, Defs, RootType) ->
+-spec new(binary(), schema()) -> ctx().
+new(Buffer, {Defs, SchemaOpts}) ->
+    RootType = maps:get(root_type, SchemaOpts),
     Root = reader:get_root(Buffer),
     #ctx{
         buffer = Buffer,
@@ -55,14 +50,6 @@ new(Buffer, Defs, RootType) ->
         root_type = RootType,
         root = Root
     }.
-
-find_root_type(Defs) ->
-    %% Find first table in defs
-    Tables = [Name || {Name, {table, _}} <- maps:to_list(Defs)],
-    case Tables of
-        [First | _] -> First;
-        [] -> error(no_tables_in_schema)
-    end.
 
 %% =============================================================================
 %% Access API
@@ -101,17 +88,13 @@ to_map(Ctx) ->
 to_map(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}, Opts) ->
     table_to_map(Root, Defs, RootType, Buffer, Opts).
 
--spec from_map(map(), schema:definitions(), atom()) -> iodata().
-from_map(Map, Defs, RootType) ->
-    builder:from_map(Map, Defs, RootType).
+-spec from_map(map(), schema()) -> iodata().
+from_map(Map, Schema) ->
+    builder:from_map(Map, Schema).
 
--spec from_map(map(), schema:definitions(), atom(), binary()) -> iodata().
-from_map(Map, Defs, RootType, FileId) ->
-    builder:from_map(Map, Defs, RootType, FileId).
-
--spec from_map(map(), schema:definitions(), atom(), binary() | no_file_id, builder:encode_opts()) -> iodata().
-from_map(Map, Defs, RootType, FileId, Opts) ->
-    builder:from_map(Map, Defs, RootType, FileId, Opts).
+-spec from_map(map(), schema(), builder:encode_opts()) -> iodata().
+from_map(Map, Schema, Opts) ->
+    builder:from_map(Map, Schema, Opts).
 
 table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     {table, Fields} = maps:get(TableType, Defs),

@@ -6,26 +6,26 @@
 %% =============================================================================
 
 simple_int_test() ->
-    Defs = #{test => {table, [{a, int, #{id => 0}}]}},
+    Schema = {#{test => {table, [{a, int, #{id => 0}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
     Map = #{a => 42},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test, <<"TEST">>)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     ?assertEqual(<<"TEST">>, reader:get_file_id(Buffer)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, 42}, reader:get_field(Root, 0, int, Buffer)).
 
 two_ints_test() ->
-    Defs = #{test => {table, [{a, int, #{id => 0}}, {b, int, #{id => 1}}]}},
+    Schema = {#{test => {table, [{a, int, #{id => 0}}, {b, int, #{id => 1}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
     Map = #{a => 10, b => 20},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test, <<"TEST">>)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, 10}, reader:get_field(Root, 0, int, Buffer)),
     ?assertEqual({ok, 20}, reader:get_field(Root, 1, int, Buffer)).
 
 skip_default_value_test() ->
-    Defs = #{test => {table, [{a, {int, 100}, #{id => 0}}, {b, int, #{id => 1}}]}},
+    Schema = {#{test => {table, [{a, {int, 100}, #{id => 0}}, {b, int, #{id => 1}}]}}, #{root_type => test}},
     %% a has default value, should be skipped
     Map = #{a => 100, b => 20},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     %% a not written
     ?assertEqual(missing, reader:get_field(Root, 0, int, Buffer)),
@@ -33,9 +33,9 @@ skip_default_value_test() ->
 
 non_contiguous_field_ids_test() ->
     %% Field IDs 0 and 2 (gap at 1)
-    Defs = #{test => {table, [{a, int, #{id => 0}}, {c, int, #{id => 2}}]}},
+    Schema = {#{test => {table, [{a, int, #{id => 0}}, {c, int, #{id => 2}}]}}, #{root_type => test}},
     Map = #{a => 10, c => 30},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, 10}, reader:get_field(Root, 0, int, Buffer)),
     %% No field 1
@@ -47,45 +47,45 @@ non_contiguous_field_ids_test() ->
 %% =============================================================================
 
 bool_test() ->
-    Defs = #{test => {table, [{flag, bool, #{id => 0}}]}},
+    Schema = {#{test => {table, [{flag, bool, #{id => 0}}]}}, #{root_type => test}},
     Map = #{flag => true},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, true}, reader:get_field(Root, 0, bool, Buffer)).
 
 byte_test() ->
-    Defs = #{test => {table, [{val, byte, #{id => 0}}]}},
+    Schema = {#{test => {table, [{val, byte, #{id => 0}}]}}, #{root_type => test}},
     Map = #{val => -42},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, -42}, reader:get_field(Root, 0, byte, Buffer)).
 
 short_test() ->
-    Defs = #{test => {table, [{val, short, #{id => 0}}]}},
+    Schema = {#{test => {table, [{val, short, #{id => 0}}]}}, #{root_type => test}},
     Map = #{val => -1000},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, -1000}, reader:get_field(Root, 0, short, Buffer)).
 
 long_test() ->
-    Defs = #{test => {table, [{val, long, #{id => 0}}]}},
+    Schema = {#{test => {table, [{val, long, #{id => 0}}]}}, #{root_type => test}},
     Map = #{val => 9000000000000},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, 9000000000000}, reader:get_field(Root, 0, long, Buffer)).
 
 float_test() ->
-    Defs = #{test => {table, [{val, float, #{id => 0}}]}},
+    Schema = {#{test => {table, [{val, float, #{id => 0}}]}}, #{root_type => test}},
     Map = #{val => 3.14},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     {ok, V} = reader:get_field(Root, 0, float, Buffer),
     ?assert(abs(V - 3.14) < 0.001).
 
 double_test() ->
-    Defs = #{test => {table, [{val, double, #{id => 0}}]}},
+    Schema = {#{test => {table, [{val, double, #{id => 0}}]}}, #{root_type => test}},
     Map = #{val => 2.718281828},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     {ok, V} = reader:get_field(Root, 0, double, Buffer),
     ?assert(abs(V - 2.718281828) < 0.0000001).
@@ -95,17 +95,17 @@ double_test() ->
 %% =============================================================================
 
 simple_string_test() ->
-    Defs = #{test => {table, [{name, string, #{id => 0}}]}},
+    Schema = {#{test => {table, [{name, string, #{id => 0}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
     Map = #{name => <<"hello">>},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test, <<"TEST">>)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     ?assertEqual(<<"TEST">>, reader:get_file_id(Buffer)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, <<"hello">>}, reader:get_field(Root, 0, string, Buffer)).
 
 string_and_int_test() ->
-    Defs = #{test => {table, [{name, string, #{id => 0}}, {val, int, #{id => 1}}]}},
+    Schema = {#{test => {table, [{name, string, #{id => 0}}, {val, int, #{id => 1}}]}}, #{root_type => test}},
     Map = #{name => <<"world">>, val => 42},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, <<"world">>}, reader:get_field(Root, 0, string, Buffer)),
     ?assertEqual({ok, 42}, reader:get_field(Root, 1, int, Buffer)).
@@ -115,25 +115,25 @@ string_and_int_test() ->
 %% =============================================================================
 
 int_vector_test() ->
-    Defs = #{test => {table, [{nums, {vector, int}, #{id => 0}}]}},
+    Schema = {#{test => {table, [{nums, {vector, int}, #{id => 0}}]}}, #{root_type => test}},
     Map = #{nums => [1, 2, 3]},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, [1, 2, 3]}, reader:get_field(Root, 0, {vector, int}, Buffer)).
 
 string_vector_test() ->
-    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test}},
     Map = #{items => [<<"a">>, <<"bb">>, <<"ccc">>]},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual(
         {ok, [<<"a">>, <<"bb">>, <<"ccc">>]}, reader:get_field(Root, 0, {vector, string}, Buffer)
     ).
 
 mixed_with_vector_test() ->
-    Defs = #{test => {table, [{name, string, #{id => 0}}, {scores, {vector, int}, #{id => 1}}]}},
+    Schema = {#{test => {table, [{name, string, #{id => 0}}, {scores, {vector, int}, #{id => 1}}]}}, #{root_type => test}},
     Map = #{name => <<"test">>, scores => [10, 20, 30]},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, <<"test">>}, reader:get_field(Root, 0, string, Buffer)),
     ?assertEqual({ok, [10, 20, 30]}, reader:get_field(Root, 1, {vector, int}, Buffer)).
@@ -143,24 +143,24 @@ mixed_with_vector_test() ->
 %% =============================================================================
 
 nested_table_test() ->
-    Defs = #{
+    Schema = {#{
         'Outer' => {table, [{name, string, #{id => 0}}, {inner, 'Inner', #{id => 1}}]},
         'Inner' => {table, [{value, int, #{id => 0}}]}
-    },
+    }, #{root_type => 'Outer'}},
     Map = #{name => <<"outer">>, inner => #{value => 42}},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, 'Outer')),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, <<"outer">>}, reader:get_field(Root, 0, string, Buffer)),
     {ok, InnerRef} = reader:get_field(Root, 1, 'Inner', Buffer),
     ?assertEqual({ok, 42}, reader:get_field(InnerRef, 0, int, Buffer)).
 
 nested_with_string_test() ->
-    Defs = #{
+    Schema = {#{
         'Parent' => {table, [{child, 'Child', #{id => 0}}]},
         'Child' => {table, [{name, string, #{id => 0}}, {age, int, #{id => 1}}]}
-    },
+    }, #{root_type => 'Parent'}},
     Map = #{child => #{name => <<"Alice">>, age => 30}},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, 'Parent')),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     {ok, ChildRef} = reader:get_field(Root, 0, 'Child', Buffer),
     ?assertEqual({ok, <<"Alice">>}, reader:get_field(ChildRef, 0, string, Buffer)),
@@ -172,12 +172,12 @@ nested_with_string_test() ->
 
 simple_struct_test() ->
     %% Struct Vec2 with two floats
-    Defs = #{
+    Schema = {#{
         'Vec2' => {struct, [{x, float}, {y, float}]},
         test => {table, [{pos, 'Vec2', #{id => 0}}]}
-    },
+    }, #{root_type => test}},
     Map = #{pos => #{x => 1.0, y => 2.0}},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     {ok, Struct} = reader:get_field(Root, 0, {struct, [{x, float}, {y, float}]}, Buffer),
     ?assertEqual(1.0, maps:get(x, Struct)),
@@ -185,12 +185,12 @@ simple_struct_test() ->
 
 struct_with_int_and_float_test() ->
     %% Struct with mixed types to test alignment
-    Defs = #{
+    Schema = {#{
         'Mixed' => {struct, [{a, byte}, {b, float}, {c, short}]},
         test => {table, [{data, 'Mixed', #{id => 0}}]}
-    },
+    }, #{root_type => test}},
     Map = #{data => #{a => 10, b => 3.14, c => 1000}},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     {ok, Struct} = reader:get_field(Root, 0, {struct, [{a, byte}, {b, float}, {c, short}]}, Buffer),
     ?assertEqual(10, maps:get(a, Struct)),
@@ -200,12 +200,12 @@ struct_with_int_and_float_test() ->
 
 struct_and_scalar_test() ->
     %% Table with both a struct and a regular scalar
-    Defs = #{
+    Schema = {#{
         'Vec2' => {struct, [{x, float}, {y, float}]},
         test => {table, [{pos, 'Vec2', #{id => 0}}, {name, string, #{id => 1}}]}
-    },
+    }, #{root_type => test}},
     Map = #{pos => #{x => 5.0, y => 10.0}, name => <<"test">>},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
     Root = reader:get_root(Buffer),
     {ok, Struct} = reader:get_field(Root, 0, {struct, [{x, float}, {y, float}]}, Buffer),
     ?assertEqual(5.0, maps:get(x, Struct)),
@@ -218,7 +218,7 @@ struct_and_scalar_test() ->
 
 simple_union_test() ->
     %% Parse the union schema
-    {ok, {Defs, _}} = schema:parse_file("test/schemas/union_field.fbs"),
+    {ok, Schema} = schema:parse_file("test/schemas/union_field.fbs"),
 
     %% Build a buffer with hello variant (flatc-compatible format)
     Map = #{
@@ -226,13 +226,13 @@ simple_union_test() ->
         data => #{salute => <<"hi there">>},
         additions_value => 42
     },
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, command_root, <<"cmnd">>)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
     %% Verify file identifier
     ?assertEqual(<<"cmnd">>, reader:get_file_id(Buffer)),
 
     %% Decode and verify
-    Ctx = eflatbuffers:new(Buffer, Defs, command_root),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Result = eflatbuffers:to_map(Ctx),
 
     ?assertEqual(42, maps:get(additions_value, Result)),
@@ -241,12 +241,12 @@ simple_union_test() ->
 
 union_bye_variant_test() ->
     %% Test the 'bye' variant of the union
-    {ok, {Defs, _}} = schema:parse_file("test/schemas/union_field.fbs"),
+    {ok, Schema} = schema:parse_file("test/schemas/union_field.fbs"),
 
     Map = #{data_type => bye, data => #{greeting => 123}},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, command_root, <<"cmnd">>)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
-    Ctx = eflatbuffers:new(Buffer, Defs, command_root),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Result = eflatbuffers:to_map(Ctx),
 
     ?assertEqual(bye, maps:get(data_type, Result)),
@@ -258,15 +258,15 @@ union_bye_variant_test() ->
 
 json_roundtrip_simple_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Monster'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Original = eflatbuffers:to_map(Ctx),
 
     %% Encode to JSON (atom keys) -> decode (binary keys) -> from_map -> to_map
     Json = iolist_to_binary(json:encode(Original)),
     Decoded = json:decode(Json),
-    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Defs, 'Monster', <<"MONS">>)),
-    NewCtx = eflatbuffers:new(NewBuffer, Defs, 'Monster'),
+    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Schema)),
+    NewCtx = eflatbuffers:new(NewBuffer, Schema),
     Result = eflatbuffers:to_map(NewCtx),
 
     ?assertEqual(maps:get(name, Original), maps:get(name, Result)),
@@ -275,14 +275,14 @@ json_roundtrip_simple_test() ->
 
 json_roundtrip_nested_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_nested.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Entity'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Original = eflatbuffers:to_map(Ctx),
 
     Json = iolist_to_binary(json:encode(Original)),
     Decoded = json:decode(Json),
-    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Defs, 'Entity', <<"NEST">>)),
-    NewCtx = eflatbuffers:new(NewBuffer, Defs, 'Entity'),
+    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Schema)),
+    NewCtx = eflatbuffers:new(NewBuffer, Schema),
     Result = eflatbuffers:to_map(NewCtx),
 
     ?assertEqual(maps:get(name, Original), maps:get(name, Result)),
@@ -295,14 +295,14 @@ json_roundtrip_nested_test() ->
 
 json_roundtrip_vectors_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_vector.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Inventory'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_vector.fbs"),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Original = eflatbuffers:to_map(Ctx),
 
     Json = iolist_to_binary(json:encode(Original)),
     Decoded = json:decode(Json),
-    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Defs, 'Inventory', <<"VECT">>)),
-    NewCtx = eflatbuffers:new(NewBuffer, Defs, 'Inventory'),
+    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Decoded, Schema)),
+    NewCtx = eflatbuffers:new(NewBuffer, Schema),
     Result = eflatbuffers:to_map(NewCtx),
 
     ?assertEqual(maps:get(counts, Original), maps:get(counts, Result)),
@@ -315,15 +315,15 @@ json_roundtrip_vectors_test() ->
 flatc_roundtrip_monster_test() ->
     %% Read original, modify, write new buffer, verify flatc can decode it
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Monster'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Map = eflatbuffers:to_map(Ctx),
 
     %% Modify the map
     Modified = Map#{name => <<"Troll">>, hp => 200, mana => 75},
 
     %% Build new buffer
-    NewBuffer = eflatbuffers:from_map(Modified, Defs, 'Monster', <<"MONS">>),
+    NewBuffer = eflatbuffers:from_map(Modified, Schema),
     TmpBin = "/tmp/eflatbuffers_test_monster.bin",
     TmpJson = "/tmp/eflatbuffers_test_monster.json",
     ok = file:write_file(TmpBin, NewBuffer),
@@ -349,8 +349,8 @@ flatc_roundtrip_monster_test() ->
 flatc_roundtrip_nested_test() ->
     %% Test nested table roundtrip with flatc
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_nested.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Entity'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Map = eflatbuffers:to_map(Ctx),
 
     %% Modify nested values
@@ -361,7 +361,7 @@ flatc_roundtrip_nested_test() ->
     },
 
     %% Build new buffer
-    NewBuffer = eflatbuffers:from_map(Modified, Defs, 'Entity', <<"NEST">>),
+    NewBuffer = eflatbuffers:from_map(Modified, Schema),
     TmpBin = "/tmp/eflatbuffers_test_nested.bin",
     TmpJson = "/tmp/eflatbuffers_test_nested.json",
     ok = file:write_file(TmpBin, NewBuffer),
@@ -390,8 +390,8 @@ flatc_roundtrip_nested_test() ->
 flatc_roundtrip_vectors_test() ->
     %% Test vector roundtrip with flatc
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_vector.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Inventory'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_vector.fbs"),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Map = eflatbuffers:to_map(Ctx),
 
     %% Modify vectors
@@ -401,7 +401,7 @@ flatc_roundtrip_vectors_test() ->
     },
 
     %% Build new buffer
-    NewBuffer = eflatbuffers:from_map(Modified, Defs, 'Inventory', <<"VECT">>),
+    NewBuffer = eflatbuffers:from_map(Modified, Schema),
     TmpBin = "/tmp/eflatbuffers_test_vector.bin",
     TmpJson = "/tmp/eflatbuffers_test_vector.json",
     ok = file:write_file(TmpBin, NewBuffer),
@@ -429,15 +429,15 @@ flatc_roundtrip_vectors_test() ->
 
 string_dedup_vector_test() ->
     %% Vector with duplicate strings should be smaller than with unique strings
-    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Schema = { #{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test}},
 
     %% 3 duplicate strings
     MapDup = #{items => [<<"same">>, <<"same">>, <<"same">>]},
-    BufferDup = iolist_to_binary(builder:from_map(MapDup, Defs, test)),
+    BufferDup = iolist_to_binary(builder:from_map(MapDup, Schema)),
 
     %% 3 unique strings of same length
     MapUniq = #{items => [<<"aaaa">>, <<"bbbb">>, <<"cccc">>]},
-    BufferUniq = iolist_to_binary(builder:from_map(MapUniq, Defs, test)),
+    BufferUniq = iolist_to_binary(builder:from_map(MapUniq, Schema)),
 
     %% Duplicate buffer should be smaller (dedup saves 2 string copies)
     ?assert(byte_size(BufferDup) < byte_size(BufferUniq)),
@@ -449,27 +449,27 @@ string_dedup_vector_test() ->
 
 string_dedup_preserves_order_test() ->
     %% Test that dedup preserves order with mixed duplicates
-    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test}},
     Map = #{items => [<<"a">>, <<"b">>, <<"a">>, <<"c">>, <<"b">>, <<"a">>]},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
     Root = reader:get_root(Buffer),
     {ok, Items} = reader:get_field(Root, 0, {vector, string}, Buffer),
     ?assertEqual([<<"a">>, <<"b">>, <<"a">>, <<"c">>, <<"b">>, <<"a">>], Items).
 
 string_dedup_empty_vector_test() ->
-    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test}},
     Map = #{items => []},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
     Root = reader:get_root(Buffer),
     {ok, Items} = reader:get_field(Root, 0, {vector, string}, Buffer),
     ?assertEqual([], Items).
 
 string_dedup_single_test() ->
-    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test}},
     Map = #{items => [<<"only">>]},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
     Root = reader:get_root(Buffer),
     {ok, Items} = reader:get_field(Root, 0, {vector, string}, Buffer),
@@ -477,17 +477,17 @@ string_dedup_single_test() ->
 
 string_dedup_flatc_compat_test() ->
     %% Test that deduplicated buffers are valid per flatc
-    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
     Map = #{items => [<<"hello">>, <<"world">>, <<"hello">>]},
-    Buffer = iolist_to_binary(builder:from_map(Map, Defs, test, <<"TEST">>)),
+    Buffer = iolist_to_binary(builder:from_map(Map, Schema)),
 
     TmpBin = "/tmp/eflatbuffers_dedup_test.bin",
     TmpSchema = "/tmp/eflatbuffers_dedup_test.fbs",
     TmpJson = "/tmp/eflatbuffers_dedup_test.json",
 
     %% Write schema
-    Schema = "file_identifier \"TEST\";\ntable test { items: [string]; }\nroot_type test;\n",
-    ok = file:write_file(TmpSchema, Schema),
+    SchemaStr = "file_identifier \"TEST\";\ntable test { items: [string]; }\nroot_type test;\n",
+    ok = file:write_file(TmpSchema, SchemaStr),
     ok = file:write_file(TmpBin, Buffer),
 
     %% Use flatc to decode

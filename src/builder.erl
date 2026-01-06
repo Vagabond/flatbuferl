@@ -1,14 +1,21 @@
 -module(builder).
 
--export([from_map/3, from_map/4, from_map/5]).
+-export([from_map/2, from_map/3]).
 -export_type([encode_opts/0]).
 
+-type schema() :: {schema:definitions(), schema:options()}.
+
 %% Options for encoding:
+%%   file_id => boolean() | <<_:32>>
+%%     - true: include file_identifier from schema (default)
+%%     - false: omit file_identifier
+%%     - <<4 bytes>>: use this file_identifier instead
 %%   deprecated => skip | allow | error
 %%     - skip: silently ignore deprecated fields (default)
 %%     - allow: encode deprecated fields if present
 %%     - error: raise error if deprecated field has value
 -type encode_opts() :: #{
+    file_id => boolean() | <<_:32>>,
     deprecated => skip | allow | error
 }.
 
@@ -16,18 +23,21 @@
 %% Public API
 %% =============================================================================
 
--spec from_map(map(), schema:definitions(), atom()) -> iodata().
-from_map(Map, Defs, RootType) ->
-    from_map(Map, Defs, RootType, no_file_id, #{}).
+-spec from_map(map(), schema()) -> iodata().
+from_map(Map, Schema) ->
+    from_map(Map, Schema, #{}).
 
--spec from_map(map(), schema:definitions(), atom(), binary() | no_file_id | encode_opts()) -> iodata().
-from_map(Map, Defs, RootType, FileId) when is_binary(FileId); FileId =:= no_file_id ->
-    from_map(Map, Defs, RootType, FileId, #{});
-from_map(Map, Defs, RootType, Opts) when is_map(Opts) ->
-    from_map(Map, Defs, RootType, no_file_id, Opts).
+-spec from_map(map(), schema(), encode_opts()) -> iodata().
+from_map(Map, {Defs, SchemaOpts}, Opts) ->
+    RootType = maps:get(root_type, SchemaOpts),
+    FileId = case maps:get(file_id, Opts, true) of
+        true -> maps:get(file_identifier, SchemaOpts, no_file_id);
+        false -> no_file_id;
+        <<_:32>> = Override -> Override
+    end,
+    from_map_internal(Map, Defs, RootType, FileId, Opts).
 
--spec from_map(map(), schema:definitions(), atom(), binary() | no_file_id, encode_opts()) -> iodata().
-from_map(Map, Defs, RootType, FileId, Opts) ->
+from_map_internal(Map, Defs, RootType, FileId, Opts) ->
     {table, Fields} = maps:get(RootType, Defs),
     validate_fields(Map, Fields, RootType, Opts),
     FieldValues = collect_fields(Map, Fields, Defs, Opts),
@@ -1442,12 +1452,12 @@ normalize_type(T) -> T.
 
 %% Test vtable sharing between root and nested table with identical structure
 vtable_sharing_test() ->
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_nested.fbs"),
+    {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
     Map = #{name => <<"Player">>, hp => 200, pos => #{x => 1.5, y => 2.5, z => 3.5}},
 
     %% Encode and decode roundtrip
-    Buffer = iolist_to_binary(from_map(Map, Defs, 'Entity', <<"NEST">>)),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Entity'),
+    Buffer = iolist_to_binary(from_map(Map, Schema)),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     Result = eflatbuffers:to_map(Ctx),
 
     ?assertEqual(200, maps:get(hp, Result)),
@@ -1459,14 +1469,14 @@ vtable_sharing_test() ->
 
 %% Test zero-copy: re-encoding should not create new refc binaries
 zero_copy_reencode_test() ->
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
 
     %% Create a message with a large string (>64 bytes to be a refc binary)
     LargeString = list_to_binary(lists:duplicate(200, $X)),
     Map = #{name => LargeString, hp => 100, mana => 50},
 
     %% Encode to flatbuffer
-    Buffer = iolist_to_binary(from_map(Map, Defs, 'Monster', <<"MONS">>)),
+    Buffer = iolist_to_binary(from_map(Map, Schema)),
 
     %% Run in isolated process to measure binaries accurately
     Result = run_in_isolated_process(fun() ->
@@ -1475,13 +1485,13 @@ zero_copy_reencode_test() ->
         Bins1 = get_refc_binary_ids(),
 
         %% Deserialize - should still have same binary (zero-copy decode)
-        Ctx = eflatbuffers:new(Buffer, Defs, 'Monster'),
+        Ctx = eflatbuffers:new(Buffer, Schema),
         DecodedMap = eflatbuffers:to_map(Ctx),
         erlang:garbage_collect(),
         Bins2 = get_refc_binary_ids(),
 
         %% Re-encode to iolist - should NOT create new refc binaries
-        ReEncoded = from_map(DecodedMap, Defs, 'Monster', <<"MONS">>),
+        ReEncoded = from_map(DecodedMap, Schema),
         erlang:garbage_collect(),
         Bins3 = get_refc_binary_ids(),
 

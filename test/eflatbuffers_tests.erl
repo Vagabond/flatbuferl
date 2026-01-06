@@ -7,23 +7,23 @@
 
 monster_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
-    eflatbuffers:new(Buffer, Defs, 'Monster').
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    eflatbuffers:new(Buffer, Schema).
 
 defaults_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_defaults.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
-    eflatbuffers:new(Buffer, Defs, 'Monster').
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    eflatbuffers:new(Buffer, Schema).
 
 nested_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_nested.fbs"),
-    eflatbuffers:new(Buffer, Defs, 'Entity').
+    {ok, Schema} = schema:parse_file("test/vectors/test_nested.fbs"),
+    eflatbuffers:new(Buffer, Schema).
 
 vector_ctx() ->
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_vector.fbs"),
-    eflatbuffers:new(Buffer, Defs, 'Inventory').
+    {ok, Schema} = schema:parse_file("test/vectors/test_vector.fbs"),
+    eflatbuffers:new(Buffer, Schema).
 
 %% =============================================================================
 %% Context Creation Tests
@@ -31,15 +31,15 @@ vector_ctx() ->
 
 new_with_root_type_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Monster'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     ?assertEqual(<<"MONS">>, eflatbuffers:file_id(Ctx)).
 
 new_auto_root_type_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
     %% Should auto-detect root type
-    Ctx = eflatbuffers:new(Buffer, Defs),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     ?assertEqual(<<"MONS">>, eflatbuffers:file_id(Ctx)).
 
 %% =============================================================================
@@ -230,12 +230,12 @@ to_map_vectors_test() ->
 %% =============================================================================
 
 from_map_basic_test() ->
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Goblin">>, hp => 50, mana => 25},
-    Buffer = iolist_to_binary(eflatbuffers:from_map(Map, Defs, 'Monster', <<"MONS">>)),
+    Buffer = iolist_to_binary(eflatbuffers:from_map(Map, Schema)),
     ?assert(is_binary(Buffer)),
     %% Verify we can read it back
-    Ctx = eflatbuffers:new(Buffer, Defs, 'Monster'),
+    Ctx = eflatbuffers:new(Buffer, Schema),
     ?assertEqual(<<"Goblin">>, eflatbuffers:get(Ctx, [name])),
     ?assertEqual(50, eflatbuffers:get(Ctx, [hp])),
     ?assertEqual(25, eflatbuffers:get(Ctx, [mana])).
@@ -244,15 +244,15 @@ from_map_roundtrip_test() ->
     %% Read existing buffer, convert to map, build new buffer, verify
     OrigCtx = monster_ctx(),
     Map = eflatbuffers:to_map(OrigCtx),
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
-    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Map, Defs, 'Monster', <<"MONS">>)),
-    NewCtx = eflatbuffers:new(NewBuffer, Defs, 'Monster'),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
+    NewBuffer = iolist_to_binary(eflatbuffers:from_map(Map, Schema)),
+    NewCtx = eflatbuffers:new(NewBuffer, Schema),
     ?assertEqual(<<"Orc">>, eflatbuffers:get(NewCtx, [name])),
     ?assertEqual(150, eflatbuffers:get(NewCtx, [hp])),
     ?assertEqual(30, eflatbuffers:get(NewCtx, [mana])).
 
 from_map_file_id_test() ->
-    {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Test">>},
-    Buffer = iolist_to_binary(eflatbuffers:from_map(Map, Defs, 'Monster', <<"TEST">>)),
+    Buffer = iolist_to_binary(eflatbuffers:from_map(Map, Schema, #{file_id => <<"TEST">>})),
     ?assertEqual(<<"TEST">>, eflatbuffers:file_id(Buffer)).
