@@ -35,15 +35,13 @@ from_map(Map, Defs, RootType, FileId) ->
     TablePos4 = align_offset(TablePosUnaligned, 4),
 
     %% If table has 8-byte fields, ensure they're 8-byte aligned in the buffer
-    %% Find offset of first 8-byte field from backward placement
     First8ByteOffset = find_first_8byte_field_offset(Scalars ++ Refs, TableSizeWithPadding),
     TablePos = case First8ByteOffset of
         none -> TablePos4;
         Offset ->
-            %% Ensure TablePos + Offset is 8-byte aligned
             case (TablePos4 + Offset) rem 8 of
                 0 -> TablePos4;
-                _ -> TablePos4 + 4  %% Add 4 to shift alignment
+                _ -> TablePos4 + 4
             end
     end,
     PreVTablePad = TablePos - VTableSize - HeaderSize,
@@ -250,14 +248,26 @@ find_first_8byte_field_offset(Fields, TableSize) ->
     end.
 
 %% Calculate ref padding for field list (without offsets)
-%% With vtable-at-end layout, just ensure soffset is 4-byte aligned
+%% Ensure nested table's SOFFSET is 4-byte aligned (not just vtable start)
+%% Position of soffset = Pos + VTableSize, which must be 4-byte aligned
 calc_ref_padding_for_refs([], _Pos, _Defs) -> 0;
 calc_ref_padding_for_refs([{_, Type, Value} | _], Pos, Defs) when is_atom(Type), is_map(Value) ->
     case maps:get(Type, Defs, undefined) of
-        {table, _} -> (4 - (Pos rem 4)) rem 4;
+        {table, Fields} ->
+            %% Calculate nested vtable size
+            FieldValues = collect_fields(Value, Fields, Defs),
+            {Scalars, Refs} = lists:partition(
+                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                FieldValues
+            ),
+            VTableSize = calc_vtable_size(Scalars, Refs),
+            %% Pad to make (Pos + VTableSize) 4-byte aligned
+            SOffsetPos = Pos + VTableSize,
+            (4 - (SOffsetPos rem 4)) rem 4;
         _ -> 0
     end;
-calc_ref_padding_for_refs([{_, {union_value, _}, #{type := MemberType, value := Value}} | _], Pos, Defs) ->
+calc_ref_padding_for_refs([{_, {union_value, UnionName}, #{type := MemberType, value := Value}} | _], Pos, Defs) ->
+    {union, _Members} = maps:get(UnionName, Defs),
     calc_ref_padding_for_refs([{0, MemberType, Value}], Pos, Defs);
 calc_ref_padding_for_refs(_, _Pos, _Defs) -> 0.
 
@@ -370,15 +380,25 @@ build_table_data(Scalars, Refs, TablePos, Defs) ->
     {<<TableData/binary, PadBin/binary>>, RefDataBin}.
 
 %% Calculate padding needed before ref data
-%% With vtable-at-end layout, soffset is at ref start - ensure 4-byte alignment
+%% Ensure nested table's SOFFSET is 4-byte aligned (Pos + VTableSize must be 4-byte aligned)
 calc_ref_padding([], _Pos, _Defs) -> 0;
 calc_ref_padding([{_, Type, Value, _} | _], Pos, Defs) when is_atom(Type), is_map(Value) ->
-    %% First ref is a nested table - soffset must be 4-byte aligned
     case maps:get(Type, Defs, undefined) of
-        {table, _} -> (4 - (Pos rem 4)) rem 4;
+        {table, Fields} ->
+            %% Calculate nested vtable size
+            FieldValues = collect_fields(Value, Fields, Defs),
+            {Scalars, Refs} = lists:partition(
+                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                FieldValues
+            ),
+            VTableSize = calc_vtable_size(Scalars, Refs),
+            %% Pad to make (Pos + VTableSize) 4-byte aligned
+            SOffsetPos = Pos + VTableSize,
+            (4 - (SOffsetPos rem 4)) rem 4;
         _ -> 0
     end;
-calc_ref_padding([{_, {union_value, _}, #{type := MemberType, value := Value}, _} | _], Pos, Defs) ->
+calc_ref_padding([{_, {union_value, UnionName}, #{type := MemberType, value := Value}, _} | _], Pos, Defs) ->
+    {union, _Members} = maps:get(UnionName, Defs),
     calc_ref_padding([{0, MemberType, Value, 0}], Pos, Defs);
 calc_ref_padding(_, _Pos, _Defs) -> 0.
 
@@ -402,15 +422,37 @@ build_ref_data(RefFields, RefDataStart, Defs) ->
     ),
     {iolist_to_binary(lists:reverse(DataBins)), Positions}.
 
-%% Check if type is a nested table (vtable is now at END, so no offset adjustment needed)
+%% Check if type is a nested table (vtable is at START, need offset to point to soffset)
+%% Returns {true, VTableSize} or false
 is_nested_table_type(Type, Value, Defs) when is_atom(Type), is_map(Value) ->
     case maps:get(Type, Defs, undefined) of
-        {table, _Fields} -> false;  %% No adjustment - ref points to soffset at start
+        {table, Fields} ->
+            %% Calculate vtable size for this nested table
+            FieldValues = collect_fields(Value, Fields, Defs),
+            {Scalars, Refs} = lists:partition(
+                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                FieldValues
+            ),
+            VTableSize = calc_vtable_size(Scalars, Refs),
+            {true, VTableSize};
         _ -> false
     end;
-is_nested_table_type({union_value, _UnionName}, #{type := _MemberType, value := _Value}, _Defs) ->
-    false;  %% No adjustment needed
+is_nested_table_type({union_value, UnionName}, #{type := MemberType, value := Value}, Defs) ->
+    %% Union value - check the member type
+    {union, _Members} = maps:get(UnionName, Defs),
+    is_nested_table_type(MemberType, Value, Defs);
 is_nested_table_type(_, _, _) -> false.
+
+%% Calculate vtable size for a table
+calc_vtable_size(Scalars, Refs) ->
+    AllFields = Scalars ++ Refs,
+    case AllFields of
+        [] -> 4;
+        _ ->
+            MaxId = lists:max([Id || {Id, _, _} <- AllFields]),
+            NumSlots = MaxId + 1,
+            4 + (NumSlots * 2)
+    end.
 
 %% Build inline table data (scalars inline, refs as uoffsets)
 build_inline_data(FieldLayout, TablePos, RefPositions) ->
@@ -551,23 +593,28 @@ encode_ref_vector_standard(ElemType, Values, Defs) ->
 
     %% Encode elements in reverse order (like flatc does)
     ReversedValues = lists:reverse(Values),
-    EncodedElems = [encode_ref(ElemType, V, Defs) || V <- ReversedValues],
+    EncodedElems = [{encode_ref(ElemType, V, Defs), V} || V <- ReversedValues],
 
-    %% Calculate data positions (reverse order)
+    %% Calculate data positions and vtable offsets (reverse order)
     {_, ElemPositions} = lists:foldl(
-        fun(ElemBin, {DataPos, PosAcc}) ->
-            {DataPos + byte_size(ElemBin), [{DataPos, ElemBin} | PosAcc]}
+        fun({ElemBin, Value}, {DataPos, PosAcc}) ->
+            %% For table elements, uoffset should point to soffset (after vtable)
+            VTableOffset = case is_nested_table_type(ElemType, Value, Defs) of
+                {true, VTableSize} -> VTableSize;
+                false -> 0
+            end,
+            {DataPos + byte_size(ElemBin), [{DataPos, VTableOffset, ElemBin} | PosAcc]}
         end,
         {HeaderSize, []},
         EncodedElems
     ),
     %% ElemPositions is now in original order (because we reversed twice)
 
-    %% Build offsets
+    %% Build offsets - for tables, point to soffset not vtable
     Offsets = lists:map(
-        fun({Idx, {DataPos, _}}) ->
+        fun({Idx, {DataPos, VTableOffset, _}}) ->
             OffsetPos = 4 + (Idx * 4),
-            UOffset = DataPos - OffsetPos,
+            UOffset = (DataPos + VTableOffset) - OffsetPos,
             <<UOffset:32/little-signed>>
         end,
         lists:zip(lists:seq(0, Len - 1), ElemPositions)
@@ -576,11 +623,11 @@ encode_ref_vector_standard(ElemType, Values, Defs) ->
     iolist_to_binary([
         <<Len:32/little>>,
         Offsets,
-        EncodedElems
+        [Bin || {Bin, _} <- EncodedElems]
     ]).
 
 encode_nested_table(TableType, Map, Defs) ->
-    %% Build a nested table - table first, then vtable (negative soffset, like flatc)
+    %% Build a nested table - vtable first, then table (positive soffset, like flatc)
     {table, Fields} = maps:get(TableType, Defs),
     FieldValues = collect_fields(Map, Fields, Defs),
     {Scalars, Refs} = lists:partition(
@@ -589,22 +636,19 @@ encode_nested_table(TableType, Map, Defs) ->
     ),
 
     VTable = build_vtable(Scalars, Refs, 4),
+    VTableSize = byte_size(VTable),
 
-    %% Layout: table | ref_data | vtable
-    %% soffset is negative, pointing forward to vtable
-    {TableData, RefDataBin} = build_table_data(Scalars, Refs, 0, Defs),
-    TableDataSize = 4 + byte_size(TableData),  %% soffset + inline data
-    RefDataSize = byte_size(RefDataBin),
+    %% Layout: vtable | soffset | table_data | ref_data
+    %% soffset is positive, pointing back to vtable start
+    {TableData, RefDataBin} = build_table_data(Scalars, Refs, VTableSize, Defs),
 
-    %% VTable position relative to table start (forward)
-    VTablePos = TableDataSize + RefDataSize,
-    SOffset = -VTablePos,  %% Negative = forward to vtable
+    SOffset = VTableSize,  %% Positive = backward to vtable at start
 
     iolist_to_binary([
+        VTable,
         <<SOffset:32/little-signed>>,
         TableData,
-        RefDataBin,
-        VTable
+        RefDataBin
     ]).
 
 %% =============================================================================
