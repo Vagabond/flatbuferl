@@ -215,8 +215,8 @@ simple_union_test() ->
     %% Parse the union schema
     {ok, {Defs, _}} = schema:parse_file("test/schemas/union_field.fbs"),
 
-    %% Build a buffer with hello variant
-    Map = #{data => #{type => hello, value => #{salute => <<"hi there">>}},
+    %% Build a buffer with hello variant (flatc-compatible format)
+    Map = #{data_type => hello, data => #{salute => <<"hi there">>},
             additions_value => 42},
     Buffer = builder:from_map(Map, Defs, command_root, <<"cmnd">>),
 
@@ -228,23 +228,21 @@ simple_union_test() ->
     Result = eflatbuffers:to_map(Ctx),
 
     ?assertEqual(42, maps:get(additions_value, Result)),
-    DataField = maps:get(data, Result),
-    ?assertEqual(hello, maps:get(type, DataField)),
-    ?assertEqual(#{salute => <<"hi there">>}, maps:get(value, DataField)).
+    ?assertEqual(hello, maps:get(data_type, Result)),
+    ?assertEqual(#{salute => <<"hi there">>}, maps:get(data, Result)).
 
 union_bye_variant_test() ->
     %% Test the 'bye' variant of the union
     {ok, {Defs, _}} = schema:parse_file("test/schemas/union_field.fbs"),
 
-    Map = #{data => #{type => bye, value => #{greeting => 123}}},
+    Map = #{data_type => bye, data => #{greeting => 123}},
     Buffer = builder:from_map(Map, Defs, command_root, <<"cmnd">>),
 
     Ctx = eflatbuffers:new(Buffer, Defs, command_root),
     Result = eflatbuffers:to_map(Ctx),
 
-    DataField = maps:get(data, Result),
-    ?assertEqual(bye, maps:get(type, DataField)),
-    ?assertEqual(#{greeting => 123}, maps:get(value, DataField)).
+    ?assertEqual(bye, maps:get(data_type, Result)),
+    ?assertEqual(#{greeting => 123}, maps:get(data, Result)).
 
 %% =============================================================================
 %% JSON Roundtrip Tests
@@ -404,4 +402,86 @@ flatc_roundtrip_vectors_test() ->
 
     %% Cleanup
     file:delete(TmpBin),
+    file:delete(TmpJson).
+
+%% =============================================================================
+%% String Deduplication Tests
+%% =============================================================================
+
+string_dedup_vector_test() ->
+    %% Vector with duplicate strings should be smaller than with unique strings
+    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+
+    %% 3 duplicate strings
+    MapDup = #{items => [<<"same">>, <<"same">>, <<"same">>]},
+    BufferDup = builder:from_map(MapDup, Defs, test),
+
+    %% 3 unique strings of same length
+    MapUniq = #{items => [<<"aaaa">>, <<"bbbb">>, <<"cccc">>]},
+    BufferUniq = builder:from_map(MapUniq, Defs, test),
+
+    %% Duplicate buffer should be smaller (dedup saves 2 string copies)
+    ?assert(byte_size(BufferDup) < byte_size(BufferUniq)),
+
+    %% Verify decoding works correctly
+    Root = reader:get_root(BufferDup),
+    {ok, Items} = reader:get_field(Root, 0, {vector, string}, BufferDup),
+    ?assertEqual([<<"same">>, <<"same">>, <<"same">>], Items).
+
+string_dedup_preserves_order_test() ->
+    %% Test that dedup preserves order with mixed duplicates
+    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Map = #{items => [<<"a">>, <<"b">>, <<"a">>, <<"c">>, <<"b">>, <<"a">>]},
+    Buffer = builder:from_map(Map, Defs, test),
+
+    Root = reader:get_root(Buffer),
+    {ok, Items} = reader:get_field(Root, 0, {vector, string}, Buffer),
+    ?assertEqual([<<"a">>, <<"b">>, <<"a">>, <<"c">>, <<"b">>, <<"a">>], Items).
+
+string_dedup_empty_vector_test() ->
+    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Map = #{items => []},
+    Buffer = builder:from_map(Map, Defs, test),
+
+    Root = reader:get_root(Buffer),
+    {ok, Items} = reader:get_field(Root, 0, {vector, string}, Buffer),
+    ?assertEqual([], Items).
+
+string_dedup_single_test() ->
+    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Map = #{items => [<<"only">>]},
+    Buffer = builder:from_map(Map, Defs, test),
+
+    Root = reader:get_root(Buffer),
+    {ok, Items} = reader:get_field(Root, 0, {vector, string}, Buffer),
+    ?assertEqual([<<"only">>], Items).
+
+string_dedup_flatc_compat_test() ->
+    %% Test that deduplicated buffers are valid per flatc
+    Defs = #{test => {table, [{items, {vector, string}, #{id => 0}}]}},
+    Map = #{items => [<<"hello">>, <<"world">>, <<"hello">>]},
+    Buffer = builder:from_map(Map, Defs, test, <<"TEST">>),
+
+    TmpBin = "/tmp/eflatbuffers_dedup_test.bin",
+    TmpSchema = "/tmp/eflatbuffers_dedup_test.fbs",
+    TmpJson = "/tmp/eflatbuffers_dedup_test.json",
+
+    %% Write schema
+    Schema = "file_identifier \"TEST\";\ntable test { items: [string]; }\nroot_type test;\n",
+    ok = file:write_file(TmpSchema, Schema),
+    ok = file:write_file(TmpBin, Buffer),
+
+    %% Use flatc to decode
+    Cmd = io_lib:format("flatc --json --strict-json -o /tmp ~s -- ~s 2>&1", [TmpSchema, TmpBin]),
+    Result = os:cmd(lists:flatten(Cmd)),
+    ?assertEqual("", Result),
+
+    %% Parse JSON and verify values
+    {ok, JsonBin} = file:read_file(TmpJson),
+    Decoded = json:decode(JsonBin),
+    ?assertEqual([<<"hello">>, <<"world">>, <<"hello">>], maps:get(<<"items">>, Decoded)),
+
+    %% Cleanup
+    file:delete(TmpBin),
+    file:delete(TmpSchema),
     file:delete(TmpJson).

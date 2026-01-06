@@ -31,26 +31,26 @@ test_cases() ->
         {simple_table,
          "test/schemas/simple_table.fbs",
          table_a,
-         <<0,0,0,0>>,
+         no_file_id,
          #{field_a => 10, field_b => 20}},
 
         {simple_table_plus,
          "test/schemas/simple_table_plus.fbs",
          table_a,
-         <<0,0,0,0>>,
+         no_file_id,
          #{field_a => 1, field_b => 2, field_c => 3}},
 
         {nested_table,
          "test/schemas/nested.fbs",
          outer,
-         <<0,0,0,0>>,
+         no_file_id,
          #{value_outer => 100, inner => #{value_inner => 200}}},
 
         %% === test/schemas/ - scalars ===
         {all_scalars,
          "test/schemas/all_my_scalars.fbs",
          scalars,
-         <<0,0,0,0>>,
+         no_file_id,
          #{my_byte => -10, my_ubyte => 200, my_bool => true,
            my_short => -1000, my_ushort => 60000,
            my_int => -100000, my_uint => 100000,
@@ -60,39 +60,39 @@ test_cases() ->
         {defaults,
          "test/schemas/defaults.fbs",
          scalars,
-         <<0,0,0,0>>,
+         no_file_id,
          #{my_int => 42}},
 
         %% === test/schemas/ - strings ===
         {string_table,
          "test/schemas/string_table.fbs",
          string_table,
-         <<0,0,0,0>>,
+         no_file_id,
          #{my_string => <<"hello world">>, my_bool => true}},
 
         {bool_string_string,
          "test/schemas/table_bool_string_string.fbs",
          table_a,
-         <<0,0,0,0>>,
+         no_file_id,
          #{my_bool => true, my_string => <<"first">>, my_second_string => <<"second">>}},
 
         %% === test/schemas/ - vectors ===
         {int_vector,
          "test/schemas/int_vector.fbs",
          int_vector_table,
-         <<0,0,0,0>>,
+         no_file_id,
          #{int_vector => [10, 20, 30, 40]}},
 
         {string_vector,
          "test/schemas/string_vector.fbs",
          string_vector_table,
-         <<0,0,0,0>>,
+         no_file_id,
          #{string_vector => [<<"a">>, <<"bb">>, <<"ccc">>]}},
 
         {table_vector,
          "test/schemas/table_vector.fbs",
          outer,
-         <<0,0,0,0>>,
+         no_file_id,
          #{inner => [#{value_inner => <<"one">>}, #{value_inner => <<"two">>}]}},
 
         %% === test/schemas/ - file identifiers ===
@@ -105,27 +105,27 @@ test_cases() ->
         {no_identifier,
          "test/schemas/no_identifier.fbs",
          dummy_table,
-         <<0,0,0,0>>,
+         no_file_id,
          #{}},
 
         %% === test/schemas/ - enums ===
         {enum_field,
          "test/schemas/enum_field.fbs",
          enum_outer,
-         <<0,0,0,0>>,
+         no_file_id,
          #{enum_field => 1}},  %% Green = 1
 
         {vector_of_enums,
          "test/schemas/vector_of_enums.fbs",
          vector_table,
-         <<0,0,0,0>>,
+         no_file_id,
          #{enum_fields => [0, 1, 2]}},  %% Red, Green, Blue
 
         %% === test/schemas/ - nested tables with complex data ===
         {error_schema,
          "test/schemas/error.fbs",
          root_table,
-         <<0,0,0,0>>,
+         no_file_id,
          #{foo => true, tables_field => [
              #{bar => 1, string_field => <<"first">>},
              #{bar => 2, string_field => <<"second">>}
@@ -146,14 +146,14 @@ test_cases() ->
          "test/schemas/union_field.fbs",
          command_root,
          <<"cmnd">>,
-         #{data => #{type => hello, value => #{salute => <<"hi">>}},
+         #{data_type => hello, data => #{salute => <<"hi">>},
            additions_value => 99}},
 
         {union_bye,
          "test/schemas/union_field.fbs",
          command_root,
          <<"cmnd">>,
-         #{data => #{type => bye, value => #{greeting => 42}}}},
+         #{data_type => bye, data => #{greeting => 42}}},
 
         %% === comprehensive type tests ===
         {all_types,
@@ -197,7 +197,9 @@ generate_tests({Name, SchemaPath, RootType, FileId, SampleData}) ->
         {atom_to_list(Name) ++ "_json_roundtrip",
          fun() -> test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) end},
         {atom_to_list(Name) ++ "_flatc_roundtrip",
-         fun() -> test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData) end}
+         fun() -> test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData) end},
+        {atom_to_list(Name) ++ "_binary_match",
+         fun() -> test_binary_match(SchemaPath, RootType, FileId, SampleData) end}
     ]}.
 
 %% =============================================================================
@@ -243,10 +245,9 @@ test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
     verify_maps_equal(SampleData, Result).
 
 test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
-    %% Skip if no file identifier (flatc requires it without --raw-binary)
+    %% Use --raw-binary for schemas without file identifier
     case FileId of
-        <<0,0,0,0>> ->
-            %% Use --raw-binary for schemas without identifier
+        no_file_id ->
             test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData);
         _ ->
             test_flatc_roundtrip_with_id(SchemaPath, RootType, FileId, SampleData)
@@ -301,6 +302,44 @@ test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData) ->
     %% Cleanup
     file:delete(TmpBin),
     file:delete(TmpJson).
+
+%% =============================================================================
+%% Binary Match Test - Compare Erlang encoding with flatc encoding
+%% =============================================================================
+
+test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
+    {ok, {Defs, _}} = schema:parse_file(SchemaPath),
+
+    %% Encode sample data to JSON for flatc input
+    JsonBin = iolist_to_binary(json:encode(SampleData)),
+
+    TmpJson = "/tmp/eflatbuffers_input.json",
+    TmpBin = "/tmp/eflatbuffers_input.bin",
+
+    ok = file:write_file(TmpJson, JsonBin),
+
+    %% Use flatc to encode JSON to binary
+    Cmd = lists:flatten(io_lib:format(
+        "flatc --binary -o /tmp ~s ~s 2>&1",
+        [SchemaPath, TmpJson])),
+    Result = os:cmd(Cmd),
+    ?assertEqual("", Result, {flatc_error, Result}),
+
+    %% Read flatc output
+    {ok, FlatcBuffer} = file:read_file(TmpBin),
+
+    %% Encode with our Erlang builder
+    ErlBuffer = eflatbuffers:from_map(SampleData, Defs, RootType, FileId),
+
+    %% Compare binaries - require exact match
+    ?assertEqual(FlatcBuffer, ErlBuffer, {binary_mismatch,
+        #{schema => SchemaPath,
+          flatc_size => byte_size(FlatcBuffer),
+          erlang_size => byte_size(ErlBuffer)}}),
+
+    %% Cleanup
+    file:delete(TmpJson),
+    file:delete(TmpBin).
 
 %% =============================================================================
 %% Helpers

@@ -101,11 +101,21 @@ table_to_map(TableRef, Defs, TableType, Buffer) ->
             {FieldName, FieldId, Type, Default} = parse_field_def(FieldDef),
             ResolvedType = resolve_type(Type, Defs),
             case Type of
-                {union_type, _} ->
-                    %% Skip the type field - it's handled with the value field
-                    Acc;
+                {union_type, UnionName} ->
+                    %% Union type field - output as <field>_type with the member name
+                    case reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
+                        {ok, 0} ->
+                            %% NONE type - skip
+                            Acc;
+                        {ok, TypeIndex} ->
+                            {union, Members} = maps:get(UnionName, Defs),
+                            MemberType = lists:nth(TypeIndex, Members),
+                            Acc#{FieldName => MemberType};
+                        missing ->
+                            Acc
+                    end;
                 {union_value, UnionName} ->
-                    %% Read both type and value, convert to map with type info
+                    %% Union value field - output the nested table directly
                     TypeFieldId = FieldId - 1,
                     case reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
                         {ok, 0} ->
@@ -117,7 +127,7 @@ table_to_map(TableRef, Defs, TableType, Buffer) ->
                                     {union, Members} = maps:get(UnionName, Defs),
                                     MemberType = lists:nth(TypeIndex, Members),
                                     ConvertedValue = table_to_map(TableValueRef, Defs, MemberType, Buffer),
-                                    Acc#{FieldName => #{type => MemberType, value => ConvertedValue}};
+                                    Acc#{FieldName => ConvertedValue};
                                 missing ->
                                     Acc
                             end;
