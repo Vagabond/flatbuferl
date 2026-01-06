@@ -226,13 +226,41 @@ calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs) ->
     TablePosUnaligned = HeaderSize + VTableSize,
     TablePos = align_offset(TablePosUnaligned, 4),
 
-    %% Extract refs in reverse field ID order to find first ref
+    %% Extract refs in flatc order: IDs 1, 2, 3, ..., N, then 0
     RefFields = [{Id, Type, Value} || {Id, Type, Value} <- AllFields, not is_scalar_type(Type)],
-    RefFieldsByIdDesc = lists:sort(fun({IdA,_,_}, {IdB,_,_}) -> IdA >= IdB end, RefFields),
+    RefFieldsOrdered = sort_refs_flatc_order(RefFields),
 
     %% Calculate ref padding
-    RefPadding = calc_ref_padding_for_refs(RefFieldsByIdDesc, TablePos + BaseTableSize, Defs),
+    RefPadding = calc_ref_padding_for_refs(RefFieldsOrdered, TablePos + BaseTableSize, Defs),
     BaseTableSize + RefPadding.
+
+%% Sort refs in flatc order:
+%% - If there's an id=0 ref: ascending order (1, 2, ..., N, 0)
+%% - If NO id=0 ref: descending order (N, N-1, ..., 1)
+sort_refs_flatc_order(Refs) ->
+    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _}) -> Id =:= 0 end, Refs),
+    case ZeroRefs of
+        [] ->
+            %% No id=0 ref: descending order
+            lists:sort(fun({IdA, _, _}, {IdB, _, _}) -> IdA >= IdB end, NonZeroRefs);
+        _ ->
+            %% Has id=0 ref: ascending with 0 at end
+            SortedNonZero = lists:sort(fun({IdA, _, _}, {IdB, _, _}) -> IdA =< IdB end, NonZeroRefs),
+            SortedNonZero ++ ZeroRefs
+    end.
+
+%% 4-tuple version for refs with offset
+sort_refs_flatc_order_4(Refs) ->
+    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _, _}) -> Id =:= 0 end, Refs),
+    case ZeroRefs of
+        [] ->
+            %% No id=0 ref: descending order
+            lists:sort(fun({IdA, _, _, _}, {IdB, _, _, _}) -> IdA >= IdB end, NonZeroRefs);
+        _ ->
+            %% Has id=0 ref: ascending with 0 at end
+            SortedNonZero = lists:sort(fun({IdA, _, _, _}, {IdB, _, _, _}) -> IdA =< IdB end, NonZeroRefs),
+            SortedNonZero ++ ZeroRefs
+    end.
 
 %% Find the offset of the first 8-byte field using backward placement
 find_first_8byte_field_offset(Fields, TableSize) ->
@@ -361,17 +389,17 @@ build_table_data(Scalars, Refs, TablePos, Defs) ->
     FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
     SortedLayout = lists:sort(fun({_,_,_,A}, {_,_,_,B}) -> A =< B end, FieldLayout),
 
-    %% Extract refs in reverse field ID order (like flatc)
+    %% Extract refs in flatc order: IDs 1, 2, ..., N, then 0
     RefFields = [{Id, Type, Value, Off} || {Id, Type, Value, Off} <- SortedLayout,
                                             not is_scalar_type(Type)],
-    RefFieldsByIdDesc = lists:sort(fun({IdA,_,_,_}, {IdB,_,_,_}) -> IdA >= IdB end, RefFields),
+    RefFieldsOrdered = sort_refs_flatc_order_4(RefFields),
 
     %% Calculate padding needed before ref data for nested table alignment
-    RefPadding = calc_ref_padding(RefFieldsByIdDesc, TablePos + BaseTableSize, Defs),
+    RefPadding = calc_ref_padding(RefFieldsOrdered, TablePos + BaseTableSize, Defs),
     TableSize = BaseTableSize + RefPadding,
     RefDataStart = TablePos + TableSize,
 
-    {RefDataBin, RefPositions} = build_ref_data(RefFieldsByIdDesc, RefDataStart, Defs),
+    {RefDataBin, RefPositions} = build_ref_data(RefFieldsOrdered, RefDataStart, Defs),
 
     %% Build table inline data with padding
     TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
@@ -407,20 +435,37 @@ calc_ref_padding(_, _Pos, _Defs) -> 0.
 build_ref_data(RefFields, RefDataStart, Defs) ->
     {DataBins, Positions, _} = lists:foldl(
         fun({_Id, Type, Value, FieldOff}, {DataAcc, PosAcc, DataPos}) ->
+            %% Add padding for 8-byte vector alignment if needed
+            AlignPad = calc_vector_alignment_padding(Type, DataPos, Defs),
+            PaddedPos = DataPos + AlignPad,
+
             DataBin = encode_ref(Type, Value, Defs),
             %% For nested tables, uoffset should point to soffset (after vtable)
             RefTargetPos = case is_nested_table_type(Type, Value, Defs) of
-                {true, VTableSize} -> DataPos + VTableSize;
-                false -> DataPos
+                {true, VTableSize} -> PaddedPos + VTableSize;
+                false -> PaddedPos
             end,
-            {[DataBin | DataAcc],
+            PadBin = <<0:(AlignPad*8)>>,
+            {[DataBin, PadBin | DataAcc],
              PosAcc#{FieldOff => RefTargetPos},
-             DataPos + byte_size(DataBin)}
+             PaddedPos + byte_size(DataBin)}
         end,
         {[], #{}, RefDataStart},
         RefFields
     ),
     {iolist_to_binary(lists:reverse(DataBins)), Positions}.
+
+%% Calculate padding needed for vector 8-byte alignment
+%% Vector data (after 4-byte length) must be 8-byte aligned for 8-byte elements
+calc_vector_alignment_padding({vector, ElemType}, DataPos, Defs) ->
+    ResolvedType = resolve_type(ElemType, Defs),
+    case type_size(ResolvedType) of
+        8 ->
+            %% Need (DataPos + 4) % 8 == 0, so DataPos % 8 == 4
+            (12 - (DataPos rem 8)) rem 8;
+        _ -> 0
+    end;
+calc_vector_alignment_padding(_, _, _) -> 0.
 
 %% Check if type is a nested table (vtable is at START, need offset to point to soffset)
 %% Returns {true, VTableSize} or false
