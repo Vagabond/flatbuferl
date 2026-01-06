@@ -27,9 +27,9 @@ from_map(Map, Defs, RootType, FileId) ->
     %% Calculate table size including ref padding
     TableSizeWithPadding = calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs),
 
-    %% Build root vtable
+    %% Build root vtable (as list of 2-byte lists for easy comparison and output)
     VTable = build_vtable_with_size(Scalars, Refs, 4, TableSizeWithPadding),
-    VTableSize = byte_size(VTable),
+    VTableSize = vtable_size(VTable),
 
     %% Pre-build ref data to discover vtables for potential sharing
     %% We need to know if any nested vtable matches root vtable
@@ -282,11 +282,20 @@ resolve_type(Type, _Defs) ->
 %% VTable Building
 %% =============================================================================
 
+%% VTables are lists of 2-byte lists: [[VTSizeLo, VTSizeHi], [TblSizeLo, TblSizeHi], [Slot0Lo, Slot0Hi], ...]
+%% Comparison works with ==, and they're valid iolists (nested lists flatten).
+
+%% Convert uint16 to little-endian 2-byte list
+uint16_bytes(V) -> [V band 16#FF, (V bsr 8) band 16#FF].
+
+%% Get byte size of vtable
+vtable_size(VT) -> length(VT) * 2.
+
 build_vtable(Scalars, Refs, MaxAlign) ->
     AllFields = Scalars ++ Refs,
     case AllFields of
         [] ->
-            <<4:16/little, 4:16/little>>;
+            [uint16_bytes(4), uint16_bytes(4)];
         _ ->
             MaxId = lists:max([Id || {Id, _, _} <- AllFields]),
             NumSlots = MaxId + 1,
@@ -295,12 +304,9 @@ build_vtable(Scalars, Refs, MaxAlign) ->
             TableDataSize = calc_table_data_size(Scalars, Refs),
             TableSize = 4 + TableDataSize,
 
-            Slots = build_slots(Scalars, Refs, NumSlots, MaxAlign),
+            Slots = build_slots_list(Scalars, Refs, NumSlots, MaxAlign),
 
-            iolist_to_binary([
-                <<VTableSize:16/little, TableSize:16/little>>,
-                Slots
-            ])
+            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | Slots]
     end.
 
 %% Build vtable with pre-calculated table size (including ref padding)
@@ -308,16 +314,13 @@ build_vtable_with_size(Scalars, Refs, MaxAlign, TableSize) ->
     AllFields = Scalars ++ Refs,
     case AllFields of
         [] ->
-            <<4:16/little, 4:16/little>>;
+            [uint16_bytes(4), uint16_bytes(4)];
         _ ->
             MaxId = lists:max([Id || {Id, _, _} <- AllFields]),
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
-            Slots = build_slots(Scalars, Refs, NumSlots, MaxAlign),
-            iolist_to_binary([
-                <<VTableSize:16/little, TableSize:16/little>>,
-                Slots
-            ])
+            Slots = build_slots_list(Scalars, Refs, NumSlots, MaxAlign),
+            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | Slots]
     end.
 
 %% Calculate table size including padding for ref data alignment
@@ -422,7 +425,7 @@ calc_ref_padding_for_refs(
 calc_ref_padding_for_refs(_, _Pos, _Defs) ->
     0.
 
-build_slots(Scalars, Refs, NumSlots, _MaxAlign) ->
+build_slots_list(Scalars, Refs, NumSlots, _MaxAlign) ->
     %% flatc builds table from END backward, placing largest fields at end
     %% 1. Sort by size descending, then ID descending
     %% 2. Calculate table end position
@@ -436,7 +439,8 @@ build_slots(Scalars, Refs, NumSlots, _MaxAlign) ->
     %% Place fields backward from end of table
     Slots = place_fields_backward(AllFields, TableSize),
 
-    [<<(maps:get(Id, Slots, 0)):16/little>> || Id <- lists:seq(0, NumSlots - 1)].
+    %% Return list of 2-byte lists for each slot
+    [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)].
 
 %% Sort by size descending, then by field ID descending
 field_layout_order({IdA, TypeA, _}, {IdB, TypeB, _}) ->
@@ -653,15 +657,16 @@ build_ref_data_with_vtable_sharing(RefFieldsOrdered, RefDataStart, SharedVTable,
 
 %% Find the position of a vtable within a ref binary
 find_vtable_in_ref(Bin, VTable) ->
-    VTSize = byte_size(VTable),
-    find_vtable_in_ref(Bin, VTable, VTSize, 0).
+    VTBin = iolist_to_binary(VTable),
+    VTSize = byte_size(VTBin),
+    find_vtable_in_ref(Bin, VTBin, VTSize, 0).
 
-find_vtable_in_ref(Bin, VTable, VTSize, Offset) when byte_size(Bin) >= VTSize ->
+find_vtable_in_ref(Bin, VTBin, VTSize, Offset) when byte_size(Bin) >= VTSize ->
     case Bin of
-        <<VTable:VTSize/binary, _/binary>> ->
+        <<VTBin:VTSize/binary, _/binary>> ->
             {found, Offset};
         <<_, Rest/binary>> ->
-            find_vtable_in_ref(Rest, VTable, VTSize, Offset + 1)
+            find_vtable_in_ref(Rest, VTBin, VTSize, Offset + 1)
     end;
 find_vtable_in_ref(_, _, _, _) ->
     not_found.
@@ -1024,7 +1029,7 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
         fun(Elem, {InfoAcc, VTPos, PadMap, DataPos}) ->
             case Elem of
                 {vtable_insert, VTable} ->
-                    VTSize = byte_size(VTable),
+                    VTSize = vtable_size(VTable),
                     %% Calculate padding needed so that (DataPos + Pad + VTSize) is 4-byte aligned
                     %% This ensures the vtable_before element after the vtable is aligned
                     AlignPad = (4 - ((DataPos + VTSize) rem 4)) rem 4,
@@ -1078,8 +1083,7 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
                 {vtable_insert, VTable} ->
                     %% Insert padding before vtable for alignment
                     PadLen = maps:get(VTable, PaddingMap, 0),
-                    PadBin = <<0:(PadLen * 8)>>,
-                    <<PadBin/binary, VTable/binary>>;
+                    [<<0:(PadLen * 8)>>, VTable];
                 {vtable_after, OrigIdx, Bin, VTable} ->
                     %% Negative soffset (vtable is after this element)
                     VTablePos = maps:get(VTable, VTablePositions),
@@ -1196,7 +1200,7 @@ encode_nested_table(TableType, Map, Defs) ->
     ),
 
     VTable = build_vtable(Scalars, Refs, 4),
-    VTableSize = byte_size(VTable),
+    VTableSize = vtable_size(VTable),
 
     %% Layout: vtable | soffset | table_data | ref_data
     %% soffset is positive, pointing back to vtable start
