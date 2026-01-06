@@ -7,17 +7,20 @@
 -type enum_def() :: {{enum, atom()}, [atom()]}.
 -type union_def() :: {union, [atom()]}.
 -type definitions() :: #{type_name() => table_def() | enum_def() | union_def()}.
--type options() :: #{namespace => atom(),
-                     root_type => atom(),
-                     file_identifier => binary(),
-                     file_extension => binary(),
-                     include => binary(),
-                     attribute => binary()}.
+-type options() :: #{
+    namespace => atom(),
+    root_type => atom(),
+    file_identifier => binary(),
+    file_extension => binary(),
+    include => binary(),
+    attribute => binary()
+}.
 
 -export_type([definitions/0, options/0, field_def/0]).
 
 %% Parse a schema string
--spec parse(string() | binary()) -> {ok, {Definitions :: definitions(), Options :: options()}} | {error, term()}.
+-spec parse(string() | binary()) ->
+    {ok, {Definitions :: definitions(), Options :: options()}} | {error, term()}.
 parse(Schema) when is_binary(Schema) ->
     parse(binary_to_list(Schema));
 parse(Schema) when is_list(Schema) ->
@@ -27,7 +30,8 @@ parse(Schema) when is_list(Schema) ->
                 {ok, Parsed} -> {ok, process(Parsed)};
                 {error, _} = Err -> Err
             end;
-        {error, _, _} = Err -> {error, Err}
+        {error, _, _} = Err ->
+            {error, Err}
     end.
 
 %% Parse a schema file
@@ -77,25 +81,33 @@ normalize_field({Name, Type, Attrs}) -> {Name, Type, Attrs}.
 %% Assign sequential IDs to fields, respecting explicit IDs
 assign_field_ids(Fields) ->
     %% First pass: collect explicit IDs
-    ExplicitIds = lists:foldl(fun(Field, Acc) ->
-        case get_explicit_id(Field) of
-            undefined -> Acc;
-            Id -> sets:add_element(Id, Acc)
-        end
-    end, sets:new(), Fields),
+    ExplicitIds = lists:foldl(
+        fun(Field, Acc) ->
+            case get_explicit_id(Field) of
+                undefined -> Acc;
+                Id -> sets:add_element(Id, Acc)
+            end
+        end,
+        sets:new(),
+        Fields
+    ),
 
     %% Second pass: assign IDs, filling gaps
-    {Processed, _} = lists:mapfoldl(fun(Field, NextCandidate) ->
-        case get_explicit_id(Field) of
-            undefined ->
-                %% Find next available ID starting from NextCandidate
-                AvailableId = find_next_id(NextCandidate, ExplicitIds),
-                {set_field_id(Field, AvailableId), AvailableId + 1};
-            _ExplicitId ->
-                %% Field already has ID, don't change NextCandidate
-                {Field, NextCandidate}
-        end
-    end, 0, Fields),
+    {Processed, _} = lists:mapfoldl(
+        fun(Field, NextCandidate) ->
+            case get_explicit_id(Field) of
+                undefined ->
+                    %% Find next available ID starting from NextCandidate
+                    AvailableId = find_next_id(NextCandidate, ExplicitIds),
+                    {set_field_id(Field, AvailableId), AvailableId + 1};
+                _ExplicitId ->
+                    %% Field already has ID, don't change NextCandidate
+                    {Field, NextCandidate}
+            end
+        end,
+        0,
+        Fields
+    ),
     Processed.
 
 get_explicit_id({_Name, _Type, Attrs}) when is_map(Attrs) ->

@@ -126,8 +126,10 @@ vector_counts_test() ->
 vector_items_test() ->
     Buffer = vector_binary(),
     Root = reader:get_root(Buffer),
-    ?assertEqual({ok, [<<"sword">>, <<"shield">>, <<"potion">>]},
-                 reader:get_field(Root, 0, {vector, string}, Buffer)).
+    ?assertEqual(
+        {ok, [<<"sword">>, <<"shield">>, <<"potion">>]},
+        reader:get_field(Root, 0, {vector, string}, Buffer)
+    ).
 
 %% =============================================================================
 %% All Types Tests (comprehensive scalar coverage)
@@ -288,7 +290,9 @@ get_unknown_field_test() ->
     {ok, {Defs, _}} = schema:parse_file("test/vectors/test_monster.fbs"),
     {table, Fields} = maps:get('Monster', Defs),
     Root = reader:get_root(Buffer),
-    ?assertEqual({error, {unknown_field, nonexistent}}, reader:get(Root, {table, Fields}, [nonexistent])).
+    ?assertEqual(
+        {error, {unknown_field, nonexistent}}, reader:get(Root, {table, Fields}, [nonexistent])
+    ).
 
 %% =============================================================================
 %% Error Path Tests
@@ -297,8 +301,10 @@ get_unknown_field_test() ->
 unsupported_type_test() ->
     Buffer = monster_binary(),
     Root = reader:get_root(Buffer),
-    ?assertEqual({error, {unsupported_type, {weird_type, foo}}},
-                 reader:get_field(Root, 0, {weird_type, foo}, Buffer)).
+    ?assertEqual(
+        {error, {unsupported_type, {weird_type, foo}}},
+        reader:get_field(Root, 0, {weird_type, foo}, Buffer)
+    ).
 
 %% =============================================================================
 %% Vector Type Alias Tests
@@ -341,7 +347,10 @@ nested_path_traversal_test() ->
     Root = reader:get_root(Buffer),
     %% This tests the multi-element path case in get/3
     %% But get_nested_schema returns error, so we expect an error
-    ?assertEqual({error, {unknown_nested_type, pos}}, reader:get(Root, {table, [{pos, 'Vec3', #{id => 1}}]}, [pos, x])).
+    ?assertEqual(
+        {error, {unknown_nested_type, pos}},
+        reader:get(Root, {table, [{pos, 'Vec3', #{id => 1}}]}, [pos, x])
+    ).
 
 %% =============================================================================
 %% Additional vector type tests
@@ -402,7 +411,9 @@ vector_short_actual_test() ->
 vector_long_actual_test() ->
     Buffer = vectors2_binary(),
     Root = reader:get_root(Buffer),
-    ?assertEqual({ok, [9000000000000, -9000000000000]}, reader:get_field(Root, 2, {vector, long}, Buffer)).
+    ?assertEqual(
+        {ok, [9000000000000, -9000000000000]}, reader:get_field(Root, 2, {vector, long}, Buffer)
+    ).
 
 vector_double_actual_test() ->
     Buffer = vectors2_binary(),

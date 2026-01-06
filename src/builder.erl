@@ -18,10 +18,11 @@ from_map(Map, Defs, RootType, FileId) ->
     ),
 
     %% Header size: 4 (root offset) + 4 (file id) if file id present
-    HeaderSize = case FileId of
-        no_file_id -> 4;
-        _ -> 8
-    end,
+    HeaderSize =
+        case FileId of
+            no_file_id -> 4;
+            _ -> 8
+        end,
 
     %% Calculate table size including ref padding
     TableSizeWithPadding = calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs),
@@ -38,31 +39,58 @@ from_map(Map, Defs, RootType, FileId) ->
     case lists:member(VTable, RefVTables) of
         true ->
             %% Root vtable matches a ref vtable - use vtable-after layout
-            encode_root_vtable_after(Map, Defs, RootType, FileId, Scalars, Refs,
-                                      VTable, TableSizeWithPadding, HeaderSize);
+            encode_root_vtable_after(
+                Map,
+                Defs,
+                RootType,
+                FileId,
+                Scalars,
+                Refs,
+                VTable,
+                TableSizeWithPadding,
+                HeaderSize
+            );
         false ->
             %% No match - use standard vtable-before layout
-            encode_root_vtable_before(Scalars, Refs, VTable, VTableSize,
-                                       TableSizeWithPadding, HeaderSize, FileId, Defs)
+            encode_root_vtable_before(
+                Scalars,
+                Refs,
+                VTable,
+                VTableSize,
+                TableSizeWithPadding,
+                HeaderSize,
+                FileId,
+                Defs
+            )
     end.
 
 %% Standard layout: header | [pad] | vtable | soffset | table | ref_data
-encode_root_vtable_before(Scalars, Refs, VTable, VTableSize, TableSizeWithPadding,
-                          HeaderSize, FileId, Defs) ->
+encode_root_vtable_before(
+    Scalars,
+    Refs,
+    VTable,
+    VTableSize,
+    TableSizeWithPadding,
+    HeaderSize,
+    FileId,
+    Defs
+) ->
     %% Calculate table position (4-byte aligned, plus adjustment for 8-byte fields)
     TablePosUnaligned = HeaderSize + VTableSize,
     TablePos4 = align_offset(TablePosUnaligned, 4),
 
     %% If table has 8-byte fields, ensure they're 8-byte aligned in the buffer
     First8ByteOffset = find_first_8byte_field_offset(Scalars ++ Refs, TableSizeWithPadding),
-    TablePos = case First8ByteOffset of
-        none -> TablePos4;
-        Offset ->
-            case (TablePos4 + Offset) rem 8 of
-                0 -> TablePos4;
-                _ -> TablePos4 + 4
-            end
-    end,
+    TablePos =
+        case First8ByteOffset of
+            none ->
+                TablePos4;
+            Offset ->
+                case (TablePos4 + Offset) rem 8 of
+                    0 -> TablePos4;
+                    _ -> TablePos4 + 4
+                end
+        end,
     PreVTablePad = TablePos - VTableSize - HeaderSize,
 
     %% Build table data
@@ -75,7 +103,7 @@ encode_root_vtable_before(Scalars, Refs, VTable, VTableSize, TableSizeWithPaddin
     iolist_to_binary([
         <<TablePos:32/little-unsigned>>,
         file_id_bin(FileId),
-        <<0:(PreVTablePad*8)>>,
+        <<0:(PreVTablePad * 8)>>,
         VTable,
         <<SOffset:32/little-signed>>,
         TableData,
@@ -83,8 +111,17 @@ encode_root_vtable_before(Scalars, Refs, VTable, VTableSize, TableSizeWithPaddin
     ]).
 
 %% Shared vtable layout: header | soffset | table | ref_data (vtable is inside ref_data)
-encode_root_vtable_after(_Map, Defs, _RootType, FileId, Scalars, Refs,
-                          VTable, TableSizeWithPadding, HeaderSize) ->
+encode_root_vtable_after(
+    _Map,
+    Defs,
+    _RootType,
+    FileId,
+    Scalars,
+    Refs,
+    VTable,
+    TableSizeWithPadding,
+    HeaderSize
+) ->
     %% Root table starts right after header (no vtable before it)
     TablePos = HeaderSize,
     RefDataStart = TablePos + TableSizeWithPadding,
@@ -93,22 +130,28 @@ encode_root_vtable_after(_Map, Defs, _RootType, FileId, Scalars, Refs,
     AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
     Slots = place_fields_backward(AllFields, TableSizeWithPadding),
     FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
-    SortedLayout = lists:sort(fun({_,_,_,A}, {_,_,_,B}) -> A =< B end, FieldLayout),
+    SortedLayout = lists:sort(fun({_, _, _, A}, {_, _, _, B}) -> A =< B end, FieldLayout),
 
     %% Extract refs in flatc order with field offsets
-    RefFields = [{Id, Type, Value, Off} || {Id, Type, Value, Off} <- SortedLayout,
-                                            not is_scalar_type(Type)],
+    RefFields = [
+        {Id, Type, Value, Off}
+     || {Id, Type, Value, Off} <- SortedLayout,
+        not is_scalar_type(Type)
+    ],
     RefFieldsOrdered = sort_refs_flatc_order_4(RefFields),
 
     %% Build ref data with vtable sharing, getting ref positions and shared vtable position
     {RefDataBin, RefPositions, SharedVTablePos} = build_ref_data_with_vtable_sharing(
-        RefFieldsOrdered, RefDataStart, VTable, Defs),
+        RefFieldsOrdered, RefDataStart, VTable, Defs
+    ),
 
     %% Build table data with correct uoffsets pointing to ref positions
     TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
 
     %% soffset points forward to shared vtable (negative because vtable is after)
-    SOffset = TablePos - SharedVTablePos,  %% Will be negative
+
+    %% Will be negative
+    SOffset = TablePos - SharedVTablePos,
 
     iolist_to_binary([
         <<TablePos:32/little-unsigned>>,
@@ -135,7 +178,8 @@ collect_fields(Map, Fields, Defs) ->
                     %% Union type field - look for <field>_type key directly
                     %% The type is an atom/string of the member name
                     case get_field_value(Map, Name) of
-                        undefined -> [];
+                        undefined ->
+                            [];
                         MemberType when is_atom(MemberType) ->
                             {union, Members} = maps:get(UnionName, Defs),
                             TypeIndex = find_union_index(MemberType, Members, 1),
@@ -144,22 +188,30 @@ collect_fields(Map, Fields, Defs) ->
                             {union, Members} = maps:get(UnionName, Defs),
                             TypeIndex = find_union_index(binary_to_atom(MemberType), Members, 1),
                             [{FieldId, {union_type, UnionName}, TypeIndex}];
-                        _ -> []
+                        _ ->
+                            []
                     end;
                 {union_value, UnionName} ->
                     %% Union value field - the map is the table value directly
                     %% Get the type from the corresponding _type field
                     TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
                     case get_field_value(Map, Name) of
-                        undefined -> [];
+                        undefined ->
+                            [];
                         TableValue when is_map(TableValue) ->
-                            MemberType = case get_field_value(Map, TypeFieldName) of
-                                T when is_atom(T) -> T;
-                                T when is_binary(T) -> binary_to_atom(T);
-                                _ -> error({missing_union_type_field, TypeFieldName})
-                            end,
-                            [{FieldId, {union_value, UnionName}, #{type => MemberType, value => TableValue}}];
-                        _ -> []
+                            MemberType =
+                                case get_field_value(Map, TypeFieldName) of
+                                    T when is_atom(T) -> T;
+                                    T when is_binary(T) -> binary_to_atom(T);
+                                    _ -> error({missing_union_type_field, TypeFieldName})
+                                end,
+                            [
+                                {FieldId, {union_value, UnionName}, #{
+                                    type => MemberType, value => TableValue
+                                }}
+                            ];
+                        _ ->
+                            []
                     end;
                 _ ->
                     case get_field_value(Map, Name) of
@@ -173,9 +225,11 @@ collect_fields(Map, Fields, Defs) ->
     ).
 
 find_union_index(Type, [Type | _], Index) -> Index;
-find_union_index(Type, [{Type, _Val} | _], Index) -> Index;  %% Handle enum with explicit value
+%% Handle enum with explicit value
+find_union_index(Type, [{Type, _Val} | _], Index) -> Index;
 find_union_index(Type, [_ | Rest], Index) -> find_union_index(Type, Rest, Index + 1);
-find_union_index(_Type, [], _Index) -> 0.  %% NONE
+%% NONE
+find_union_index(_Type, [], _Index) -> 0.
 
 %% Look up field by atom key or binary key
 get_field_value(Map, Name) when is_atom(Name) ->
@@ -185,8 +239,10 @@ get_field_value(Map, Name) when is_atom(Name) ->
     end.
 
 is_scalar_type({enum, _}) -> true;
-is_scalar_type({struct, _}) -> true;  %% Structs are inline fixed-size data
-is_scalar_type({union_type, _}) -> true;  %% Union type field is ubyte
+%% Structs are inline fixed-size data
+is_scalar_type({struct, _}) -> true;
+%% Union type field is ubyte
+is_scalar_type({union_type, _}) -> true;
 is_scalar_type(bool) -> true;
 is_scalar_type(byte) -> true;
 is_scalar_type(ubyte) -> true;
@@ -273,10 +329,11 @@ calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs) ->
     BaseTableSize = 4 + TableDataSize,
 
     %% Calculate vtable size to determine table position
-    NumSlots = case AllFields of
-        [] -> 0;
-        _ -> lists:max([Id || {Id, _, _} <- AllFields]) + 1
-    end,
+    NumSlots =
+        case AllFields of
+            [] -> 0;
+            _ -> lists:max([Id || {Id, _, _} <- AllFields]) + 1
+        end,
     VTableSize = 4 + (NumSlots * 2),
     TablePosUnaligned = HeaderSize + VTableSize,
     TablePos = align_offset(TablePosUnaligned, 4),
@@ -300,7 +357,9 @@ sort_refs_flatc_order(Refs) ->
             lists:sort(fun({IdA, _, _}, {IdB, _, _}) -> IdA >= IdB end, NonZeroRefs);
         _ ->
             %% Has id=0 ref: ascending with 0 at end
-            SortedNonZero = lists:sort(fun({IdA, _, _}, {IdB, _, _}) -> IdA =< IdB end, NonZeroRefs),
+            SortedNonZero = lists:sort(
+                fun({IdA, _, _}, {IdB, _, _}) -> IdA =< IdB end, NonZeroRefs
+            ),
             SortedNonZero ++ ZeroRefs
     end.
 
@@ -313,7 +372,9 @@ sort_refs_flatc_order_4(Refs) ->
             lists:sort(fun({IdA, _, _, _}, {IdB, _, _, _}) -> IdA >= IdB end, NonZeroRefs);
         _ ->
             %% Has id=0 ref: ascending with 0 at end
-            SortedNonZero = lists:sort(fun({IdA, _, _, _}, {IdB, _, _, _}) -> IdA =< IdB end, NonZeroRefs),
+            SortedNonZero = lists:sort(
+                fun({IdA, _, _, _}, {IdB, _, _, _}) -> IdA =< IdB end, NonZeroRefs
+            ),
             SortedNonZero ++ ZeroRefs
     end.
 
@@ -324,16 +385,19 @@ find_first_8byte_field_offset(Fields, TableSize) ->
     %% Find 8-byte fields and get their offsets
     EightByteFields = [{Id, Type} || {Id, Type, _} <- AllFields, type_size(Type) =:= 8],
     case EightByteFields of
-        [] -> none;
+        [] ->
+            none;
         _ ->
             Offsets = [maps:get(Id, Slots) || {Id, _} <- EightByteFields],
-            lists:min(Offsets)  %% Return smallest offset (first in table)
+            %% Return smallest offset (first in table)
+            lists:min(Offsets)
     end.
 
 %% Calculate ref padding for field list (without offsets)
 %% Ensure nested table's SOFFSET is 4-byte aligned (not just vtable start)
 %% Position of soffset = Pos + VTableSize, which must be 4-byte aligned
-calc_ref_padding_for_refs([], _Pos, _Defs) -> 0;
+calc_ref_padding_for_refs([], _Pos, _Defs) ->
+    0;
 calc_ref_padding_for_refs([{_, Type, Value} | _], Pos, Defs) when is_atom(Type), is_map(Value) ->
     case maps:get(Type, Defs, undefined) of
         {table, Fields} ->
@@ -347,12 +411,16 @@ calc_ref_padding_for_refs([{_, Type, Value} | _], Pos, Defs) when is_atom(Type),
             %% Pad to make (Pos + VTableSize) 4-byte aligned
             SOffsetPos = Pos + VTableSize,
             (4 - (SOffsetPos rem 4)) rem 4;
-        _ -> 0
+        _ ->
+            0
     end;
-calc_ref_padding_for_refs([{_, {union_value, UnionName}, #{type := MemberType, value := Value}} | _], Pos, Defs) ->
+calc_ref_padding_for_refs(
+    [{_, {union_value, UnionName}, #{type := MemberType, value := Value}} | _], Pos, Defs
+) ->
     {union, _Members} = maps:get(UnionName, Defs),
     calc_ref_padding_for_refs([{0, MemberType, Value}], Pos, Defs);
-calc_ref_padding_for_refs(_, _Pos, _Defs) -> 0.
+calc_ref_padding_for_refs(_, _Pos, _Defs) ->
+    0.
 
 build_slots(Scalars, Refs, NumSlots, _MaxAlign) ->
     %% flatc builds table from END backward, placing largest fields at end
@@ -413,7 +481,8 @@ field_inline_size(Type) when is_atom(Type) -> type_size(Type);
 field_inline_size({struct, _} = T) -> type_size(T);
 field_inline_size({enum, _} = T) -> type_size(T);
 field_inline_size({union_type, _}) -> 1;
-field_inline_size(_) -> 4.  %% Default for unknown refs
+%% Default for unknown refs
+field_inline_size(_) -> 4.
 
 %% Calculate total table data size (aligned to 4 bytes for soffset)
 calc_table_data_size(Scalars, Refs) ->
@@ -438,11 +507,14 @@ build_table_data(Scalars, Refs, TablePos, Defs) ->
     %% Build field layout with positions (using base table size for slot calculation)
     Slots = place_fields_backward(AllFields, BaseTableSize),
     FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
-    SortedLayout = lists:sort(fun({_,_,_,A}, {_,_,_,B}) -> A =< B end, FieldLayout),
+    SortedLayout = lists:sort(fun({_, _, _, A}, {_, _, _, B}) -> A =< B end, FieldLayout),
 
     %% Extract refs in flatc order: IDs 1, 2, ..., N, then 0
-    RefFields = [{Id, Type, Value, Off} || {Id, Type, Value, Off} <- SortedLayout,
-                                            not is_scalar_type(Type)],
+    RefFields = [
+        {Id, Type, Value, Off}
+     || {Id, Type, Value, Off} <- SortedLayout,
+        not is_scalar_type(Type)
+    ],
     RefFieldsOrdered = sort_refs_flatc_order_4(RefFields),
 
     %% Calculate padding needed before ref data for nested table alignment
@@ -454,13 +526,14 @@ build_table_data(Scalars, Refs, TablePos, Defs) ->
 
     %% Build table inline data with padding
     TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
-    PadBin = <<0:(RefPadding*8)>>,
+    PadBin = <<0:(RefPadding * 8)>>,
 
     {<<TableData/binary, PadBin/binary>>, RefDataBin}.
 
 %% Calculate padding needed before ref data
 %% Ensure nested table's SOFFSET is 4-byte aligned (Pos + VTableSize must be 4-byte aligned)
-calc_ref_padding([], _Pos, _Defs) -> 0;
+calc_ref_padding([], _Pos, _Defs) ->
+    0;
 calc_ref_padding([{_, Type, Value, _} | _], Pos, Defs) when is_atom(Type), is_map(Value) ->
     case maps:get(Type, Defs, undefined) of
         {table, Fields} ->
@@ -474,12 +547,16 @@ calc_ref_padding([{_, Type, Value, _} | _], Pos, Defs) when is_atom(Type), is_ma
             %% Pad to make (Pos + VTableSize) 4-byte aligned
             SOffsetPos = Pos + VTableSize,
             (4 - (SOffsetPos rem 4)) rem 4;
-        _ -> 0
+        _ ->
+            0
     end;
-calc_ref_padding([{_, {union_value, UnionName}, #{type := MemberType, value := Value}, _} | _], Pos, Defs) ->
+calc_ref_padding(
+    [{_, {union_value, UnionName}, #{type := MemberType, value := Value}, _} | _], Pos, Defs
+) ->
     {union, _Members} = maps:get(UnionName, Defs),
     calc_ref_padding([{0, MemberType, Value, 0}], Pos, Defs);
-calc_ref_padding(_, _Pos, _Defs) -> 0.
+calc_ref_padding(_, _Pos, _Defs) ->
+    0.
 
 %% Collect all vtables that will be used in ref data (for vtable sharing detection)
 collect_ref_vtables(Refs, Defs) ->
@@ -548,22 +625,26 @@ build_ref_data_with_vtable_sharing(RefFieldsOrdered, RefDataStart, SharedVTable,
             DataBin = encode_ref(Type, Value, Defs),
 
             %% For nested tables, uoffset should point to soffset (after vtable)
-            RefTargetPos = case is_nested_table_type(Type, Value, Defs) of
-                {true, VTableSize} -> PaddedPos + VTableSize;
-                false -> PaddedPos
-            end,
+            RefTargetPos =
+                case is_nested_table_type(Type, Value, Defs) of
+                    {true, VTableSize} -> PaddedPos + VTableSize;
+                    false -> PaddedPos
+                end,
 
             %% Check if this ref contains the shared vtable
-            NewVTPos = case find_vtable_in_ref(DataBin, SharedVTable) of
-                {found, RelPos} -> PaddedPos + RelPos;
-                not_found -> VTPos
-            end,
+            NewVTPos =
+                case find_vtable_in_ref(DataBin, SharedVTable) of
+                    {found, RelPos} -> PaddedPos + RelPos;
+                    not_found -> VTPos
+                end,
 
-            PadBin = <<0:(AlignPad*8)>>,
-            {[DataBin, PadBin | DataAcc],
-             PosAcc#{FieldOff => RefTargetPos},
-             NewVTPos,
-             PaddedPos + byte_size(DataBin)}
+            PadBin = <<0:(AlignPad * 8)>>,
+            {
+                [DataBin, PadBin | DataAcc],
+                PosAcc#{FieldOff => RefTargetPos},
+                NewVTPos,
+                PaddedPos + byte_size(DataBin)
+            }
         end,
         {[], #{}, 0, RefDataStart},
         RefFieldsOrdered
@@ -596,14 +677,17 @@ build_ref_data(RefFields, RefDataStart, Defs) ->
 
             DataBin = encode_ref(Type, Value, Defs),
             %% For nested tables, uoffset should point to soffset (after vtable)
-            RefTargetPos = case is_nested_table_type(Type, Value, Defs) of
-                {true, VTableSize} -> PaddedPos + VTableSize;
-                false -> PaddedPos
-            end,
-            PadBin = <<0:(AlignPad*8)>>,
-            {[DataBin, PadBin | DataAcc],
-             PosAcc#{FieldOff => RefTargetPos},
-             PaddedPos + byte_size(DataBin)}
+            RefTargetPos =
+                case is_nested_table_type(Type, Value, Defs) of
+                    {true, VTableSize} -> PaddedPos + VTableSize;
+                    false -> PaddedPos
+                end,
+            PadBin = <<0:(AlignPad * 8)>>,
+            {
+                [DataBin, PadBin | DataAcc],
+                PosAcc#{FieldOff => RefTargetPos},
+                PaddedPos + byte_size(DataBin)
+            }
         end,
         {[], #{}, RefDataStart},
         RefFields
@@ -618,9 +702,11 @@ calc_vector_alignment_padding({vector, ElemType}, DataPos, Defs) ->
         8 ->
             %% Need (DataPos + 4) % 8 == 0, so DataPos % 8 == 4
             (12 - (DataPos rem 8)) rem 8;
-        _ -> 0
+        _ ->
+            0
     end;
-calc_vector_alignment_padding(_, _, _) -> 0.
+calc_vector_alignment_padding(_, _, _) ->
+    0.
 
 %% Check if type is a nested table (vtable is at START, need offset to point to soffset)
 %% Returns {true, VTableSize} or false
@@ -635,19 +721,22 @@ is_nested_table_type(Type, Value, Defs) when is_atom(Type), is_map(Value) ->
             ),
             VTableSize = calc_vtable_size(Scalars, Refs),
             {true, VTableSize};
-        _ -> false
+        _ ->
+            false
     end;
 is_nested_table_type({union_value, UnionName}, #{type := MemberType, value := Value}, Defs) ->
     %% Union value - check the member type
     {union, _Members} = maps:get(UnionName, Defs),
     is_nested_table_type(MemberType, Value, Defs);
-is_nested_table_type(_, _, _) -> false.
+is_nested_table_type(_, _, _) ->
+    false.
 
 %% Calculate vtable size for a table
 calc_vtable_size(Scalars, Refs) ->
     AllFields = Scalars ++ Refs,
     case AllFields of
-        [] -> 4;
+        [] ->
+            4;
         _ ->
             MaxId = lists:max([Id || {Id, _, _} <- AllFields]),
             NumSlots = MaxId + 1,
@@ -660,22 +749,24 @@ build_inline_data(FieldLayout, TablePos, RefPositions) ->
         fun({_Id, Type, Value, FieldOff}, {Acc, CurOff}) ->
             %% Add padding if needed
             Pad = FieldOff - CurOff,
-            PadBin = <<0:(Pad*8)>>,
+            PadBin = <<0:(Pad * 8)>>,
 
             %% Encode the field
-            FieldBin = case is_scalar_type(Type) of
-                true ->
-                    encode_scalar(Value, Type);
-                false ->
-                    %% Reference - write uoffset to ref data
-                    FieldAbsPos = TablePos + FieldOff,
-                    RefDataPos = maps:get(FieldOff, RefPositions),
-                    UOffset = RefDataPos - FieldAbsPos,
-                    <<UOffset:32/little-signed>>
-            end,
+            FieldBin =
+                case is_scalar_type(Type) of
+                    true ->
+                        encode_scalar(Value, Type);
+                    false ->
+                        %% Reference - write uoffset to ref data
+                        FieldAbsPos = TablePos + FieldOff,
+                        RefDataPos = maps:get(FieldOff, RefPositions),
+                        UOffset = RefDataPos - FieldAbsPos,
+                        <<UOffset:32/little-signed>>
+                end,
             {<<Acc/binary, PadBin/binary, FieldBin/binary>>, FieldOff + byte_size(FieldBin)}
         end,
-        {<<>>, 4},  %% Start at offset 4
+        %% Start at offset 4
+        {<<>>, 4},
         FieldLayout
     ),
     Data.
@@ -684,23 +775,22 @@ encode_string(Bin) ->
     Len = byte_size(Bin),
     TotalLen = 4 + Len + 1,
     PadLen = (4 - (TotalLen rem 4)) rem 4,
-    <<Len:32/little, Bin/binary, 0, 0:(PadLen*8)>>.
+    <<Len:32/little, Bin/binary, 0, 0:(PadLen * 8)>>.
 
 encode_ref(string, Bin, _Defs) when is_binary(Bin) ->
     Len = byte_size(Bin),
     %% Pad string to 4-byte boundary
-    TotalLen = 4 + Len + 1,  %% length + data + null
-    PadLen = (4 - (TotalLen rem 4)) rem 4,
-    <<Len:32/little, Bin/binary, 0, 0:(PadLen*8)>>;
 
+    %% length + data + null
+    TotalLen = 4 + Len + 1,
+    PadLen = (4 - (TotalLen rem 4)) rem 4,
+    <<Len:32/little, Bin/binary, 0, 0:(PadLen * 8)>>;
 encode_ref({vector, ElemType}, Values, Defs) when is_list(Values) ->
     encode_vector(ElemType, Values, Defs);
-
 encode_ref({union_value, UnionName}, #{type := MemberType, value := Value}, Defs) ->
     %% Union value - encode as the member table type
     {union, _Members} = maps:get(UnionName, Defs),
     encode_nested_table(MemberType, Value, Defs);
-
 encode_ref(TableType, Map, Defs) when is_atom(TableType), is_map(Map) ->
     %% Nested table - build it inline
     %% Returns {Binary, TableEntryOffset} where TableEntryOffset is where soffset lives
@@ -717,7 +807,7 @@ encode_vector(ElemType, Values, Defs) ->
             %% Pad to 4-byte boundary
             TotalLen = 4 + byte_size(ElementsBin),
             PadLen = (4 - (TotalLen rem 4)) rem 4,
-            <<Len:32/little, ElementsBin/binary, 0:(PadLen*8)>>;
+            <<Len:32/little, ElementsBin/binary, 0:(PadLen * 8)>>;
         false ->
             %% Reference vector (e.g., strings, tables): length + offsets, then data
             encode_ref_vector(ElemType, Values, Defs)
@@ -791,10 +881,11 @@ encode_ref_vector_simple(ElemType, Values, Defs) ->
 
     {_, ElemPositions} = lists:foldl(
         fun({ElemBin, Value}, {DataPos, PosAcc}) ->
-            VTableOffset = case is_nested_table_type(ElemType, Value, Defs) of
-                {true, VTableSize} -> VTableSize;
-                false -> 0
-            end,
+            VTableOffset =
+                case is_nested_table_type(ElemType, Value, Defs) of
+                    {true, VTableSize} -> VTableSize;
+                    false -> 0
+                end,
             {DataPos + byte_size(ElemBin), [{DataPos, VTableOffset, ElemBin} | PosAcc]}
         end,
         {HeaderSize, []},
@@ -869,10 +960,11 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
             IsOwner = OrigIdx =:= OwnerIdx,
             %% Owner elements use normal padding (they're last and need trailing padding)
             %% Non-owner elements use minimal padding (followed by vtable which needs 2-byte align)
-            TableBin = case IsOwner of
-                true -> encode_nested_table_body_only_padded(Scalars, Refs, Defs);
-                false -> encode_nested_table_body_only(Scalars, Refs, Defs)
-            end,
+            TableBin =
+                case IsOwner of
+                    true -> encode_nested_table_body_only_padded(Scalars, Refs, Defs);
+                    false -> encode_nested_table_body_only(Scalars, Refs, Defs)
+                end,
             {OrigIdx, VTable, TableBin, IsOwner}
         end,
         ElemVTables
@@ -929,13 +1021,26 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
                     %% This ensures the vtable_before element after the vtable is aligned
                     AlignPad = (4 - ((DataPos + VTSize) rem 4)) rem 4,
                     PaddedPos = DataPos + AlignPad,
-                    {InfoAcc, VTPos#{VTable => PaddedPos}, PadMap#{VTable => AlignPad}, PaddedPos + VTSize};
+                    {InfoAcc, VTPos#{VTable => PaddedPos}, PadMap#{VTable => AlignPad},
+                        PaddedPos + VTSize};
                 {vtable_after, OrigIdx, Bin, _VTable} ->
-                    SOffsetPos = DataPos,  %% soffset is at start of body
-                    {[{OrigIdx, SOffsetPos, Bin} | InfoAcc], VTPos, PadMap, DataPos + byte_size(Bin)};
+                    %% soffset is at start of body
+                    SOffsetPos = DataPos,
+                    {
+                        [{OrigIdx, SOffsetPos, Bin} | InfoAcc],
+                        VTPos,
+                        PadMap,
+                        DataPos + byte_size(Bin)
+                    };
                 {vtable_before, OrigIdx, Bin, _VTable} ->
-                    SOffsetPos = DataPos,  %% soffset is at start of body
-                    {[{OrigIdx, SOffsetPos, Bin} | InfoAcc], VTPos, PadMap, DataPos + byte_size(Bin)}
+                    %% soffset is at start of body
+                    SOffsetPos = DataPos,
+                    {
+                        [{OrigIdx, SOffsetPos, Bin} | InfoAcc],
+                        VTPos,
+                        PadMap,
+                        DataPos + byte_size(Bin)
+                    }
             end
         end,
         {[], #{}, #{}, HeaderSize},
@@ -965,20 +1070,22 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
                 {vtable_insert, VTable} ->
                     %% Insert padding before vtable for alignment
                     PadLen = maps:get(VTable, PaddingMap, 0),
-                    PadBin = <<0:(PadLen*8)>>,
+                    PadBin = <<0:(PadLen * 8)>>,
                     <<PadBin/binary, VTable/binary>>;
                 {vtable_after, OrigIdx, Bin, VTable} ->
                     %% Negative soffset (vtable is after this element)
                     VTablePos = maps:get(VTable, VTablePositions),
                     SOffsetPos = maps:get(OrigIdx, SOffsetPosMap),
-                    SOffset = SOffsetPos - VTablePos,  %% Negative
+                    %% Negative
+                    SOffset = SOffsetPos - VTablePos,
                     <<_:32, Rest/binary>> = Bin,
                     <<SOffset:32/little-signed, Rest/binary>>;
                 {vtable_before, OrigIdx, Bin, VTable} ->
                     %% Positive soffset (vtable is before this element)
                     VTablePos = maps:get(VTable, VTablePositions),
                     SOffsetPos = maps:get(OrigIdx, SOffsetPosMap),
-                    SOffset = SOffsetPos - VTablePos,  %% Positive
+                    %% Positive
+                    SOffset = SOffsetPos - VTablePos,
                     <<_:32, Rest/binary>> = Bin,
                     <<SOffset:32/little-signed, Rest/binary>>
             end
@@ -997,7 +1104,8 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
 encode_nested_table_body_only(Scalars, Refs, Defs) ->
     {TableData, RefDataBin} = build_table_data_minimal_padding(Scalars, Refs, 0, Defs),
     iolist_to_binary([
-        <<0:32/little-signed>>,  %% Placeholder soffset
+        %% Placeholder soffset
+        <<0:32/little-signed>>,
         TableData,
         RefDataBin
     ]).
@@ -1006,7 +1114,8 @@ encode_nested_table_body_only(Scalars, Refs, Defs) ->
 encode_nested_table_body_only_padded(Scalars, Refs, Defs) ->
     {TableData, RefDataBin} = build_table_data(Scalars, Refs, 0, Defs),
     iolist_to_binary([
-        <<0:32/little-signed>>,  %% Placeholder soffset
+        %% Placeholder soffset
+        <<0:32/little-signed>>,
         TableData,
         RefDataBin
     ]).
@@ -1020,16 +1129,21 @@ build_table_data_minimal_padding(Scalars, Refs, TablePos, Defs) ->
     BaseTableSize = 4 + TableDataSize,
     Slots = place_fields_backward(AllFields, BaseTableSize),
     FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
-    SortedLayout = lists:sort(fun({_,_,_,A}, {_,_,_,B}) -> A =< B end, FieldLayout),
-    RefFields = [{Id, Type, Value, Off} || {Id, Type, Value, Off} <- SortedLayout,
-                                            not is_scalar_type(Type)],
+    SortedLayout = lists:sort(fun({_, _, _, A}, {_, _, _, B}) -> A =< B end, FieldLayout),
+    RefFields = [
+        {Id, Type, Value, Off}
+     || {Id, Type, Value, Off} <- SortedLayout,
+        not is_scalar_type(Type)
+    ],
     RefFieldsOrdered = sort_refs_flatc_order_4(RefFields),
     RefPadding = calc_ref_padding(RefFieldsOrdered, TablePos + BaseTableSize, Defs),
     TableSize = BaseTableSize + RefPadding,
     RefDataStart = TablePos + TableSize,
-    {RefDataBin, RefPositions} = build_ref_data_minimal_padding(RefFieldsOrdered, RefDataStart, Defs),
+    {RefDataBin, RefPositions} = build_ref_data_minimal_padding(
+        RefFieldsOrdered, RefDataStart, Defs
+    ),
     TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
-    PadBin = <<0:(RefPadding*8)>>,
+    PadBin = <<0:(RefPadding * 8)>>,
     {<<TableData/binary, PadBin/binary>>, RefDataBin}.
 
 %% Build ref data with minimal string padding
@@ -1039,14 +1153,17 @@ build_ref_data_minimal_padding(RefFields, RefDataStart, Defs) ->
             AlignPad = calc_vector_alignment_padding(Type, DataPos, Defs),
             PaddedPos = DataPos + AlignPad,
             DataBin = encode_ref_minimal_padding(Type, Value, Defs),
-            RefTargetPos = case is_nested_table_type(Type, Value, Defs) of
-                {true, VTableSize} -> PaddedPos + VTableSize;
-                false -> PaddedPos
-            end,
-            PadBin = <<0:(AlignPad*8)>>,
-            {[DataBin, PadBin | DataAcc],
-             PosAcc#{FieldOff => RefTargetPos},
-             PaddedPos + byte_size(DataBin)}
+            RefTargetPos =
+                case is_nested_table_type(Type, Value, Defs) of
+                    {true, VTableSize} -> PaddedPos + VTableSize;
+                    false -> PaddedPos
+                end,
+            PadBin = <<0:(AlignPad * 8)>>,
+            {
+                [DataBin, PadBin | DataAcc],
+                PosAcc#{FieldOff => RefTargetPos},
+                PaddedPos + byte_size(DataBin)
+            }
         end,
         {[], #{}, RefDataStart},
         RefFields
@@ -1077,7 +1194,8 @@ encode_nested_table(TableType, Map, Defs) ->
     %% soffset is positive, pointing back to vtable start
     {TableData, RefDataBin} = build_table_data(Scalars, Refs, VTableSize, Defs),
 
-    SOffset = VTableSize,  %% Positive = backward to vtable at start
+    %% Positive = backward to vtable at start
+    SOffset = VTableSize,
 
     iolist_to_binary([
         VTable,
@@ -1090,28 +1208,55 @@ encode_nested_table(TableType, Map, Defs) ->
 %% Scalar Encoding
 %% =============================================================================
 
-encode_scalar(Value, bool) -> <<(if Value -> 1; true -> 0 end):8>>;
-encode_scalar(Value, byte) -> <<Value:8/signed>>;
-encode_scalar(Value, int8) -> <<Value:8/signed>>;
-encode_scalar(Value, ubyte) -> <<Value:8/unsigned>>;
-encode_scalar(Value, uint8) -> <<Value:8/unsigned>>;
-encode_scalar(Value, short) -> <<Value:16/little-signed>>;
-encode_scalar(Value, int16) -> <<Value:16/little-signed>>;
-encode_scalar(Value, ushort) -> <<Value:16/little-unsigned>>;
-encode_scalar(Value, uint16) -> <<Value:16/little-unsigned>>;
-encode_scalar(Value, int) -> <<Value:32/little-signed>>;
-encode_scalar(Value, int32) -> <<Value:32/little-signed>>;
-encode_scalar(Value, uint) -> <<Value:32/little-unsigned>>;
-encode_scalar(Value, uint32) -> <<Value:32/little-unsigned>>;
-encode_scalar(Value, long) -> <<Value:64/little-signed>>;
-encode_scalar(Value, int64) -> <<Value:64/little-signed>>;
-encode_scalar(Value, ulong) -> <<Value:64/little-unsigned>>;
-encode_scalar(Value, uint64) -> <<Value:64/little-unsigned>>;
-encode_scalar(Value, float) -> <<Value:32/little-float>>;
-encode_scalar(Value, float32) -> <<Value:32/little-float>>;
-encode_scalar(Value, double) -> <<Value:64/little-float>>;
-encode_scalar(Value, float64) -> <<Value:64/little-float>>;
-encode_scalar(Value, {enum, Base}) -> encode_scalar(Value, Base);
+encode_scalar(Value, bool) ->
+    <<
+        (if
+            Value -> 1;
+            true -> 0
+        end):8
+    >>;
+encode_scalar(Value, byte) ->
+    <<Value:8/signed>>;
+encode_scalar(Value, int8) ->
+    <<Value:8/signed>>;
+encode_scalar(Value, ubyte) ->
+    <<Value:8/unsigned>>;
+encode_scalar(Value, uint8) ->
+    <<Value:8/unsigned>>;
+encode_scalar(Value, short) ->
+    <<Value:16/little-signed>>;
+encode_scalar(Value, int16) ->
+    <<Value:16/little-signed>>;
+encode_scalar(Value, ushort) ->
+    <<Value:16/little-unsigned>>;
+encode_scalar(Value, uint16) ->
+    <<Value:16/little-unsigned>>;
+encode_scalar(Value, int) ->
+    <<Value:32/little-signed>>;
+encode_scalar(Value, int32) ->
+    <<Value:32/little-signed>>;
+encode_scalar(Value, uint) ->
+    <<Value:32/little-unsigned>>;
+encode_scalar(Value, uint32) ->
+    <<Value:32/little-unsigned>>;
+encode_scalar(Value, long) ->
+    <<Value:64/little-signed>>;
+encode_scalar(Value, int64) ->
+    <<Value:64/little-signed>>;
+encode_scalar(Value, ulong) ->
+    <<Value:64/little-unsigned>>;
+encode_scalar(Value, uint64) ->
+    <<Value:64/little-unsigned>>;
+encode_scalar(Value, float) ->
+    <<Value:32/little-float>>;
+encode_scalar(Value, float32) ->
+    <<Value:32/little-float>>;
+encode_scalar(Value, double) ->
+    <<Value:64/little-float>>;
+encode_scalar(Value, float64) ->
+    <<Value:64/little-float>>;
+encode_scalar(Value, {enum, Base}) ->
+    encode_scalar(Value, Base);
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
 encode_scalar(TypeIndex, {union_type, _UnionName}) when is_integer(TypeIndex) ->
@@ -1126,7 +1271,7 @@ encode_struct(Map, Fields) ->
             Pad = AlignedOff - Off,
             Value = get_field_value(Map, Name),
             ValBin = encode_scalar(Value, Type),
-            {<<Acc/binary, 0:(Pad*8), ValBin/binary>>, AlignedOff + Size}
+            {<<Acc/binary, 0:(Pad * 8), ValBin/binary>>, AlignedOff + Size}
         end,
         {<<>>, 0},
         Fields
@@ -1135,7 +1280,7 @@ encode_struct(Map, Fields) ->
     StructSize = calc_struct_size(Fields),
     CurrentSize = byte_size(Bin),
     TrailingPad = StructSize - CurrentSize,
-    <<Bin/binary, 0:(TrailingPad*8)>>.
+    <<Bin/binary, 0:(TrailingPad * 8)>>.
 
 %% =============================================================================
 %% Helpers
@@ -1164,7 +1309,8 @@ type_size(double) -> 8;
 type_size(float64) -> 8;
 type_size({enum, Base}) -> type_size(Base);
 type_size({struct, Fields}) -> calc_struct_size(Fields);
-type_size({union_type, _}) -> 1;  %% Union type is ubyte
+%% Union type is ubyte
+type_size({union_type, _}) -> 1;
 type_size(_) -> 4.
 
 %% Calculate struct size with proper alignment

@@ -23,10 +23,12 @@ two_ints_test() ->
 
 skip_default_value_test() ->
     Defs = #{test => {table, [{a, {int, 100}, #{id => 0}}, {b, int, #{id => 1}}]}},
-    Map = #{a => 100, b => 20},  %% a has default value, should be skipped
+    %% a has default value, should be skipped
+    Map = #{a => 100, b => 20},
     Buffer = builder:from_map(Map, Defs, test),
     Root = reader:get_root(Buffer),
-    ?assertEqual(missing, reader:get_field(Root, 0, int, Buffer)),  %% a not written
+    %% a not written
+    ?assertEqual(missing, reader:get_field(Root, 0, int, Buffer)),
     ?assertEqual({ok, 20}, reader:get_field(Root, 1, int, Buffer)).
 
 non_contiguous_field_ids_test() ->
@@ -36,7 +38,8 @@ non_contiguous_field_ids_test() ->
     Buffer = builder:from_map(Map, Defs, test),
     Root = reader:get_root(Buffer),
     ?assertEqual({ok, 10}, reader:get_field(Root, 0, int, Buffer)),
-    ?assertEqual(missing, reader:get_field(Root, 1, int, Buffer)),  %% No field 1
+    %% No field 1
+    ?assertEqual(missing, reader:get_field(Root, 1, int, Buffer)),
     ?assertEqual({ok, 30}, reader:get_field(Root, 2, int, Buffer)).
 
 %% =============================================================================
@@ -123,7 +126,9 @@ string_vector_test() ->
     Map = #{items => [<<"a">>, <<"bb">>, <<"ccc">>]},
     Buffer = builder:from_map(Map, Defs, test),
     Root = reader:get_root(Buffer),
-    ?assertEqual({ok, [<<"a">>, <<"bb">>, <<"ccc">>]}, reader:get_field(Root, 0, {vector, string}, Buffer)).
+    ?assertEqual(
+        {ok, [<<"a">>, <<"bb">>, <<"ccc">>]}, reader:get_field(Root, 0, {vector, string}, Buffer)
+    ).
 
 mixed_with_vector_test() ->
     Defs = #{test => {table, [{name, string, #{id => 0}}, {scores, {vector, int}, #{id => 1}}]}},
@@ -216,8 +221,11 @@ simple_union_test() ->
     {ok, {Defs, _}} = schema:parse_file("test/schemas/union_field.fbs"),
 
     %% Build a buffer with hello variant (flatc-compatible format)
-    Map = #{data_type => hello, data => #{salute => <<"hi there">>},
-            additions_value => 42},
+    Map = #{
+        data_type => hello,
+        data => #{salute => <<"hi there">>},
+        additions_value => 42
+    },
     Buffer = builder:from_map(Map, Defs, command_root, <<"cmnd">>),
 
     %% Verify file identifier
@@ -321,7 +329,9 @@ flatc_roundtrip_monster_test() ->
     ok = file:write_file(TmpBin, NewBuffer),
 
     %% Use flatc to decode our buffer (--strict-json for proper JSON)
-    Cmd = io_lib:format("flatc --json --strict-json -o /tmp test/vectors/test_monster.fbs -- ~s 2>&1", [TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json -o /tmp test/vectors/test_monster.fbs -- ~s 2>&1", [TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 
@@ -344,8 +354,11 @@ flatc_roundtrip_nested_test() ->
     Map = eflatbuffers:to_map(Ctx),
 
     %% Modify nested values
-    Modified = Map#{name => <<"Enemy">>, hp => 50,
-                    pos => #{x => 10.0, y => 20.0, z => 30.0}},
+    Modified = Map#{
+        name => <<"Enemy">>,
+        hp => 50,
+        pos => #{x => 10.0, y => 20.0, z => 30.0}
+    },
 
     %% Build new buffer
     NewBuffer = eflatbuffers:from_map(Modified, Defs, 'Entity', <<"NEST">>),
@@ -354,7 +367,9 @@ flatc_roundtrip_nested_test() ->
     ok = file:write_file(TmpBin, NewBuffer),
 
     %% Use flatc to decode
-    Cmd = io_lib:format("flatc --json --strict-json -o /tmp test/vectors/test_nested.fbs -- ~s 2>&1", [TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json -o /tmp test/vectors/test_nested.fbs -- ~s 2>&1", [TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 
@@ -380,8 +395,10 @@ flatc_roundtrip_vectors_test() ->
     Map = eflatbuffers:to_map(Ctx),
 
     %% Modify vectors
-    Modified = Map#{counts => [10, 20, 30],
-                    items => [<<"axe">>, <<"bow">>]},
+    Modified = Map#{
+        counts => [10, 20, 30],
+        items => [<<"axe">>, <<"bow">>]
+    },
 
     %% Build new buffer
     NewBuffer = eflatbuffers:from_map(Modified, Defs, 'Inventory', <<"VECT">>),
@@ -390,7 +407,9 @@ flatc_roundtrip_vectors_test() ->
     ok = file:write_file(TmpBin, NewBuffer),
 
     %% Use flatc to decode
-    Cmd = io_lib:format("flatc --json --strict-json -o /tmp test/vectors/test_vector.fbs -- ~s 2>&1", [TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json -o /tmp test/vectors/test_vector.fbs -- ~s 2>&1", [TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 

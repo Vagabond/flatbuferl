@@ -1,8 +1,8 @@
-{application, eflatbuffers,
- [{description, "FlatBuffers implementation for Erlang"},
-  {vsn, "0.1.0"},
-  {registered, []},
-  {applications, [kernel, stdlib]},
-  {env, []},
-  {modules, []}
- ]}.
+{application, eflatbuffers, [
+    {description, "FlatBuffers implementation for Erlang"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [kernel, stdlib]},
+    {env, []},
+    {modules, []}
+]}.

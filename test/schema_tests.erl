@@ -50,9 +50,14 @@ file_identifier_test() ->
 sequential_ids_test() ->
     {ok, {Defs, _}} = schema:parse("table T { a: int; b: int; c: int; }"),
     {table, Fields} = maps:get('T', Defs),
-    ?assertEqual([{a, int, #{id => 0}},
-                  {b, int, #{id => 1}},
-                  {c, int, #{id => 2}}], Fields).
+    ?assertEqual(
+        [
+            {a, int, #{id => 0}},
+            {b, int, #{id => 1}},
+            {c, int, #{id => 2}}
+        ],
+        Fields
+    ).
 
 explicit_ids_test() ->
     {ok, {Defs, _}} = schema:parse("table T { a: int (id: 2); b: int (id: 0); c: int (id: 1); }"),
@@ -64,11 +69,15 @@ mixed_ids_test() ->
     {ok, {Defs, _}} = schema:parse("table T { a: int (id: 0); b: int (id: 2); c: int; d: int; }"),
     {table, Fields} = maps:get('T', Defs),
     %% c and d should fill gaps and continue after explicit IDs
-    [{a, int, #{id := 0}},
-     {b, int, #{id := 2}},
-     {c, int, #{id := 1}},  %% fills gap
-     {d, int, #{id := 3}}]  %% continues after 2
-    = Fields.
+    [
+        {a, int, #{id := 0}},
+        {b, int, #{id := 2}},
+        %% fills gap
+        {c, int, #{id := 1}},
+        %% continues after 2
+        {d, int, #{id := 3}}
+    ] =
+        Fields.
 
 %% =============================================================================
 %% Attribute Tests
@@ -77,8 +86,10 @@ mixed_ids_test() ->
 deprecated_attr_test() ->
     {ok, {Defs, _}} = schema:parse("table T { old: int (deprecated); new: int; }"),
     {table, Fields} = maps:get('T', Defs),
-    [{old, int, #{deprecated := true, id := _}},
-     {new, int, #{id := _}}] = Fields.
+    [
+        {old, int, #{deprecated := true, id := _}},
+        {new, int, #{id := _}}
+    ] = Fields.
 
 multiple_attrs_test() ->
     {ok, {Defs, _}} = schema:parse("table T { f: int (id: 5, deprecated); }"),

@@ -34,7 +34,9 @@ get(TableRef, Schema, [FieldName | Rest]) ->
         {ok, NestedTableRef} when element(1, NestedTableRef) == table ->
             %% Nested path access not supported via reader:get/3
             %% Use eflatbuffers:get/2 for nested paths
-            _ = {NestedTableRef, Rest},  %% Suppress unused warnings
+
+            %% Suppress unused warnings
+            _ = {NestedTableRef, Rest},
             {error, {unknown_nested_type, FieldName}};
         {ok, _Other} ->
             {error, {not_a_table, FieldName}};
@@ -43,7 +45,6 @@ get(TableRef, Schema, [FieldName | Rest]) ->
         {error, _} = Err ->
             Err
     end.
-
 
 %% Get field by name using schema
 get_field_by_name({table, TableOffset, Buffer}, Schema, FieldName) ->
@@ -59,12 +60,16 @@ find_field_in_schema({table, Fields}, FieldName) ->
 find_field_in_schema(#{} = Defs, FieldName) ->
     %% Schema is full definitions map, need table name context
     %% For now just search all tables
-    maps:fold(fun
-        (_Name, {table, Fields}, error) ->
-            find_field_in_list(Fields, FieldName);
-        (_Name, _Def, Acc) ->
-            Acc
-    end, error, Defs).
+    maps:fold(
+        fun
+            (_Name, {table, Fields}, error) ->
+                find_field_in_list(Fields, FieldName);
+            (_Name, _Def, Acc) ->
+                Acc
+        end,
+        error,
+        Defs
+    ).
 
 find_field_in_list([], _FieldName) ->
     error;
@@ -86,15 +91,19 @@ get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
 
     %% Read vtable header
     <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _TableSize:16/little-unsigned,
-      VTableRest/binary>> = Buffer,
+        VTableRest/binary>> = Buffer,
 
     %% Calculate field offset position in vtable
-    FieldOffsetPos = 4 + (FieldId * 2),  %% 4 bytes header + 2 bytes per field
+
+    %% 4 bytes header + 2 bytes per field
+    FieldOffsetPos = 4 + (FieldId * 2),
 
     case FieldOffsetPos < VTableSize of
         true ->
             %% Read field offset from vtable
-            FieldOffsetInVTable = FieldOffsetPos - 4,  %% Offset into VTableRest
+
+            %% Offset into VTableRest
+            FieldOffsetInVTable = FieldOffsetPos - 4,
             <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
 
             case FieldOffset of
@@ -122,7 +131,6 @@ read_value(Buffer, Pos, Type) when Type == byte; Type == int8 ->
 read_value(Buffer, Pos, Type) when Type == ubyte; Type == uint8 ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-
 %% 16-bit integers
 read_value(Buffer, Pos, Type) when Type == short; Type == int16 ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
@@ -130,7 +138,6 @@ read_value(Buffer, Pos, Type) when Type == short; Type == int16 ->
 read_value(Buffer, Pos, Type) when Type == ushort; Type == uint16 ->
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-
 %% 32-bit integers
 read_value(Buffer, Pos, Type) when Type == int; Type == int32 ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
@@ -138,7 +145,6 @@ read_value(Buffer, Pos, Type) when Type == int; Type == int32 ->
 read_value(Buffer, Pos, Type) when Type == uint; Type == uint32 ->
     <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-
 %% 64-bit integers
 read_value(Buffer, Pos, Type) when Type == long; Type == int64 ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
@@ -146,7 +152,6 @@ read_value(Buffer, Pos, Type) when Type == long; Type == int64 ->
 read_value(Buffer, Pos, Type) when Type == ulong; Type == uint64 ->
     <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-
 %% Floating point
 read_value(Buffer, Pos, Type) when Type == float; Type == float32 ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
@@ -154,14 +159,12 @@ read_value(Buffer, Pos, Type) when Type == float; Type == float32 ->
 read_value(Buffer, Pos, Type) when Type == double; Type == float64 ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
-
 %% String (offset to length-prefixed UTF-8)
 read_value(Buffer, Pos, string) ->
     <<_:Pos/binary, StringOffset:32/little-unsigned, _/binary>> = Buffer,
     StringPos = Pos + StringOffset,
     <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary, _/binary>> = Buffer,
     {ok, StringData};
-
 %% Vector (offset to length-prefixed array)
 read_value(Buffer, Pos, {vector, ElementType}) ->
     <<_:Pos/binary, VectorOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -169,39 +172,34 @@ read_value(Buffer, Pos, {vector, ElementType}) ->
     <<_:VectorPos/binary, Length:32/little-unsigned, _/binary>> = Buffer,
     ElementsStart = VectorPos + 4,
     read_vector_elements(Buffer, ElementsStart, Length, ElementType, []);
-
 %% Enum - read as underlying type, return integer value
 read_value(Buffer, Pos, {enum, UnderlyingType}) ->
     read_value(Buffer, Pos, UnderlyingType);
-
 %% Type with default value - extract just the type
 %% Defaults are only for scalar types, matched after enum
-read_value(Buffer, Pos, {Type, Default}) when is_atom(Type), is_number(Default);
-                                               is_atom(Type), is_boolean(Default) ->
+read_value(Buffer, Pos, {Type, Default}) when
+    is_atom(Type), is_number(Default);
+    is_atom(Type), is_boolean(Default)
+->
     read_value(Buffer, Pos, Type);
-
 %% Union type - read the discriminator byte
 read_value(Buffer, Pos, {union_type, _UnionName}) ->
     <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
     {ok, TypeIndex};
-
 %% Union value - read offset to table (returns table ref, caller resolves type)
 read_value(Buffer, Pos, {union_value, _UnionName}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {ok, {table, NestedTablePos, Buffer}};
-
 %% Struct - read inline fixed-size data
 read_value(Buffer, Pos, {struct, Fields}) ->
     {StructMap, _Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {ok, StructMap};
-
 %% Nested table - return table reference for lazy access
 read_value(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {ok, {table, NestedTablePos, Buffer}};
-
 %% Unsupported type
 read_value(_Buffer, _Pos, Type) ->
     {error, {unsupported_type, Type}}.
@@ -223,7 +221,6 @@ read_vector_element(Buffer, Pos, Type) when Type == byte; Type == int8 ->
 read_vector_element(Buffer, Pos, Type) when Type == ubyte; Type == uint8 ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {1, Value};
-
 %% 16-bit elements
 read_vector_element(Buffer, Pos, Type) when Type == short; Type == int16 ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
@@ -231,7 +228,6 @@ read_vector_element(Buffer, Pos, Type) when Type == short; Type == int16 ->
 read_vector_element(Buffer, Pos, Type) when Type == ushort; Type == uint16 ->
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {2, Value};
-
 %% 32-bit elements
 read_vector_element(Buffer, Pos, Type) when Type == int; Type == int32 ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
@@ -242,7 +238,6 @@ read_vector_element(Buffer, Pos, Type) when Type == uint; Type == uint32 ->
 read_vector_element(Buffer, Pos, Type) when Type == float; Type == float32 ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
     {4, Value};
-
 %% 64-bit elements
 read_vector_element(Buffer, Pos, Type) when Type == long; Type == int64 ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
@@ -253,28 +248,25 @@ read_vector_element(Buffer, Pos, Type) when Type == ulong; Type == uint64 ->
 read_vector_element(Buffer, Pos, Type) when Type == double; Type == float64 ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {8, Value};
-
 %% Enum in vector
 read_vector_element(Buffer, Pos, {enum, UnderlyingType}) ->
     read_vector_element(Buffer, Pos, UnderlyingType);
-
 %% Type with default value in vector - extract just the type
-read_vector_element(Buffer, Pos, {Type, Default}) when is_atom(Type), is_number(Default);
-                                                        is_atom(Type), is_boolean(Default) ->
+read_vector_element(Buffer, Pos, {Type, Default}) when
+    is_atom(Type), is_number(Default);
+    is_atom(Type), is_boolean(Default)
+->
     read_vector_element(Buffer, Pos, Type);
-
 %% String in vector (offset to length-prefixed data)
 read_vector_element(Buffer, Pos, string) ->
     <<_:Pos/binary, StringOffset:32/little-unsigned, _/binary>> = Buffer,
     StringPos = Pos + StringOffset,
     <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary, _/binary>> = Buffer,
     {4, StringData};
-
 %% Struct in vector (inline data)
 read_vector_element(Buffer, Pos, {struct, Fields}) ->
     {StructMap, Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {Size, StructMap};
-
 %% Table in vector (offset to table)
 read_vector_element(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -307,7 +299,8 @@ calc_struct_layout(Fields) ->
     {Offsets, _, MaxAlign} = lists:foldl(
         fun({_Name, Type}, {Acc, CurOffset, MaxAlignAcc}) ->
             Size = scalar_size(Type),
-            Align = Size,  %% In FlatBuffers, alignment equals size for scalars
+            %% In FlatBuffers, alignment equals size for scalars
+            Align = Size,
             AlignedOffset = align_offset(CurOffset, Align),
             {[AlignedOffset | Acc], AlignedOffset + Size, max(MaxAlignAcc, Align)}
         end,

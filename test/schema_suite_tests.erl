@@ -9,173 +9,136 @@
 test_cases() ->
     [
         %% === test/vectors/ ===
-        {monster,
-         "test/vectors/test_monster.fbs",
-         'Monster',
-         <<"MONS">>,
-         #{name => <<"Goblin">>, hp => 50, mana => 25}},
+        {monster, "test/vectors/test_monster.fbs", 'Monster', <<"MONS">>, #{
+            name => <<"Goblin">>, hp => 50, mana => 25
+        }},
 
-        {nested,
-         "test/vectors/test_nested.fbs",
-         'Entity',
-         <<"NEST">>,
-         #{name => <<"Player">>, hp => 100, pos => #{x => 1.0, y => 2.0, z => 3.0}}},
+        {nested, "test/vectors/test_nested.fbs", 'Entity', <<"NEST">>, #{
+            name => <<"Player">>, hp => 100, pos => #{x => 1.0, y => 2.0, z => 3.0}
+        }},
 
-        {vector,
-         "test/vectors/test_vector.fbs",
-         'Inventory',
-         <<"VECT">>,
-         #{counts => [1, 2, 3], items => [<<"sword">>, <<"shield">>]}},
+        {vector, "test/vectors/test_vector.fbs", 'Inventory', <<"VECT">>, #{
+            counts => [1, 2, 3], items => [<<"sword">>, <<"shield">>]
+        }},
 
         %% === test/schemas/ - basic tables ===
-        {simple_table,
-         "test/schemas/simple_table.fbs",
-         table_a,
-         no_file_id,
-         #{field_a => 10, field_b => 20}},
+        {simple_table, "test/schemas/simple_table.fbs", table_a, no_file_id, #{
+            field_a => 10, field_b => 20
+        }},
 
-        {simple_table_plus,
-         "test/schemas/simple_table_plus.fbs",
-         table_a,
-         no_file_id,
-         #{field_a => 1, field_b => 2, field_c => 3}},
+        {simple_table_plus, "test/schemas/simple_table_plus.fbs", table_a, no_file_id, #{
+            field_a => 1, field_b => 2, field_c => 3
+        }},
 
-        {nested_table,
-         "test/schemas/nested.fbs",
-         outer,
-         no_file_id,
-         #{value_outer => 100, inner => #{value_inner => 200}}},
+        {nested_table, "test/schemas/nested.fbs", outer, no_file_id, #{
+            value_outer => 100, inner => #{value_inner => 200}
+        }},
 
         %% === test/schemas/ - scalars ===
-        {all_scalars,
-         "test/schemas/all_my_scalars.fbs",
-         scalars,
-         no_file_id,
-         #{my_byte => -10, my_ubyte => 200, my_bool => true,
-           my_short => -1000, my_ushort => 60000,
-           my_int => -100000, my_uint => 100000,
-           my_float => 3.14, my_long => -9000000000,
-           my_ulong => 9000000000, my_double => 2.718281828}},
+        {all_scalars, "test/schemas/all_my_scalars.fbs", scalars, no_file_id, #{
+            my_byte => -10,
+            my_ubyte => 200,
+            my_bool => true,
+            my_short => -1000,
+            my_ushort => 60000,
+            my_int => -100000,
+            my_uint => 100000,
+            my_float => 3.14,
+            my_long => -9000000000,
+            my_ulong => 9000000000,
+            my_double => 2.718281828
+        }},
 
-        {defaults,
-         "test/schemas/defaults.fbs",
-         scalars,
-         no_file_id,
-         #{my_int => 42}},
+        {defaults, "test/schemas/defaults.fbs", scalars, no_file_id, #{my_int => 42}},
 
         %% === test/schemas/ - strings ===
-        {string_table,
-         "test/schemas/string_table.fbs",
-         string_table,
-         no_file_id,
-         #{my_string => <<"hello world">>, my_bool => true}},
+        {string_table, "test/schemas/string_table.fbs", string_table, no_file_id, #{
+            my_string => <<"hello world">>, my_bool => true
+        }},
 
-        {bool_string_string,
-         "test/schemas/table_bool_string_string.fbs",
-         table_a,
-         no_file_id,
-         #{my_bool => true, my_string => <<"first">>, my_second_string => <<"second">>}},
+        {bool_string_string, "test/schemas/table_bool_string_string.fbs", table_a, no_file_id, #{
+            my_bool => true, my_string => <<"first">>, my_second_string => <<"second">>
+        }},
 
         %% === test/schemas/ - vectors ===
-        {int_vector,
-         "test/schemas/int_vector.fbs",
-         int_vector_table,
-         no_file_id,
-         #{int_vector => [10, 20, 30, 40]}},
+        {int_vector, "test/schemas/int_vector.fbs", int_vector_table, no_file_id, #{
+            int_vector => [10, 20, 30, 40]
+        }},
 
-        {string_vector,
-         "test/schemas/string_vector.fbs",
-         string_vector_table,
-         no_file_id,
-         #{string_vector => [<<"a">>, <<"bb">>, <<"ccc">>]}},
+        {string_vector, "test/schemas/string_vector.fbs", string_vector_table, no_file_id, #{
+            string_vector => [<<"a">>, <<"bb">>, <<"ccc">>]
+        }},
 
-        {table_vector,
-         "test/schemas/table_vector.fbs",
-         outer,
-         no_file_id,
-         #{inner => [#{value_inner => <<"one">>}, #{value_inner => <<"two">>}]}},
+        {table_vector, "test/schemas/table_vector.fbs", outer, no_file_id, #{
+            inner => [#{value_inner => <<"one">>}, #{value_inner => <<"two">>}]
+        }},
 
         %% === test/schemas/ - file identifiers ===
-        {identifier,
-         "test/schemas/identifier.fbs",
-         dummy_table,
-         <<"helo">>,
-         #{}},
+        {identifier, "test/schemas/identifier.fbs", dummy_table, <<"helo">>, #{}},
 
-        {no_identifier,
-         "test/schemas/no_identifier.fbs",
-         dummy_table,
-         no_file_id,
-         #{}},
+        {no_identifier, "test/schemas/no_identifier.fbs", dummy_table, no_file_id, #{}},
 
         %% === test/schemas/ - enums ===
-        {enum_field,
-         "test/schemas/enum_field.fbs",
-         enum_outer,
-         no_file_id,
-         #{enum_field => 1}},  %% Green = 1
+        {enum_field, "test/schemas/enum_field.fbs", enum_outer, no_file_id,
+            %% Green = 1
+            #{enum_field => 1}},
 
-        {vector_of_enums,
-         "test/schemas/vector_of_enums.fbs",
-         vector_table,
-         no_file_id,
-         #{enum_fields => [0, 1, 2]}},  %% Red, Green, Blue
+        {vector_of_enums, "test/schemas/vector_of_enums.fbs", vector_table, no_file_id,
+            %% Red, Green, Blue
+            #{enum_fields => [0, 1, 2]}},
 
         %% === test/schemas/ - nested tables with complex data ===
-        {error_schema,
-         "test/schemas/error.fbs",
-         root_table,
-         no_file_id,
-         #{foo => true, tables_field => [
-             #{bar => 1, string_field => <<"first">>},
-             #{bar => 2, string_field => <<"second">>}
-         ]}},
+        {error_schema, "test/schemas/error.fbs", root_table, no_file_id, #{
+            foo => true,
+            tables_field => [
+                #{bar => 1, string_field => <<"first">>},
+                #{bar => 2, string_field => <<"second">>}
+            ]
+        }},
 
         %% === test/complex_schemas/ ===
-        {config_path,
-         "test/schemas/config_path.fbs",
-         'TechnologiesRoot',
-         <<"BBBB">>,
-         #{technologies => [
-             #{category => <<"tech1">>},
-             #{category => <<"tech2">>}
-         ]}},
+        {config_path, "test/schemas/config_path.fbs", 'TechnologiesRoot', <<"BBBB">>, #{
+            technologies => [
+                #{category => <<"tech1">>},
+                #{category => <<"tech2">>}
+            ]
+        }},
 
         %% === unions ===
-        {union_hello,
-         "test/schemas/union_field.fbs",
-         command_root,
-         <<"cmnd">>,
-         #{data_type => hello, data => #{salute => <<"hi">>},
-           additions_value => 99}},
+        {union_hello, "test/schemas/union_field.fbs", command_root, <<"cmnd">>, #{
+            data_type => hello,
+            data => #{salute => <<"hi">>},
+            additions_value => 99
+        }},
 
-        {union_bye,
-         "test/schemas/union_field.fbs",
-         command_root,
-         <<"cmnd">>,
-         #{data_type => bye, data => #{greeting => 42}}},
+        {union_bye, "test/schemas/union_field.fbs", command_root, <<"cmnd">>, #{
+            data_type => bye, data => #{greeting => 42}
+        }},
 
         %% === comprehensive type tests ===
-        {all_types,
-         "test/vectors/test_alltypes.fbs",
-         'AllTypes',
-         <<"TYPE">>,
-         #{f_bool => true, f_byte => -10, f_ubyte => 200,
-           f_short => -1000, f_ushort => 50000,
-           f_int => -100000, f_uint => 100000,
-           f_long => -9000000000, f_ulong => 9000000000,
-           f_float => 3.14, f_double => 2.718281828,
-           f_string => <<"test string">>, f_color => 1}},
+        {all_types, "test/vectors/test_alltypes.fbs", 'AllTypes', <<"TYPE">>, #{
+            f_bool => true,
+            f_byte => -10,
+            f_ubyte => 200,
+            f_short => -1000,
+            f_ushort => 50000,
+            f_int => -100000,
+            f_uint => 100000,
+            f_long => -9000000000,
+            f_ulong => 9000000000,
+            f_float => 3.14,
+            f_double => 2.718281828,
+            f_string => <<"test string">>,
+            f_color => 1
+        }},
 
-        {vector_types,
-         "test/vectors/test_vectors2.fbs",
-         'VectorTypes',
-         <<"VEC2">>,
-         #{bytes => [1, 2, 255],
-           shorts => [-100, 0, 100],
-           longs => [-9000000000, 9000000000],
-           doubles => [1.1, 2.2, 3.3],
-           bools => [true, false, true]}}
+        {vector_types, "test/vectors/test_vectors2.fbs", 'VectorTypes', <<"VEC2">>, #{
+            bytes => [1, 2, 255],
+            shorts => [-100, 0, 100],
+            longs => [-9000000000, 9000000000],
+            doubles => [1.1, 2.2, 3.3],
+            bools => [true, false, true]
+        }}
     ].
 
 %% =============================================================================
@@ -183,23 +146,23 @@ test_cases() ->
 %% =============================================================================
 
 schema_suite_test_() ->
-    {foreach,
-     fun() -> ok end,
-     fun(_) -> ok end,
-     [generate_tests(Case) || Case <- test_cases()]}.
+    {foreach, fun() -> ok end, fun(_) -> ok end, [generate_tests(Case) || Case <- test_cases()]}.
 
 generate_tests({Name, SchemaPath, RootType, FileId, SampleData}) ->
     {atom_to_list(Name), [
-        {atom_to_list(Name) ++ "_parse",
-         fun() -> test_parse(SchemaPath) end},
-        {atom_to_list(Name) ++ "_encode_decode",
-         fun() -> test_encode_decode(SchemaPath, RootType, FileId, SampleData) end},
-        {atom_to_list(Name) ++ "_json_roundtrip",
-         fun() -> test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) end},
-        {atom_to_list(Name) ++ "_flatc_roundtrip",
-         fun() -> test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData) end},
-        {atom_to_list(Name) ++ "_binary_match",
-         fun() -> test_binary_match(SchemaPath, RootType, FileId, SampleData) end}
+        {atom_to_list(Name) ++ "_parse", fun() -> test_parse(SchemaPath) end},
+        {atom_to_list(Name) ++ "_encode_decode", fun() ->
+            test_encode_decode(SchemaPath, RootType, FileId, SampleData)
+        end},
+        {atom_to_list(Name) ++ "_json_roundtrip", fun() ->
+            test_json_roundtrip(SchemaPath, RootType, FileId, SampleData)
+        end},
+        {atom_to_list(Name) ++ "_flatc_roundtrip", fun() ->
+            test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData)
+        end},
+        {atom_to_list(Name) ++ "_binary_match", fun() ->
+            test_binary_match(SchemaPath, RootType, FileId, SampleData)
+        end}
     ]}.
 
 %% =============================================================================
@@ -263,9 +226,12 @@ test_flatc_roundtrip_with_id(SchemaPath, RootType, FileId, SampleData) ->
     ok = file:write_file(TmpBin, Buffer),
 
     %% Use flatc to decode
-    Cmd = lists:flatten(io_lib:format(
-        "flatc --json --strict-json -o /tmp ~s -- ~s 2>&1",
-        [SchemaPath, TmpBin])),
+    Cmd = lists:flatten(
+        io_lib:format(
+            "flatc --json --strict-json -o /tmp ~s -- ~s 2>&1",
+            [SchemaPath, TmpBin]
+        )
+    ),
     Result = os:cmd(Cmd),
     ?assertEqual("", Result),
 
@@ -288,9 +254,12 @@ test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData) ->
     ok = file:write_file(TmpBin, Buffer),
 
     %% Use flatc with --raw-binary
-    Cmd = lists:flatten(io_lib:format(
-        "flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
-        [SchemaPath, TmpBin])),
+    Cmd = lists:flatten(
+        io_lib:format(
+            "flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+            [SchemaPath, TmpBin]
+        )
+    ),
     Result = os:cmd(Cmd),
     ?assertEqual("", Result),
 
@@ -319,9 +288,12 @@ test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
     ok = file:write_file(TmpJson, JsonBin),
 
     %% Use flatc to encode JSON to binary
-    Cmd = lists:flatten(io_lib:format(
-        "flatc --binary -o /tmp ~s ~s 2>&1",
-        [SchemaPath, TmpJson])),
+    Cmd = lists:flatten(
+        io_lib:format(
+            "flatc --binary -o /tmp ~s ~s 2>&1",
+            [SchemaPath, TmpJson]
+        )
+    ),
     Result = os:cmd(Cmd),
     ?assertEqual("", Result, {flatc_error, Result}),
 
@@ -332,10 +304,15 @@ test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
     ErlBuffer = eflatbuffers:from_map(SampleData, Defs, RootType, FileId),
 
     %% Compare binaries - require exact match
-    ?assertEqual(FlatcBuffer, ErlBuffer, {binary_mismatch,
-        #{schema => SchemaPath,
-          flatc_size => byte_size(FlatcBuffer),
-          erlang_size => byte_size(ErlBuffer)}}),
+    ?assertEqual(
+        FlatcBuffer,
+        ErlBuffer,
+        {binary_mismatch, #{
+            schema => SchemaPath,
+            flatc_size => byte_size(FlatcBuffer),
+            erlang_size => byte_size(ErlBuffer)
+        }}
+    ),
 
     %% Cleanup
     file:delete(TmpJson),
@@ -354,7 +331,8 @@ verify_maps_equal(Expected, Actual) ->
             ActVal = maps:get(Key, Actual),
             verify_values_equal(Key, ExpVal, ActVal)
         end,
-        maps:keys(Expected)).
+        maps:keys(Expected)
+    ).
 
 verify_values_equal(_Key, Exp, Act) when is_map(Exp), is_map(Act) ->
     verify_maps_equal(Exp, Act);

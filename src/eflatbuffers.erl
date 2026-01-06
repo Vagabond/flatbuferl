@@ -126,7 +126,9 @@ table_to_map(TableRef, Defs, TableType, Buffer) ->
                                 {ok, TableValueRef} ->
                                     {union, Members} = maps:get(UnionName, Defs),
                                     MemberType = lists:nth(TypeIndex, Members),
-                                    ConvertedValue = table_to_map(TableValueRef, Defs, MemberType, Buffer),
+                                    ConvertedValue = table_to_map(
+                                        TableValueRef, Defs, MemberType, Buffer
+                                    ),
                                     Acc#{FieldName => ConvertedValue};
                                 missing ->
                                     Acc
@@ -231,7 +233,8 @@ get_field_bytes({table, TableOffset, Buffer}, FieldId, _Buffer) ->
             FieldOffsetInVTable = FieldOffsetPos - 4,
             <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
             case FieldOffset of
-                0 -> missing;
+                0 ->
+                    missing;
                 _ ->
                     %% Field is at TableOffset + FieldOffset
                     %% Read the uoffset to get actual data position
