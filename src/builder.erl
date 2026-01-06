@@ -26,10 +26,29 @@ from_map(Map, Defs, RootType, FileId) ->
     %% Calculate table size including ref padding
     TableSizeWithPadding = calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs),
 
-    %% Layout: header | [pre-vtable-pad] | vtable | table | ref_data
+    %% Build root vtable
     VTable = build_vtable_with_size(Scalars, Refs, 4, TableSizeWithPadding),
     VTableSize = byte_size(VTable),
 
+    %% Pre-build ref data to discover vtables for potential sharing
+    %% We need to know if any nested vtable matches root vtable
+    {RefVTables, _} = collect_ref_vtables(Refs, Defs),
+
+    %% Check if root vtable can be shared with ref data
+    case lists:member(VTable, RefVTables) of
+        true ->
+            %% Root vtable matches a ref vtable - use vtable-after layout
+            encode_root_vtable_after(Map, Defs, RootType, FileId, Scalars, Refs,
+                                      VTable, TableSizeWithPadding, HeaderSize);
+        false ->
+            %% No match - use standard vtable-before layout
+            encode_root_vtable_before(Scalars, Refs, VTable, VTableSize,
+                                       TableSizeWithPadding, HeaderSize, FileId, Defs)
+    end.
+
+%% Standard layout: header | [pad] | vtable | soffset | table | ref_data
+encode_root_vtable_before(Scalars, Refs, VTable, VTableSize, TableSizeWithPadding,
+                          HeaderSize, FileId, Defs) ->
     %% Calculate table position (4-byte aligned, plus adjustment for 8-byte fields)
     TablePosUnaligned = HeaderSize + VTableSize,
     TablePos4 = align_offset(TablePosUnaligned, 4),
@@ -49,7 +68,7 @@ from_map(Map, Defs, RootType, FileId) ->
     %% Build table data
     {TableData, RefDataBin} = build_table_data(Scalars, Refs, TablePos, Defs),
 
-    %% soffset points back to vtable
+    %% soffset points back to vtable (positive)
     VTablePos = HeaderSize + PreVTablePad,
     SOffset = TablePos - VTablePos,
 
@@ -58,6 +77,42 @@ from_map(Map, Defs, RootType, FileId) ->
         file_id_bin(FileId),
         <<0:(PreVTablePad*8)>>,
         VTable,
+        <<SOffset:32/little-signed>>,
+        TableData,
+        RefDataBin
+    ]).
+
+%% Shared vtable layout: header | soffset | table | ref_data (vtable is inside ref_data)
+encode_root_vtable_after(_Map, Defs, _RootType, FileId, Scalars, Refs,
+                          VTable, TableSizeWithPadding, HeaderSize) ->
+    %% Root table starts right after header (no vtable before it)
+    TablePos = HeaderSize,
+    RefDataStart = TablePos + TableSizeWithPadding,
+
+    %% Build field layout to get ref field offsets
+    AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
+    Slots = place_fields_backward(AllFields, TableSizeWithPadding),
+    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
+    SortedLayout = lists:sort(fun({_,_,_,A}, {_,_,_,B}) -> A =< B end, FieldLayout),
+
+    %% Extract refs in flatc order with field offsets
+    RefFields = [{Id, Type, Value, Off} || {Id, Type, Value, Off} <- SortedLayout,
+                                            not is_scalar_type(Type)],
+    RefFieldsOrdered = sort_refs_flatc_order_4(RefFields),
+
+    %% Build ref data with vtable sharing, getting ref positions and shared vtable position
+    {RefDataBin, RefPositions, SharedVTablePos} = build_ref_data_with_vtable_sharing(
+        RefFieldsOrdered, RefDataStart, VTable, Defs),
+
+    %% Build table data with correct uoffsets pointing to ref positions
+    TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
+
+    %% soffset points forward to shared vtable (negative because vtable is after)
+    SOffset = TablePos - SharedVTablePos,  %% Will be negative
+
+    iolist_to_binary([
+        <<TablePos:32/little-unsigned>>,
+        file_id_bin(FileId),
         <<SOffset:32/little-signed>>,
         TableData,
         RefDataBin
@@ -325,10 +380,6 @@ field_layout_order(SizeA, SizeB, _IdA, _IdB) when SizeA > SizeB -> true;
 field_layout_order(SizeA, SizeB, _IdA, _IdB) when SizeA < SizeB -> false;
 field_layout_order(_SizeA, _SizeB, IdA, IdB) -> IdA >= IdB.
 
-max_field_align([]) -> 1;
-max_field_align(Fields) ->
-    lists:max([min(field_inline_size(Type), 4) || {_, Type, _} <- Fields]).
-
 %% Calculate raw data size for all fields
 calc_backward_table_size(Fields) ->
     lists:sum([field_inline_size(Type) || {_, Type, _} <- Fields]).
@@ -430,6 +481,110 @@ calc_ref_padding([{_, {union_value, UnionName}, #{type := MemberType, value := V
     calc_ref_padding([{0, MemberType, Value, 0}], Pos, Defs);
 calc_ref_padding(_, _Pos, _Defs) -> 0.
 
+%% Collect all vtables that will be used in ref data (for vtable sharing detection)
+collect_ref_vtables(Refs, Defs) ->
+    lists:foldl(
+        fun({_Id, Type, Value}, {VTAcc, Seen}) ->
+            collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen)
+        end,
+        {[], #{}},
+        Refs
+    ).
+
+collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen) when is_list(Values) ->
+    %% For table vectors, collect vtables from elements
+    case maps:get(ElemType, Defs, undefined) of
+        {table, Fields} ->
+            lists:foldl(
+                fun(Value, {Acc, S}) ->
+                    FieldValues = collect_fields(Value, Fields, Defs),
+                    {Scalars, Refs} = lists:partition(
+                        fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                        FieldValues
+                    ),
+                    VT = build_vtable(Scalars, Refs, 4),
+                    case maps:is_key(VT, S) of
+                        true -> {Acc, S};
+                        false -> {[VT | Acc], S#{VT => true}}
+                    end
+                end,
+                {VTAcc, Seen},
+                Values
+            );
+        _ ->
+            {VTAcc, Seen}
+    end;
+collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen) when is_atom(Type), is_map(Value) ->
+    %% Nested table
+    case maps:get(Type, Defs, undefined) of
+        {table, Fields} ->
+            FieldValues = collect_fields(Value, Fields, Defs),
+            {Scalars, Refs} = lists:partition(
+                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                FieldValues
+            ),
+            VT = build_vtable(Scalars, Refs, 4),
+            case maps:is_key(VT, Seen) of
+                true -> {VTAcc, Seen};
+                false -> {[VT | VTAcc], Seen#{VT => true}}
+            end;
+        _ ->
+            {VTAcc, Seen}
+    end;
+collect_vtables_from_ref(_, _, _, VTAcc, Seen) ->
+    {VTAcc, Seen}.
+
+%% Build ref data with vtable sharing, returning the position of the shared vtable
+%% RefFieldsOrdered: list of {Id, Type, Value, FieldOff} tuples
+%% Returns: {RefDataBin, RefPositions, SharedVTablePos}
+build_ref_data_with_vtable_sharing(RefFieldsOrdered, RefDataStart, SharedVTable, Defs) ->
+    %% Encode refs and track shared vtable position and ref positions
+    {DataBins, Positions, VTablePos, _} = lists:foldl(
+        fun({_Id, Type, Value, FieldOff}, {DataAcc, PosAcc, VTPos, DataPos}) ->
+            %% Add padding for 8-byte vector alignment if needed
+            AlignPad = calc_vector_alignment_padding(Type, DataPos, Defs),
+            PaddedPos = DataPos + AlignPad,
+
+            DataBin = encode_ref(Type, Value, Defs),
+
+            %% For nested tables, uoffset should point to soffset (after vtable)
+            RefTargetPos = case is_nested_table_type(Type, Value, Defs) of
+                {true, VTableSize} -> PaddedPos + VTableSize;
+                false -> PaddedPos
+            end,
+
+            %% Check if this ref contains the shared vtable
+            NewVTPos = case find_vtable_in_ref(DataBin, SharedVTable) of
+                {found, RelPos} -> PaddedPos + RelPos;
+                not_found -> VTPos
+            end,
+
+            PadBin = <<0:(AlignPad*8)>>,
+            {[DataBin, PadBin | DataAcc],
+             PosAcc#{FieldOff => RefTargetPos},
+             NewVTPos,
+             PaddedPos + byte_size(DataBin)}
+        end,
+        {[], #{}, 0, RefDataStart},
+        RefFieldsOrdered
+    ),
+    {iolist_to_binary(lists:reverse(DataBins)), Positions, VTablePos}.
+
+%% Find the position of a vtable within a ref binary
+find_vtable_in_ref(Bin, VTable) ->
+    VTSize = byte_size(VTable),
+    find_vtable_in_ref(Bin, VTable, VTSize, 0).
+
+find_vtable_in_ref(Bin, VTable, VTSize, Offset) when byte_size(Bin) >= VTSize ->
+    case Bin of
+        <<VTable:VTSize/binary, _/binary>> ->
+            {found, Offset};
+        <<_, Rest/binary>> ->
+            find_vtable_in_ref(Rest, VTable, VTSize, Offset + 1)
+    end;
+find_vtable_in_ref(_, _, _, _) ->
+    not_found.
+
 %% Build ref data and return map of field_offset -> data_position
 %% For nested tables, position points to soffset, not vtable start
 build_ref_data(RefFields, RefDataStart, Defs) ->
@@ -525,20 +680,6 @@ build_inline_data(FieldLayout, TablePos, RefPositions) ->
     ),
     Data.
 
-%% Encode ref with string caching for deduplication
-encode_ref_cached(string, Bin, _Defs, DataPos, Cache) when is_binary(Bin) ->
-    case maps:get(Bin, Cache, undefined) of
-        undefined ->
-            DataBin = encode_string(Bin),
-            {new, DataBin, Cache#{Bin => DataPos}};
-        CachedPos ->
-            {cached, CachedPos, Cache}
-    end;
-encode_ref_cached(Type, Value, Defs, _DataPos, Cache) ->
-    %% Non-string refs don't use caching (yet)
-    DataBin = encode_ref(Type, Value, Defs),
-    {new, DataBin, Cache}.
-
 encode_string(Bin) ->
     Len = byte_size(Bin),
     TotalLen = 4 + Len + 1,
@@ -631,19 +772,25 @@ encode_string_vector_dedup(Values) ->
     ]).
 
 encode_ref_vector_standard(ElemType, Values, Defs) ->
-    %% Vector format: length (4) + offsets (4 each) + data (in reverse order like flatc)
+    %% Check if this is a table vector that needs vtable sharing
+    case maps:get(ElemType, Defs, undefined) of
+        {table, _Fields} ->
+            encode_table_vector_with_sharing(ElemType, Values, Defs);
+        _ ->
+            encode_ref_vector_simple(ElemType, Values, Defs)
+    end.
+
+%% Simple ref vector encoding (non-table elements)
+encode_ref_vector_simple(ElemType, Values, Defs) ->
     Len = length(Values),
     OffsetsSize = Len * 4,
     HeaderSize = 4 + OffsetsSize,
 
-    %% Encode elements in reverse order (like flatc does)
     ReversedValues = lists:reverse(Values),
     EncodedElems = [{encode_ref(ElemType, V, Defs), V} || V <- ReversedValues],
 
-    %% Calculate data positions and vtable offsets (reverse order)
     {_, ElemPositions} = lists:foldl(
         fun({ElemBin, Value}, {DataPos, PosAcc}) ->
-            %% For table elements, uoffset should point to soffset (after vtable)
             VTableOffset = case is_nested_table_type(ElemType, Value, Defs) of
                 {true, VTableSize} -> VTableSize;
                 false -> 0
@@ -653,9 +800,7 @@ encode_ref_vector_standard(ElemType, Values, Defs) ->
         {HeaderSize, []},
         EncodedElems
     ),
-    %% ElemPositions is now in original order (because we reversed twice)
 
-    %% Build offsets - for tables, point to soffset not vtable
     Offsets = lists:map(
         fun({Idx, {DataPos, VTableOffset, _}}) ->
             OffsetPos = 4 + (Idx * 4),
@@ -670,6 +815,251 @@ encode_ref_vector_standard(ElemType, Values, Defs) ->
         Offsets,
         [Bin || {Bin, _} <- EncodedElems]
     ]).
+
+%% Table vector encoding with vtable sharing (flatc compatible)
+%% Layout: elements with vtable-after first, then shared vtable, then elements with vtable-before
+%%
+%% flatc processes elements in reverse order (last first), and for each unique vtable:
+%% - The FIRST element processed (LAST in original order) gets vtable-after
+%% - The LAST element processed (FIRST in original order) gets vtable-before
+%% - The vtable is placed immediately before the vtable-before element
+encode_table_vector_with_sharing(TableType, Values, Defs) ->
+    Len = length(Values),
+    OffsetsSize = Len * 4,
+    HeaderSize = 4 + OffsetsSize,
+
+    %% Process in reverse order (last element first, like flatc)
+    IndexedValues = lists:zip(lists:seq(0, Len - 1), Values),
+    ReversedIndexedValues = lists:reverse(IndexedValues),
+
+    %% Collect vtable info for each element
+    ElemVTables = lists:map(
+        fun({OrigIdx, Value}) ->
+            {table, Fields} = maps:get(TableType, Defs),
+            FieldValues = collect_fields(Value, Fields, Defs),
+            {Scalars, Refs} = lists:partition(
+                fun({_Id, Type, _Val}) -> is_scalar_type(Type) end,
+                FieldValues
+            ),
+            VTable = build_vtable(Scalars, Refs, 4),
+            {OrigIdx, VTable, Scalars, Refs}
+        end,
+        ReversedIndexedValues
+    ),
+
+    %% Identify vtable owners: FIRST element in original order (LAST in processing order)
+    %% = element with LOWEST OrigIdx for each vtable
+    VTableOwners = lists:foldl(
+        fun({OrigIdx, VTable, _Scalars, _Refs}, Acc) ->
+            case maps:get(VTable, Acc, undefined) of
+                undefined -> Acc#{VTable => OrigIdx};
+                ExistingIdx when OrigIdx < ExistingIdx -> Acc#{VTable => OrigIdx};
+                _ -> Acc
+            end
+        end,
+        #{},
+        ElemVTables
+    ),
+
+    %% Encode all elements as body-only (soffset placeholder + data)
+    %% Also track which element owns which vtable
+    EncodedElems = lists:map(
+        fun({OrigIdx, VTable, Scalars, Refs}) ->
+            OwnerIdx = maps:get(VTable, VTableOwners),
+            IsOwner = OrigIdx =:= OwnerIdx,
+            %% Owner elements use normal padding (they're last and need trailing padding)
+            %% Non-owner elements use minimal padding (followed by vtable which needs 2-byte align)
+            TableBin = case IsOwner of
+                true -> encode_nested_table_body_only_padded(Scalars, Refs, Defs);
+                false -> encode_nested_table_body_only(Scalars, Refs, Defs)
+            end,
+            {OrigIdx, VTable, TableBin, IsOwner}
+        end,
+        ElemVTables
+    ),
+
+    %% Buffer order is same as ElemVTables order (reverse of original)
+    %% But we need to insert vtables between vtable-after and vtable-before elements
+    %%
+    %% For each vtable group:
+    %% - Non-owner elements come first (vtable-after, negative soffset)
+    %% - Then the vtable
+    %% - Then the owner element (vtable-before, positive soffset)
+
+    %% Group elements by vtable and sort within each group
+    VTableGroups = lists:foldl(
+        fun({OrigIdx, VTable, TableBin, IsOwner}, Acc) ->
+            Group = maps:get(VTable, Acc, []),
+            Acc#{VTable => [{OrigIdx, TableBin, IsOwner} | Group]}
+        end,
+        #{},
+        EncodedElems
+    ),
+
+    %% Build buffer: for each vtable group (in processing order), output non-owners, vtable, owner
+    %% We need to maintain processing order across all groups
+    %% Since all elements in this test have same vtable, we can simplify:
+    %% - Sort elements: non-owners first (by OrigIdx desc), then owner
+    SortedByVTable = lists:flatmap(
+        fun({VTable, Group}) ->
+            {Owners, NonOwners} = lists:partition(fun({_, _, IsOwner}) -> IsOwner end, Group),
+            %% Non-owners in descending OrigIdx order (same as processing order)
+            SortedNonOwners = lists:sort(
+                fun({IdxA, _, _}, {IdxB, _, _}) -> IdxA > IdxB end,
+                NonOwners
+            ),
+            %% Convert to buffer elements
+            NonOwnerElems = [{vtable_after, Idx, Bin, VTable} || {Idx, Bin, _} <- SortedNonOwners],
+            OwnerElems = [{vtable_before, Idx, Bin, VTable} || {Idx, Bin, _} <- Owners],
+            %% Insert vtable before owner
+            NonOwnerElems ++ [{vtable_insert, VTable}] ++ OwnerElems
+        end,
+        maps:to_list(VTableGroups)
+    ),
+
+    %% Calculate positions with proper alignment
+    %% Tables must be 4-byte aligned, so vtables need padding to ensure
+    %% the following vtable_before element is 4-byte aligned
+    {ElemInfos, VTablePositions, PaddingMap, _FinalPos} = lists:foldl(
+        fun(Elem, {InfoAcc, VTPos, PadMap, DataPos}) ->
+            case Elem of
+                {vtable_insert, VTable} ->
+                    VTSize = byte_size(VTable),
+                    %% Calculate padding needed so that (DataPos + Pad + VTSize) is 4-byte aligned
+                    %% This ensures the vtable_before element after the vtable is aligned
+                    AlignPad = (4 - ((DataPos + VTSize) rem 4)) rem 4,
+                    PaddedPos = DataPos + AlignPad,
+                    {InfoAcc, VTPos#{VTable => PaddedPos}, PadMap#{VTable => AlignPad}, PaddedPos + VTSize};
+                {vtable_after, OrigIdx, Bin, _VTable} ->
+                    SOffsetPos = DataPos,  %% soffset is at start of body
+                    {[{OrigIdx, SOffsetPos, Bin} | InfoAcc], VTPos, PadMap, DataPos + byte_size(Bin)};
+                {vtable_before, OrigIdx, Bin, _VTable} ->
+                    SOffsetPos = DataPos,  %% soffset is at start of body
+                    {[{OrigIdx, SOffsetPos, Bin} | InfoAcc], VTPos, PadMap, DataPos + byte_size(Bin)}
+            end
+        end,
+        {[], #{}, #{}, HeaderSize},
+        SortedByVTable
+    ),
+
+    %% Sort by original index to build correct offset array
+    ElemInfosByOrigIdx = lists:sort(fun({IdxA, _, _}, {IdxB, _, _}) -> IdxA =< IdxB end, ElemInfos),
+
+    %% Build offsets array in original order
+    Offsets = lists:map(
+        fun({Idx, {_OrigIdx, SOffsetPos, _Bin}}) ->
+            OffsetPos = 4 + (Idx * 4),
+            UOffset = SOffsetPos - OffsetPos,
+            <<UOffset:32/little-signed>>
+        end,
+        lists:zip(lists:seq(0, Len - 1), ElemInfosByOrigIdx)
+    ),
+
+    %% Build lookup map for soffset positions
+    SOffsetPosMap = maps:from_list([{Idx, Pos} || {Idx, Pos, _Bin} <- ElemInfos]),
+
+    %% Build data section with proper soffsets
+    DataBins = lists:map(
+        fun(Elem) ->
+            case Elem of
+                {vtable_insert, VTable} ->
+                    %% Insert padding before vtable for alignment
+                    PadLen = maps:get(VTable, PaddingMap, 0),
+                    PadBin = <<0:(PadLen*8)>>,
+                    <<PadBin/binary, VTable/binary>>;
+                {vtable_after, OrigIdx, Bin, VTable} ->
+                    %% Negative soffset (vtable is after this element)
+                    VTablePos = maps:get(VTable, VTablePositions),
+                    SOffsetPos = maps:get(OrigIdx, SOffsetPosMap),
+                    SOffset = SOffsetPos - VTablePos,  %% Negative
+                    <<_:32, Rest/binary>> = Bin,
+                    <<SOffset:32/little-signed, Rest/binary>>;
+                {vtable_before, OrigIdx, Bin, VTable} ->
+                    %% Positive soffset (vtable is before this element)
+                    VTablePos = maps:get(VTable, VTablePositions),
+                    SOffsetPos = maps:get(OrigIdx, SOffsetPosMap),
+                    SOffset = SOffsetPos - VTablePos,  %% Positive
+                    <<_:32, Rest/binary>> = Bin,
+                    <<SOffset:32/little-signed, Rest/binary>>
+            end
+        end,
+        SortedByVTable
+    ),
+
+    iolist_to_binary([
+        <<Len:32/little>>,
+        Offsets,
+        DataBins
+    ]).
+
+%% Encode nested table as body only (soffset placeholder + inline data + refs)
+%% Uses minimal string padding for use in table vectors with vtable sharing (non-owner elements)
+encode_nested_table_body_only(Scalars, Refs, Defs) ->
+    {TableData, RefDataBin} = build_table_data_minimal_padding(Scalars, Refs, 0, Defs),
+    iolist_to_binary([
+        <<0:32/little-signed>>,  %% Placeholder soffset
+        TableData,
+        RefDataBin
+    ]).
+
+%% Encode nested table as body only with normal string padding (for owner elements)
+encode_nested_table_body_only_padded(Scalars, Refs, Defs) ->
+    {TableData, RefDataBin} = build_table_data(Scalars, Refs, 0, Defs),
+    iolist_to_binary([
+        <<0:32/little-signed>>,  %% Placeholder soffset
+        TableData,
+        RefDataBin
+    ]).
+
+%% Build table data with minimal string padding (for table vectors with vtable sharing)
+%% Strings are NOT padded to 4-byte boundary since vtables only need 2-byte alignment
+build_table_data_minimal_padding(Scalars, Refs, TablePos, Defs) ->
+    AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
+    RawSize = calc_backward_table_size(AllFields),
+    TableDataSize = align_offset(RawSize, 4),
+    BaseTableSize = 4 + TableDataSize,
+    Slots = place_fields_backward(AllFields, BaseTableSize),
+    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
+    SortedLayout = lists:sort(fun({_,_,_,A}, {_,_,_,B}) -> A =< B end, FieldLayout),
+    RefFields = [{Id, Type, Value, Off} || {Id, Type, Value, Off} <- SortedLayout,
+                                            not is_scalar_type(Type)],
+    RefFieldsOrdered = sort_refs_flatc_order_4(RefFields),
+    RefPadding = calc_ref_padding(RefFieldsOrdered, TablePos + BaseTableSize, Defs),
+    TableSize = BaseTableSize + RefPadding,
+    RefDataStart = TablePos + TableSize,
+    {RefDataBin, RefPositions} = build_ref_data_minimal_padding(RefFieldsOrdered, RefDataStart, Defs),
+    TableData = build_inline_data(SortedLayout, TablePos, RefPositions),
+    PadBin = <<0:(RefPadding*8)>>,
+    {<<TableData/binary, PadBin/binary>>, RefDataBin}.
+
+%% Build ref data with minimal string padding
+build_ref_data_minimal_padding(RefFields, RefDataStart, Defs) ->
+    {DataBins, Positions, _} = lists:foldl(
+        fun({_Id, Type, Value, FieldOff}, {DataAcc, PosAcc, DataPos}) ->
+            AlignPad = calc_vector_alignment_padding(Type, DataPos, Defs),
+            PaddedPos = DataPos + AlignPad,
+            DataBin = encode_ref_minimal_padding(Type, Value, Defs),
+            RefTargetPos = case is_nested_table_type(Type, Value, Defs) of
+                {true, VTableSize} -> PaddedPos + VTableSize;
+                false -> PaddedPos
+            end,
+            PadBin = <<0:(AlignPad*8)>>,
+            {[DataBin, PadBin | DataAcc],
+             PosAcc#{FieldOff => RefTargetPos},
+             PaddedPos + byte_size(DataBin)}
+        end,
+        {[], #{}, RefDataStart},
+        RefFields
+    ),
+    {iolist_to_binary(lists:reverse(DataBins)), Positions}.
+
+%% Encode ref with minimal string padding (no 4-byte alignment padding)
+encode_ref_minimal_padding(string, Bin, _Defs) when is_binary(Bin) ->
+    Len = byte_size(Bin),
+    %% No padding - just length + data + null terminator
+    <<Len:32/little, Bin/binary, 0>>;
+encode_ref_minimal_padding(Type, Value, Defs) ->
+    encode_ref(Type, Value, Defs).
 
 encode_nested_table(TableType, Map, Defs) ->
     %% Build a nested table - vtable first, then table (positive soffset, like flatc)
