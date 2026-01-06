@@ -162,6 +162,91 @@ nested_with_string_test() ->
     ?assertEqual({ok, 30}, reader:get_field(ChildRef, 1, int, Buffer)).
 
 %% =============================================================================
+%% Struct Tests
+%% =============================================================================
+
+simple_struct_test() ->
+    %% Struct Vec2 with two floats
+    Defs = #{
+        'Vec2' => {struct, [{x, float}, {y, float}]},
+        test => {table, [{pos, 'Vec2', #{id => 0}}]}
+    },
+    Map = #{pos => #{x => 1.0, y => 2.0}},
+    Buffer = builder:from_map(Map, Defs, test),
+    Root = reader:get_root(Buffer),
+    {ok, Struct} = reader:get_field(Root, 0, {struct, [{x, float}, {y, float}]}, Buffer),
+    ?assertEqual(1.0, maps:get(x, Struct)),
+    ?assertEqual(2.0, maps:get(y, Struct)).
+
+struct_with_int_and_float_test() ->
+    %% Struct with mixed types to test alignment
+    Defs = #{
+        'Mixed' => {struct, [{a, byte}, {b, float}, {c, short}]},
+        test => {table, [{data, 'Mixed', #{id => 0}}]}
+    },
+    Map = #{data => #{a => 10, b => 3.14, c => 1000}},
+    Buffer = builder:from_map(Map, Defs, test),
+    Root = reader:get_root(Buffer),
+    {ok, Struct} = reader:get_field(Root, 0, {struct, [{a, byte}, {b, float}, {c, short}]}, Buffer),
+    ?assertEqual(10, maps:get(a, Struct)),
+    {ok, BVal} = maps:find(b, Struct),
+    ?assert(abs(BVal - 3.14) < 0.001),
+    ?assertEqual(1000, maps:get(c, Struct)).
+
+struct_and_scalar_test() ->
+    %% Table with both a struct and a regular scalar
+    Defs = #{
+        'Vec2' => {struct, [{x, float}, {y, float}]},
+        test => {table, [{pos, 'Vec2', #{id => 0}}, {name, string, #{id => 1}}]}
+    },
+    Map = #{pos => #{x => 5.0, y => 10.0}, name => <<"test">>},
+    Buffer = builder:from_map(Map, Defs, test),
+    Root = reader:get_root(Buffer),
+    {ok, Struct} = reader:get_field(Root, 0, {struct, [{x, float}, {y, float}]}, Buffer),
+    ?assertEqual(5.0, maps:get(x, Struct)),
+    ?assertEqual(10.0, maps:get(y, Struct)),
+    ?assertEqual({ok, <<"test">>}, reader:get_field(Root, 1, string, Buffer)).
+
+%% =============================================================================
+%% Union Tests
+%% =============================================================================
+
+simple_union_test() ->
+    %% Parse the union schema
+    {ok, {Defs, _}} = schema:parse_file("test/schemas/union_field.fbs"),
+
+    %% Build a buffer with hello variant
+    Map = #{data => #{type => hello, value => #{salute => <<"hi there">>}},
+            additions_value => 42},
+    Buffer = builder:from_map(Map, Defs, command_root, <<"cmnd">>),
+
+    %% Verify file identifier
+    ?assertEqual(<<"cmnd">>, reader:get_file_id(Buffer)),
+
+    %% Decode and verify
+    Ctx = eflatbuffers:new(Buffer, Defs, command_root),
+    Result = eflatbuffers:to_map(Ctx),
+
+    ?assertEqual(42, maps:get(additions_value, Result)),
+    DataField = maps:get(data, Result),
+    ?assertEqual(hello, maps:get(type, DataField)),
+    ?assertEqual(#{salute => <<"hi there">>}, maps:get(value, DataField)).
+
+union_bye_variant_test() ->
+    %% Test the 'bye' variant of the union
+    {ok, {Defs, _}} = schema:parse_file("test/schemas/union_field.fbs"),
+
+    Map = #{data => #{type => bye, value => #{greeting => 123}}},
+    Buffer = builder:from_map(Map, Defs, command_root, <<"cmnd">>),
+
+    Ctx = eflatbuffers:new(Buffer, Defs, command_root),
+    Result = eflatbuffers:to_map(Ctx),
+
+    DataField = maps:get(data, Result),
+    ?assertEqual(bye, maps:get(type, DataField)),
+    ?assertEqual(#{greeting => 123}, maps:get(value, DataField)).
+
+%% =============================================================================
 %% JSON Roundtrip Tests
 %% =============================================================================
 

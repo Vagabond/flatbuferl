@@ -51,6 +51,7 @@ atoms -> atom             : [ '$1' ].
 atoms -> atom ',' atoms   : [ '$1' | '$3'].
 
 atom -> string : get_value_atom('$1').
+atom -> string '=' int : {get_value_atom('$1'), get_value('$3')}.  %% enum with explicit value
 
 Erlang code.
 

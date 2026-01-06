@@ -180,12 +180,21 @@ read_value(Buffer, Pos, {Type, Default}) when is_atom(Type), is_number(Default);
                                                is_atom(Type), is_boolean(Default) ->
     read_value(Buffer, Pos, Type);
 
-%% Union - read type byte, then table offset
-%% Union fields are stored as two fields: type (ubyte) and value (table offset)
-%% This reads just the type byte; caller must read value separately
+%% Union type - read the discriminator byte
 read_value(Buffer, Pos, {union_type, _UnionName}) ->
     <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
     {ok, TypeIndex};
+
+%% Union value - read offset to table (returns table ref, caller resolves type)
+read_value(Buffer, Pos, {union_value, _UnionName}) ->
+    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+    NestedTablePos = Pos + TableOffset,
+    {ok, {table, NestedTablePos, Buffer}};
+
+%% Struct - read inline fixed-size data
+read_value(Buffer, Pos, {struct, Fields}) ->
+    {StructMap, _Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
+    {ok, StructMap};
 
 %% Nested table - return table reference for lazy access
 read_value(Buffer, Pos, TableName) when is_atom(TableName) ->
@@ -261,8 +270,117 @@ read_vector_element(Buffer, Pos, string) ->
     <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary, _/binary>> = Buffer,
     {4, StringData};
 
+%% Struct in vector (inline data)
+read_vector_element(Buffer, Pos, {struct, Fields}) ->
+    {StructMap, Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
+    {Size, StructMap};
+
 %% Table in vector (offset to table)
 read_vector_element(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {4, {table, NestedTablePos, Buffer}}.
+
+%% =============================================================================
+%% Struct Reading
+%% =============================================================================
+
+%% Read struct fields inline - structs are fixed-size, no vtable
+read_struct_fields(_Buffer, _Pos, [], Acc) ->
+    {Acc, 0};
+read_struct_fields(Buffer, Pos, Fields, Acc) ->
+    %% Calculate struct layout with alignment
+    {FieldOffsets, TotalSize} = calc_struct_layout(Fields),
+    %% Read each field
+    FinalAcc = lists:foldl(
+        fun({{Name, Type}, Offset}, AccIn) ->
+            {ok, Value} = read_struct_value(Buffer, Pos + Offset, Type),
+            AccIn#{Name => Value}
+        end,
+        Acc,
+        lists:zip(Fields, FieldOffsets)
+    ),
+    {FinalAcc, TotalSize}.
+
+%% Calculate field offsets in struct with proper alignment
+calc_struct_layout(Fields) ->
+    {Offsets, _, MaxAlign} = lists:foldl(
+        fun({_Name, Type}, {Acc, CurOffset, MaxAlignAcc}) ->
+            Size = scalar_size(Type),
+            Align = Size,  %% In FlatBuffers, alignment equals size for scalars
+            AlignedOffset = align_offset(CurOffset, Align),
+            {[AlignedOffset | Acc], AlignedOffset + Size, max(MaxAlignAcc, Align)}
+        end,
+        {[], 0, 1},
+        Fields
+    ),
+    ReversedOffsets = lists:reverse(Offsets),
+    %% Total size aligned to max alignment
+    LastOffset = lists:last(ReversedOffsets),
+    {_Name, LastType} = lists:last(Fields),
+    RawSize = LastOffset + scalar_size(LastType),
+    TotalSize = align_offset(RawSize, MaxAlign),
+    {ReversedOffsets, TotalSize}.
+
+align_offset(Offset, Align) ->
+    case Offset rem Align of
+        0 -> Offset;
+        Rem -> Offset + (Align - Rem)
+    end.
+
+scalar_size(bool) -> 1;
+scalar_size(byte) -> 1;
+scalar_size(ubyte) -> 1;
+scalar_size(int8) -> 1;
+scalar_size(uint8) -> 1;
+scalar_size(short) -> 2;
+scalar_size(ushort) -> 2;
+scalar_size(int16) -> 2;
+scalar_size(uint16) -> 2;
+scalar_size(int) -> 4;
+scalar_size(uint) -> 4;
+scalar_size(int32) -> 4;
+scalar_size(uint32) -> 4;
+scalar_size(float) -> 4;
+scalar_size(float32) -> 4;
+scalar_size(long) -> 8;
+scalar_size(ulong) -> 8;
+scalar_size(int64) -> 8;
+scalar_size(uint64) -> 8;
+scalar_size(double) -> 8;
+scalar_size(float64) -> 8.
+
+%% Read a scalar value from struct (no offset indirection)
+read_struct_value(Buffer, Pos, bool) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {ok, Value =/= 0};
+read_struct_value(Buffer, Pos, Type) when Type == byte; Type == int8 ->
+    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == ubyte; Type == uint8 ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == short; Type == int16 ->
+    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == ushort; Type == uint16 ->
+    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == int; Type == int32 ->
+    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == uint; Type == uint32 ->
+    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == float; Type == float32 ->
+    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == long; Type == int64 ->
+    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == ulong; Type == uint64 ->
+    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_struct_value(Buffer, Pos, Type) when Type == double; Type == float64 ->
+    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
+    {ok, Value}.

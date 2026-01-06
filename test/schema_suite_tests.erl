@@ -139,7 +139,43 @@ test_cases() ->
          #{technologies => [
              #{category => <<"tech1">>},
              #{category => <<"tech2">>}
-         ]}}
+         ]}},
+
+        %% === unions ===
+        {union_hello,
+         "test/schemas/union_field.fbs",
+         command_root,
+         <<"cmnd">>,
+         #{data => #{type => hello, value => #{salute => <<"hi">>}},
+           additions_value => 99}},
+
+        {union_bye,
+         "test/schemas/union_field.fbs",
+         command_root,
+         <<"cmnd">>,
+         #{data => #{type => bye, value => #{greeting => 42}}}},
+
+        %% === comprehensive type tests ===
+        {all_types,
+         "test/vectors/test_alltypes.fbs",
+         'AllTypes',
+         <<"TYPE">>,
+         #{f_bool => true, f_byte => -10, f_ubyte => 200,
+           f_short => -1000, f_ushort => 50000,
+           f_int => -100000, f_uint => 100000,
+           f_long => -9000000000, f_ulong => 9000000000,
+           f_float => 3.14, f_double => 2.718281828,
+           f_string => <<"test string">>, f_color => 1}},
+
+        {vector_types,
+         "test/vectors/test_vectors2.fbs",
+         'VectorTypes',
+         <<"VEC2">>,
+         #{bytes => [1, 2, 255],
+           shorts => [-100, 0, 100],
+           longs => [-9000000000, 9000000000],
+           doubles => [1.1, 2.2, 3.3],
+           bools => [true, false, true]}}
     ].
 
 %% =============================================================================

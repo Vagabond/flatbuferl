@@ -41,13 +41,38 @@ parse_file(Filename) ->
 %% Post-process parsed schema: assign field IDs, validate
 -spec process({map(), map()}) -> {map(), map()}.
 process({Defs, Opts}) ->
-    ProcessedDefs = maps:map(fun(_Name, Def) -> process_def(Def) end, Defs),
+    ProcessedDefs = maps:map(fun(_Name, Def) -> process_def(Def, Defs) end, Defs),
     {ProcessedDefs, Opts}.
 
-process_def({table, Fields}) ->
-    {table, assign_field_ids(Fields)};
-process_def(Other) ->
+process_def({table, Fields}, Defs) ->
+    %% Expand union fields into type + value pairs before assigning IDs
+    ExpandedFields = expand_union_fields(Fields, Defs),
+    {table, assign_field_ids(ExpandedFields)};
+process_def(Other, _Defs) ->
     Other.
+
+%% Expand union fields into type field + value field
+expand_union_fields(Fields, Defs) ->
+    lists:flatmap(
+        fun(Field) ->
+            {Name, Type, Attrs} = normalize_field(Field),
+            case maps:get(Type, Defs, undefined) of
+                {union, _Members} ->
+                    %% Union field becomes two fields: name_type and name
+                    TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+                    [
+                        {TypeFieldName, {union_type, Type}, Attrs},
+                        {Name, {union_value, Type}, Attrs}
+                    ];
+                _ ->
+                    [Field]
+            end
+        end,
+        Fields
+    ).
+
+normalize_field({Name, Type}) -> {Name, Type, #{}};
+normalize_field({Name, Type, Attrs}) -> {Name, Type, Attrs}.
 
 %% Assign sequential IDs to fields, respecting explicit IDs
 assign_field_ids(Fields) ->

@@ -100,23 +100,50 @@ table_to_map(TableRef, Defs, TableType, Buffer) ->
         fun(FieldDef, Acc) ->
             {FieldName, FieldId, Type, Default} = parse_field_def(FieldDef),
             ResolvedType = resolve_type(Type, Defs),
-            case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                {ok, Value} ->
-                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer)};
-                missing when Default =/= undefined ->
-                    Acc#{FieldName => Default};
-                missing ->
-                    Acc
+            case Type of
+                {union_type, _} ->
+                    %% Skip the type field - it's handled with the value field
+                    Acc;
+                {union_value, UnionName} ->
+                    %% Read both type and value, convert to map with type info
+                    TypeFieldId = FieldId - 1,
+                    case reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
+                        {ok, 0} ->
+                            %% NONE type
+                            Acc;
+                        {ok, TypeIndex} ->
+                            case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                                {ok, TableValueRef} ->
+                                    {union, Members} = maps:get(UnionName, Defs),
+                                    MemberType = lists:nth(TypeIndex, Members),
+                                    ConvertedValue = table_to_map(TableValueRef, Defs, MemberType, Buffer),
+                                    Acc#{FieldName => #{type => MemberType, value => ConvertedValue}};
+                                missing ->
+                                    Acc
+                            end;
+                        missing ->
+                            Acc
+                    end;
+                _ ->
+                    case reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                        {ok, Value} ->
+                            Acc#{FieldName => convert_value(Value, Type, Defs, Buffer)};
+                        missing when Default =/= undefined ->
+                            Acc#{FieldName => Default};
+                        missing ->
+                            Acc
+                    end
             end
         end,
         #{},
         Fields
     ).
 
-%% Resolve type name to its definition (for enums)
+%% Resolve type name to its definition (for enums and structs)
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, Base}, _Values} -> {enum, Base};
+        {struct, Fields} -> {struct, Fields};
         _ -> Type
     end;
 resolve_type({vector, ElemType}, Defs) ->

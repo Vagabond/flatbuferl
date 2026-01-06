@@ -69,17 +69,73 @@ from_map(Map, Defs, RootType, FileId) ->
 %% =============================================================================
 
 collect_fields(Map, Fields, Defs) ->
-    lists:filtermap(
+    lists:flatmap(
         fun(FieldDef) ->
             {Name, FieldId, Type, Default} = parse_field_def(FieldDef),
-            case get_field_value(Map, Name) of
-                undefined -> false;
-                Value when Value =:= Default -> false;
-                Value -> {true, {FieldId, resolve_type(Type, Defs), Value}}
+            case Type of
+                {union_type, UnionName} ->
+                    %% Union type field - get value from corresponding value field
+                    ValueFieldName = strip_type_suffix(Name),
+                    case get_field_value(Map, ValueFieldName) of
+                        undefined -> [];
+                        UnionMap when is_map(UnionMap) ->
+                            MemberType = get_union_type(UnionMap),
+                            {union, Members} = maps:get(UnionName, Defs),
+                            TypeIndex = find_union_index(MemberType, Members, 1),
+                            [{FieldId, {union_type, UnionName}, TypeIndex}];
+                        _ -> []
+                    end;
+                {union_value, UnionName} ->
+                    %% Union value field
+                    case get_field_value(Map, Name) of
+                        undefined -> [];
+                        UnionMap when is_map(UnionMap) ->
+                            MemberType = get_union_type(UnionMap),
+                            MemberValue = get_union_value(UnionMap),
+                            [{FieldId, {union_value, UnionName}, #{type => MemberType, value => MemberValue}}];
+                        _ -> []
+                    end;
+                _ ->
+                    case get_field_value(Map, Name) of
+                        undefined -> [];
+                        Value when Value =:= Default -> [];
+                        Value -> [{FieldId, resolve_type(Type, Defs), Value}]
+                    end
             end
         end,
         Fields
     ).
+
+strip_type_suffix(Name) ->
+    NameStr = atom_to_list(Name),
+    case lists:suffix("_type", NameStr) of
+        true -> list_to_atom(lists:sublist(NameStr, length(NameStr) - 5));
+        false -> Name
+    end.
+
+find_union_index(Type, [Type | _], Index) -> Index;
+find_union_index(Type, [{Type, _Val} | _], Index) -> Index;  %% Handle enum with explicit value
+find_union_index(Type, [_ | Rest], Index) -> find_union_index(Type, Rest, Index + 1);
+find_union_index(_Type, [], _Index) -> 0.  %% NONE
+
+%% Get union type from map (handles both atom and binary keys)
+get_union_type(Map) ->
+    case maps:get(type, Map, undefined) of
+        undefined ->
+            case maps:get(<<"type">>, Map, undefined) of
+                undefined -> error({missing_union_type, Map});
+                TypeBin when is_binary(TypeBin) -> binary_to_atom(TypeBin);
+                Type -> Type
+            end;
+        Type -> Type
+    end.
+
+%% Get union value from map (handles both atom and binary keys)
+get_union_value(Map) ->
+    case maps:get(value, Map, undefined) of
+        undefined -> maps:get(<<"value">>, Map, #{});
+        Value -> Value
+    end.
 
 %% Look up field by atom key or binary key
 get_field_value(Map, Name) when is_atom(Name) ->
@@ -89,6 +145,8 @@ get_field_value(Map, Name) when is_atom(Name) ->
     end.
 
 is_scalar_type({enum, _}) -> true;
+is_scalar_type({struct, _}) -> true;  %% Structs are inline fixed-size data
+is_scalar_type({union_type, _}) -> true;  %% Union type field is ubyte
 is_scalar_type(bool) -> true;
 is_scalar_type(byte) -> true;
 is_scalar_type(ubyte) -> true;
@@ -112,10 +170,11 @@ is_scalar_type(double) -> true;
 is_scalar_type(float64) -> true;
 is_scalar_type(_) -> false.
 
-%% Resolve type name to its definition (for enums)
+%% Resolve type name to its definition (for enums and structs)
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, Base}, _Values} -> {enum, Base};
+        {struct, Fields} -> {struct, Fields};
         _ -> Type
     end;
 resolve_type({vector, ElemType}, Defs) ->
@@ -247,6 +306,11 @@ encode_ref(string, Bin, _Defs) when is_binary(Bin) ->
 encode_ref({vector, ElemType}, Values, Defs) when is_list(Values) ->
     encode_vector(ElemType, Values, Defs);
 
+encode_ref({union_value, UnionName}, #{type := MemberType, value := Value}, Defs) ->
+    %% Union value - encode as the member table type
+    {union, _Members} = maps:get(UnionName, Defs),
+    encode_nested_table(MemberType, Value, Defs);
+
 encode_ref(TableType, Map, Defs) when is_atom(TableType), is_map(Map) ->
     %% Nested table - build it inline
     %% Returns {Binary, TableEntryOffset} where TableEntryOffset is where soffset lives
@@ -363,7 +427,31 @@ encode_scalar(Value, float) -> <<Value:32/little-float>>;
 encode_scalar(Value, float32) -> <<Value:32/little-float>>;
 encode_scalar(Value, double) -> <<Value:64/little-float>>;
 encode_scalar(Value, float64) -> <<Value:64/little-float>>;
-encode_scalar(Value, {enum, Base}) -> encode_scalar(Value, Base).
+encode_scalar(Value, {enum, Base}) -> encode_scalar(Value, Base);
+encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
+    encode_struct(Map, Fields);
+encode_scalar(TypeIndex, {union_type, _UnionName}) when is_integer(TypeIndex) ->
+    <<TypeIndex:8/unsigned>>.
+
+%% Encode struct as inline data
+encode_struct(Map, Fields) ->
+    {Bin, _} = lists:foldl(
+        fun({Name, Type}, {Acc, Off}) ->
+            Size = type_size(Type),
+            AlignedOff = align_offset(Off, Size),
+            Pad = AlignedOff - Off,
+            Value = get_field_value(Map, Name),
+            ValBin = encode_scalar(Value, Type),
+            {<<Acc/binary, 0:(Pad*8), ValBin/binary>>, AlignedOff + Size}
+        end,
+        {<<>>, 0},
+        Fields
+    ),
+    %% Pad to struct alignment
+    StructSize = calc_struct_size(Fields),
+    CurrentSize = byte_size(Bin),
+    TrailingPad = StructSize - CurrentSize,
+    <<Bin/binary, 0:(TrailingPad*8)>>.
 
 %% =============================================================================
 %% Helpers
@@ -391,7 +479,23 @@ type_size(float32) -> 4;
 type_size(double) -> 8;
 type_size(float64) -> 8;
 type_size({enum, Base}) -> type_size(Base);
+type_size({struct, Fields}) -> calc_struct_size(Fields);
+type_size({union_type, _}) -> 1;  %% Union type is ubyte
 type_size(_) -> 4.
+
+%% Calculate struct size with proper alignment
+calc_struct_size(Fields) ->
+    {_, EndOffset, MaxAlign} = lists:foldl(
+        fun({_Name, Type}, {_, CurOffset, MaxAlignAcc}) ->
+            Size = type_size(Type),
+            Align = Size,
+            AlignedOffset = align_offset(CurOffset, Align),
+            {ok, AlignedOffset + Size, max(MaxAlignAcc, Align)}
+        end,
+        {ok, 0, 1},
+        Fields
+    ),
+    align_offset(EndOffset, MaxAlign).
 
 align_offset(Off, Align) ->
     case Off rem Align of
