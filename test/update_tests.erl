@@ -475,6 +475,82 @@ shrink_no_large_binary_copy_test() ->
         ?assert(false)
     end.
 
+same_size_string_update_test() ->
+    %% Same-size string update should also be in-place
+    Ctx = simple_ctx(),
+    %% Original name is "Goblin" (6 chars), replace with "Dragon" (6 chars)
+    Result = flatbuferl_update:preflight(Ctx, #{name => <<"Dragon">>}),
+    ?assertMatch({simple, [{_, _, {string_shrink, _}, [name], <<"Dragon">>}]}, Result),
+    %% Verify it works
+    NewBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{name => <<"Dragon">>})),
+    NewCtx = flatbuferl:new(NewBuffer, ctx_schema(Ctx)),
+    ?assertEqual(<<"Dragon">>, flatbuferl:get(NewCtx, [name])).
+
+same_size_vector_update_test() ->
+    %% Same-size vector update should also be in-place
+    {Ctx, Schema} = vector_ctx(),
+    %% Original: 5 elements, replace with 5 different elements
+    Result = flatbuferl_update:preflight(Ctx, #{scores => [5, 4, 3, 2, 1]}),
+    ?assertMatch({simple, [{_, _, {vector_shrink, int, 4, _}, [scores], [5, 4, 3, 2, 1]}]}, Result),
+    %% Verify it works
+    NewBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{scores => [5, 4, 3, 2, 1]})),
+    NewCtx = flatbuferl:new(NewBuffer, Schema),
+    ?assertEqual([5, 4, 3, 2, 1], flatbuferl:get(NewCtx, [scores])).
+
+same_size_no_copy_test() ->
+    %% Verify same-size update of 1MB string is zero-copy
+    {ok, Schema} = flatbuferl:parse_schema(
+        "\n"
+        "        table Doc {\n"
+        "            id: int;\n"
+        "            content: string;\n"
+        "        }\n"
+        "        root_type Doc;\n"
+        "    "
+    ),
+    BigContent = binary:copy(<<"A">>, 1024 * 1024),
+    Data = #{id => 1, content => BigContent},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    BufferSize = byte_size(Buffer),
+
+    %% Replace with same-size but different content
+    NewContent = binary:copy(<<"B">>, 1024 * 1024),
+
+    Parent = self(),
+    spawn_link(fun() ->
+        erlang:garbage_collect(),
+        {binary, BinsBefore} = process_info(self(), binary),
+        LargeBinsBefore = [Size || {_, Size, _} <- BinsBefore, Size > 10000],
+
+        IoList = flatbuferl:update(Ctx, #{content => NewContent}),
+
+        erlang:garbage_collect(),
+        {binary, BinsAfter} = process_info(self(), binary),
+        LargeBinsAfter = [Size || {_, Size, _} <- BinsAfter, Size > 10000],
+
+        {heap_size, HeapWords} = process_info(self(), heap_size),
+        HeapBytes = HeapWords * erlang:system_info(wordsize),
+
+        NewBuffer = iolist_to_binary(IoList),
+        NewCtx = flatbuferl:new(NewBuffer, Schema),
+        %% Just check first byte changed
+        <<FirstByte, _/binary>> = flatbuferl:get(NewCtx, [content]),
+
+        Parent ! {result, HeapBytes, LargeBinsBefore, LargeBinsAfter,
+                  byte_size(NewBuffer), FirstByte}
+    end),
+
+    receive
+        {result, HeapBytes, LargeBinsBefore, LargeBinsAfter, NewSize, FirstByte} ->
+            ?assert(HeapBytes < 100000),
+            ?assert(length(LargeBinsAfter) =< length(LargeBinsBefore)),
+            ?assertEqual(BufferSize, NewSize),
+            ?assertEqual($B, FirstByte)
+    after 5000 ->
+        ?assert(false)
+    end.
+
 string_shrink_no_copy_test() ->
     %% Test with a large string field
     {ok, Schema} = flatbuferl:parse_schema(
