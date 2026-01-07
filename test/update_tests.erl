@@ -59,15 +59,25 @@ preflight_multiple_scalars_test() ->
     {simple, Updates} = Result,
     ?assertEqual(2, length(Updates)).
 
-preflight_string_is_complex_test() ->
+preflight_string_shrink_is_simple_test() ->
+    %% Original name is "Goblin" (6 chars), "Orc" (3 chars) fits - simple shrink
     Ctx = simple_ctx(),
     Result = flatbuferl_update:preflight(Ctx, #{name => <<"Orc">>}),
+    ?assertMatch({simple, [{_, _, {string_shrink, _}, [name], <<"Orc">>}]}, Result).
+
+preflight_string_grow_is_complex_test() ->
+    %% Original name is "Goblin" (6 chars), "Dragon Lord" (11 chars) doesn't fit
+    Ctx = simple_ctx(),
+    Result = flatbuferl_update:preflight(Ctx, #{name => <<"Dragon Lord">>}),
     ?assertMatch({complex, _}, Result).
 
-preflight_mixed_simple_complex_test() ->
+preflight_mixed_with_shrinkable_string_test() ->
+    %% Scalar + shrinkable string = all simple
     Ctx = simple_ctx(),
     Result = flatbuferl_update:preflight(Ctx, #{hp => 150, name => <<"Orc">>}),
-    ?assertMatch({complex, _}, Result).
+    ?assertMatch({simple, _}, Result),
+    {simple, Updates} = Result,
+    ?assertEqual(2, length(Updates)).
 
 preflight_missing_field_is_complex_test() ->
     Ctx = simple_ctx(),
@@ -246,12 +256,21 @@ update_nested_struct_test() ->
     ?assertEqual(2.0, flatbuferl_fetch:fetch(NewCtx, [pos, y])),
     ?assertEqual(3.0, flatbuferl_fetch:fetch(NewCtx, [pos, z])).
 
-update_complex_fallback_test() ->
+update_string_shrink_test() ->
     Ctx = simple_ctx(),
-    %% Updating name (string) should trigger complex path
+    %% Original name "Goblin" (6), new name "Orc" (3) - fits, simple splice
     NewBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{name => <<"Orc">>})),
     NewCtx = flatbuferl:new(NewBuffer, ctx_schema(Ctx)),
     ?assertEqual(<<"Orc">>, flatbuferl:get(NewCtx, [name])),
+    %% Other fields unchanged
+    ?assertEqual(75, flatbuferl:get(NewCtx, [hp])).
+
+update_string_grow_fallback_test() ->
+    Ctx = simple_ctx(),
+    %% Original name "Goblin" (6), new name "Dragon Lord" (11) - doesn't fit, complex fallback
+    NewBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{name => <<"Dragon Lord">>})),
+    NewCtx = flatbuferl:new(NewBuffer, ctx_schema(Ctx)),
+    ?assertEqual(<<"Dragon Lord">>, flatbuferl:get(NewCtx, [name])),
     %% Other fields unchanged
     ?assertEqual(75, flatbuferl:get(NewCtx, [hp])).
 
@@ -342,6 +361,167 @@ update_scalar_no_large_binary_copy_test() ->
             %% Verify the update worked
             ?assertEqual(999, Value),
             ?assertEqual(BufferSize, NewSize)
+    after 5000 ->
+        ?assert(false)
+    end.
+
+%% =============================================================================
+%% Vector Shrink Tests
+%% =============================================================================
+
+vector_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "\n"
+        "        table Data {\n"
+        "            id: int;\n"
+        "            scores: [int];\n"
+        "            name: string;\n"
+        "        }\n"
+        "        root_type Data;\n"
+        "    "
+    ),
+    Data = #{id => 1, scores => [10, 20, 30, 40, 50], name => <<"Test">>},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    {flatbuferl:new(Buffer, Schema), Schema}.
+
+preflight_vector_shrink_is_simple_test() ->
+    {Ctx, _Schema} = vector_ctx(),
+    %% Original: 5 elements, new: 3 elements - fits
+    Result = flatbuferl_update:preflight(Ctx, #{scores => [1, 2, 3]}),
+    ?assertMatch({simple, [{_, _, {vector_shrink, int, 4, _}, [scores], [1, 2, 3]}]}, Result).
+
+preflight_vector_grow_is_complex_test() ->
+    {Ctx, _Schema} = vector_ctx(),
+    %% Original: 5 elements, new: 7 elements - doesn't fit
+    Result = flatbuferl_update:preflight(Ctx, #{scores => [1, 2, 3, 4, 5, 6, 7]}),
+    ?assertMatch({complex, _}, Result).
+
+update_vector_shrink_test() ->
+    {Ctx, Schema} = vector_ctx(),
+    %% Shrink from 5 to 3 elements
+    NewBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{scores => [100, 200, 300]})),
+    NewCtx = flatbuferl:new(NewBuffer, Schema),
+    ?assertEqual([100, 200, 300], flatbuferl:get(NewCtx, [scores])),
+    %% Other fields unchanged
+    ?assertEqual(1, flatbuferl:get(NewCtx, [id])),
+    ?assertEqual(<<"Test">>, flatbuferl:get(NewCtx, [name])).
+
+update_vector_grow_fallback_test() ->
+    {Ctx, Schema} = vector_ctx(),
+    %% Grow from 5 to 7 elements - falls back to re-encode
+    NewBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{scores => [1, 2, 3, 4, 5, 6, 7]})),
+    NewCtx = flatbuferl:new(NewBuffer, Schema),
+    ?assertEqual([1, 2, 3, 4, 5, 6, 7], flatbuferl:get(NewCtx, [scores])),
+    ?assertEqual(1, flatbuferl:get(NewCtx, [id])).
+
+update_byte_vector_shrink_test() ->
+    {Ctx, Schema} = large_buffer_ctx(),
+    %% Original payload is 1MB, shrink to 100 bytes
+    SmallPayload = binary:copy(<<1>>, 100),
+    NewBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{payload => SmallPayload})),
+    NewCtx = flatbuferl:new(NewBuffer, Schema),
+    %% Verify the payload was updated (returns as list for [ubyte])
+    Payload = flatbuferl:get(NewCtx, [payload]),
+    ?assertEqual(100, length(Payload)),
+    ?assert(lists:all(fun(X) -> X == 1 end, Payload)),
+    %% Buffer size unchanged (in-place update)
+    ?assertEqual(byte_size(flatbuferl:ctx_buffer(Ctx)), byte_size(NewBuffer)).
+
+%% =============================================================================
+%% Zero-Copy Shrink Tests
+%% =============================================================================
+
+shrink_no_large_binary_copy_test() ->
+    %% Verify that shrinking a large string/vector doesn't create new large binaries
+    {Ctx, _Schema} = large_buffer_ctx(),
+    Buffer = flatbuferl:ctx_buffer(Ctx),
+    BufferSize = byte_size(Buffer),
+
+    Parent = self(),
+    spawn_link(fun() ->
+        %% Snapshot binary table BEFORE shrink
+        erlang:garbage_collect(),
+        {binary, BinsBefore} = process_info(self(), binary),
+        LargeBinsBefore = [Size || {_, Size, _} <- BinsBefore, Size > 10000],
+
+        %% Shrink the 1MB payload to 100 bytes - should be in-place
+        SmallPayload = binary:copy(<<1>>, 100),
+        IoList = flatbuferl:update(Ctx, #{payload => SmallPayload}),
+
+        %% Snapshot binary table AFTER shrink (before flattening)
+        erlang:garbage_collect(),
+        {binary, BinsAfter} = process_info(self(), binary),
+        LargeBinsAfter = [Size || {_, Size, _} <- BinsAfter, Size > 10000],
+
+        %% Get heap size
+        {heap_size, HeapWords} = process_info(self(), heap_size),
+        HeapBytes = HeapWords * erlang:system_info(wordsize),
+
+        %% Flatten and verify
+        NewBuffer = iolist_to_binary(IoList),
+
+        Parent ! {result, HeapBytes, LargeBinsBefore, LargeBinsAfter, byte_size(NewBuffer)}
+    end),
+
+    receive
+        {result, HeapBytes, LargeBinsBefore, LargeBinsAfter, NewSize} ->
+            %% Heap should be small - no large copies
+            ?assert(HeapBytes < 100000),
+            %% No new large binaries created
+            ?assert(length(LargeBinsAfter) =< length(LargeBinsBefore)),
+            %% Buffer size unchanged (in-place shrink)
+            ?assertEqual(BufferSize, NewSize)
+    after 5000 ->
+        ?assert(false)
+    end.
+
+string_shrink_no_copy_test() ->
+    %% Test with a large string field
+    {ok, Schema} = flatbuferl:parse_schema(
+        "\n"
+        "        table Doc {\n"
+        "            id: int;\n"
+        "            content: string;\n"
+        "        }\n"
+        "        root_type Doc;\n"
+        "    "
+    ),
+    %% Create a 1MB string
+    BigContent = binary:copy(<<"X">>, 1024 * 1024),
+    Data = #{id => 1, content => BigContent},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    BufferSize = byte_size(Buffer),
+
+    Parent = self(),
+    spawn_link(fun() ->
+        erlang:garbage_collect(),
+        {binary, BinsBefore} = process_info(self(), binary),
+        LargeBinsBefore = [Size || {_, Size, _} <- BinsBefore, Size > 10000],
+
+        %% Shrink string from 1MB to 10 bytes
+        IoList = flatbuferl:update(Ctx, #{content => <<"tiny">>}),
+
+        erlang:garbage_collect(),
+        {binary, BinsAfter} = process_info(self(), binary),
+        LargeBinsAfter = [Size || {_, Size, _} <- BinsAfter, Size > 10000],
+
+        {heap_size, HeapWords} = process_info(self(), heap_size),
+        HeapBytes = HeapWords * erlang:system_info(wordsize),
+
+        NewBuffer = iolist_to_binary(IoList),
+        NewCtx = flatbuferl:new(NewBuffer, Schema),
+        Content = flatbuferl:get(NewCtx, [content]),
+
+        Parent ! {result, HeapBytes, LargeBinsBefore, LargeBinsAfter, byte_size(NewBuffer), Content}
+    end),
+
+    receive
+        {result, HeapBytes, LargeBinsBefore, LargeBinsAfter, NewSize, Content} ->
+            ?assert(HeapBytes < 100000),
+            ?assert(length(LargeBinsAfter) =< length(LargeBinsBefore)),
+            ?assertEqual(BufferSize, NewSize),
+            ?assertEqual(<<"tiny">>, Content)
     after 5000 ->
         ?assert(false)
     end.

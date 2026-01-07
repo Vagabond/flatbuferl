@@ -165,11 +165,18 @@ NewIodata = flatbuferl:update(Ctx, #{pos => #{x => 5.0, y => 10.0}}),
 %% Multiple fields at once
 NewIodata = flatbuferl:update(Ctx, #{hp => 200, pos => #{z => 99.0}}),
 
-%% Variable-length fields fall back to re-encoding automatically
-NewIodata = flatbuferl:update(Ctx, #{name => <<"NewName">>}).
+%% Strings that fit in existing space - in-place shrink
+NewIodata = flatbuferl:update(Ctx, #{name => <<"Hi">>}),  %% if shorter than original
+
+%% Strings/vectors that grow - falls back to re-encoding
+NewIodata = flatbuferl:update(Ctx, #{name => <<"Much Longer Name">>}).
 ```
 
-For fixed-size scalar fields that exist in the buffer, `update` performs an efficient splice that returns an iolist referencing the original buffer - no large copies. For variable-length fields (strings, vectors) or fields not present in the buffer, it falls back to full re-encoding via `to_map`/`from_map`.
+Update behavior:
+- **Scalars/structs**: Always efficient splice (zero-copy iolist)
+- **Strings/vectors shrinking**: In-place update if new value fits in existing space
+- **Strings/vectors growing**: Falls back to full re-encode via `to_map`/`from_map`
+- **Missing fields**: Falls back to full re-encode (field must be added)
 
 Validating data before encoding:
 ```erlang
@@ -272,7 +279,7 @@ Supported:
 - Struct alignment (automatic, based on field sizes)
 - VTable deduplication within tables
 - Map/JSON validation against schema
-- In-place updates for scalar fields (zero-copy splice)
+- In-place updates (zero-copy for scalars; shrink-in-place for strings/vectors)
 
 Not supported:
 - `force_align` attribute

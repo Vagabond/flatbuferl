@@ -45,12 +45,49 @@ splice(Buffer, [], Pos, Acc) ->
 splice(Buffer, [{Offset, Size, Type, _Path, Value} | Rest], Pos, Acc) ->
     Len = Offset - Pos,
     <<_:Pos/binary, Chunk:Len/binary, _:Size/binary, _/binary>> = Buffer,
-    BaseType = base_type(Type),
-    Encoded = encode_scalar(Value, BaseType, Size),
+    Encoded = encode_update(Type, Value, Size),
     splice(Buffer, Rest, Offset + Size, [Encoded, Chunk | Acc]).
+
+%% Encode an update value based on type
+encode_update({string_shrink, OldAllocated}, NewValue, _Size) ->
+    encode_shrunk_string(NewValue, OldAllocated);
+encode_update({byte_vector_shrink, OldAllocated}, NewValue, _Size) ->
+    encode_shrunk_byte_vector(NewValue, OldAllocated);
+encode_update({vector_shrink, ElemType, ElemSize, OldAllocated}, NewValue, _Size) ->
+    encode_shrunk_vector(NewValue, ElemType, ElemSize, OldAllocated);
+encode_update(Type, Value, Size) ->
+    BaseType = base_type(Type),
+    encode_scalar(Value, BaseType, Size).
 
 base_type({enum, Base, _EnumName}) -> Base;
 base_type(Type) -> Type.
+
+%% Encode a string to fit in OldAllocated bytes
+encode_shrunk_string(NewValue, OldAllocated) ->
+    NewLen = byte_size(NewValue),
+    %% New data: length + string + null terminator
+    NewData = <<NewLen:32/little, NewValue/binary, 0>>,
+    NewDataSize = byte_size(NewData),
+    %% Pad to match original allocated size
+    PadSize = OldAllocated - NewDataSize,
+    <<NewData/binary, 0:(PadSize * 8)>>.
+
+%% Encode a byte vector (binary) to fit in OldAllocated bytes
+encode_shrunk_byte_vector(NewValue, OldAllocated) ->
+    NewLen = byte_size(NewValue),
+    NewData = <<NewLen:32/little, NewValue/binary>>,
+    NewDataSize = byte_size(NewData),
+    PadSize = OldAllocated - NewDataSize,
+    <<NewData/binary, 0:(PadSize * 8)>>.
+
+%% Encode a scalar vector to fit in OldAllocated bytes
+encode_shrunk_vector(NewValues, ElemType, ElemSize, OldAllocated) ->
+    NewLen = length(NewValues),
+    Elements = [encode_scalar(V, ElemType, ElemSize) || V <- NewValues],
+    NewData = iolist_to_binary([<<NewLen:32/little>> | Elements]),
+    NewDataSize = byte_size(NewData),
+    PadSize = OldAllocated - NewDataSize,
+    <<NewData/binary, 0:(PadSize * 8)>>.
 
 %% Encode a scalar value to binary
 -spec encode_scalar(term(), atom(), pos_integer()) -> binary().
@@ -190,7 +227,8 @@ preflight_path(Path, Value, Buffer, Defs, RootType, Root) ->
                             Err
                     end;
                 false ->
-                    complex
+                    %% Check if we can shrink-update a string or vector
+                    try_shrink_update(Type, Offset, Value, Buffer, Path, Defs)
             end;
         missing ->
             %% Field not present in buffer, need to re-encode to add it
@@ -198,6 +236,64 @@ preflight_path(Path, Value, Buffer, Defs, RootType, Root) ->
         {error, _} = Err ->
             Err
     end.
+
+%% Try to do an in-place shrink update for strings/vectors
+try_shrink_update(string, FieldOffset, NewValue, Buffer, Path, _Defs) when is_binary(NewValue) ->
+    %% Field offset points to a 32-bit relative offset to string data
+    <<_:FieldOffset/binary, RelOffset:32/little-signed, _/binary>> = Buffer,
+    StringDataOffset = FieldOffset + RelOffset,
+    <<_:StringDataOffset/binary, OldLen:32/little, _/binary>> = Buffer,
+    NewLen = byte_size(NewValue),
+    case NewLen =< OldLen of
+        true ->
+            %% Calculate total allocated space (length + data + null + padding)
+            OldAllocated = 4 + OldLen + 1 + ((4 - ((OldLen + 1) rem 4)) rem 4),
+            {ok, {StringDataOffset, OldAllocated, {string_shrink, OldAllocated}, Path, NewValue}};
+        false ->
+            complex
+    end;
+try_shrink_update({vector, ElemType}, FieldOffset, NewValue, Buffer, Path, Defs) ->
+    case is_fixed_size_type(ElemType, Defs) of
+        {true, ElemSize} when is_list(NewValue) ->
+            %% Vector of fixed-size scalars
+            <<_:FieldOffset/binary, RelOffset:32/little-signed, _/binary>> = Buffer,
+            VecDataOffset = FieldOffset + RelOffset,
+            <<_:VecDataOffset/binary, OldLen:32/little, _/binary>> = Buffer,
+            NewLen = length(NewValue),
+            case NewLen =< OldLen of
+                true ->
+                    OldDataSize = OldLen * ElemSize,
+                    OldAllocated = 4 + OldDataSize + ((4 - (OldDataSize rem 4)) rem 4),
+                    {ok,
+                        {VecDataOffset, OldAllocated,
+                            {vector_shrink, ElemType, ElemSize, OldAllocated}, Path, NewValue}};
+                false ->
+                    complex
+            end;
+        {true, _ElemSize} when
+            is_binary(NewValue),
+            (ElemType == ubyte orelse ElemType == byte orelse ElemType == int8 orelse
+                ElemType == uint8)
+        ->
+            %% Binary for byte vector
+            <<_:FieldOffset/binary, RelOffset:32/little-signed, _/binary>> = Buffer,
+            VecDataOffset = FieldOffset + RelOffset,
+            <<_:VecDataOffset/binary, OldLen:32/little, _/binary>> = Buffer,
+            NewLen = byte_size(NewValue),
+            case NewLen =< OldLen of
+                true ->
+                    OldAllocated = 4 + OldLen + ((4 - (OldLen rem 4)) rem 4),
+                    {ok,
+                        {VecDataOffset, OldAllocated, {byte_vector_shrink, OldAllocated}, Path,
+                            NewValue}};
+                false ->
+                    complex
+            end;
+        _ ->
+            complex
+    end;
+try_shrink_update(_Type, _Offset, _Value, _Buffer, _Path, _Defs) ->
+    complex.
 
 %% Traverse path to find field offset, handling unions
 traverse_for_update([FieldName], Buffer, Defs, TableType, TableRef) ->
