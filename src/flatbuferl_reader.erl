@@ -3,7 +3,10 @@
 -export([
     get_root/1,
     get_file_id/1,
-    get_field/4
+    get_field/4,
+    get_vector_info/4,
+    get_vector_element_at/3,
+    element_size/1
 ]).
 
 -type buffer() :: binary().
@@ -56,6 +59,55 @@ get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
             end;
         false ->
             %% Field ID beyond vtable - field not present
+            missing
+    end.
+
+%% Get vector metadata without reading elements.
+%% Returns {ok, {Length, ElementsStart, ElementType}} or missing.
+-spec get_vector_info(table_ref(), field_id(), tuple(), buffer()) ->
+    {ok, {non_neg_integer(), non_neg_integer(), term()}} | missing.
+get_vector_info({table, TableOffset, Buffer}, FieldId, {vector, ElementType}, _) ->
+    <<_:TableOffset/binary, VTableSOffset:32/little-signed, _/binary>> = Buffer,
+    VTableOffset = TableOffset - VTableSOffset,
+    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _TableSize:16/little-unsigned,
+        VTableRest/binary>> = Buffer,
+    FieldOffsetPos = 4 + (FieldId * 2),
+    case FieldOffsetPos < VTableSize of
+        true ->
+            FieldOffsetInVTable = FieldOffsetPos - 4,
+            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
+            case FieldOffset of
+                0 ->
+                    missing;
+                _ ->
+                    FieldPos = TableOffset + FieldOffset,
+                    <<_:FieldPos/binary, VectorOffset:32/little-unsigned, _/binary>> = Buffer,
+                    VectorPos = FieldPos + VectorOffset,
+                    <<_:VectorPos/binary, Length:32/little-unsigned, _/binary>> = Buffer,
+                    ElementsStart = VectorPos + 4,
+                    {ok, {Length, ElementsStart, ElementType}}
+            end;
+        false ->
+            missing
+    end.
+
+%% Get a single vector element by index.
+%% VectorInfo is {Length, ElementsStart, ElementType} from get_vector_info.
+-spec get_vector_element_at({non_neg_integer(), non_neg_integer(), term()}, integer(), buffer()) ->
+    {ok, term()} | missing.
+get_vector_element_at({Length, ElementsStart, ElementType}, Index, Buffer) ->
+    ActualIndex =
+        case Index < 0 of
+            true -> Length + Index;
+            false -> Index
+        end,
+    case ActualIndex >= 0 andalso ActualIndex < Length of
+        true ->
+            ElemSize = element_size(ElementType),
+            ElemPos = ElementsStart + (ActualIndex * ElemSize),
+            {_Size, Value} = read_vector_element(Buffer, ElemPos, ElementType),
+            {ok, Value};
+        false ->
             missing
     end.
 
@@ -250,7 +302,7 @@ read_struct_fields(Buffer, Pos, Fields, Acc) ->
 calc_struct_layout(Fields) ->
     {Offsets, _, MaxAlign} = lists:foldl(
         fun({_Name, Type}, {Acc, CurOffset, MaxAlignAcc}) ->
-            Size = scalar_size(Type),
+            Size = element_size(Type),
             %% In FlatBuffers, alignment equals size for scalars
             Align = Size,
             AlignedOffset = align_offset(CurOffset, Align),
@@ -263,7 +315,7 @@ calc_struct_layout(Fields) ->
     %% Total size aligned to max alignment
     LastOffset = lists:last(ReversedOffsets),
     {_Name, LastType} = lists:last(Fields),
-    RawSize = LastOffset + scalar_size(LastType),
+    RawSize = LastOffset + element_size(LastType),
     TotalSize = align_offset(RawSize, MaxAlign),
     {ReversedOffsets, TotalSize}.
 
@@ -273,28 +325,60 @@ align_offset(Offset, Align) ->
         Rem -> Offset + (Align - Rem)
     end.
 
-scalar_size(bool) -> 1;
-scalar_size(byte) -> 1;
-scalar_size(ubyte) -> 1;
-scalar_size(int8) -> 1;
-scalar_size(uint8) -> 1;
-scalar_size(short) -> 2;
-scalar_size(ushort) -> 2;
-scalar_size(int16) -> 2;
-scalar_size(uint16) -> 2;
-scalar_size(int) -> 4;
-scalar_size(uint) -> 4;
-scalar_size(int32) -> 4;
-scalar_size(uint32) -> 4;
-scalar_size(float) -> 4;
-scalar_size(float32) -> 4;
-scalar_size(long) -> 8;
-scalar_size(ulong) -> 8;
-scalar_size(int64) -> 8;
-scalar_size(uint64) -> 8;
-scalar_size(double) -> 8;
-scalar_size(float64) -> 8;
-scalar_size({array, ElemType, Count}) -> scalar_size(ElemType) * Count.
+element_size(bool) ->
+    1;
+element_size(byte) ->
+    1;
+element_size(ubyte) ->
+    1;
+element_size(int8) ->
+    1;
+element_size(uint8) ->
+    1;
+element_size(short) ->
+    2;
+element_size(ushort) ->
+    2;
+element_size(int16) ->
+    2;
+element_size(uint16) ->
+    2;
+element_size(int) ->
+    4;
+element_size(uint) ->
+    4;
+element_size(int32) ->
+    4;
+element_size(uint32) ->
+    4;
+element_size(float) ->
+    4;
+element_size(float32) ->
+    4;
+% offset
+element_size(string) ->
+    4;
+element_size(long) ->
+    8;
+element_size(ulong) ->
+    8;
+element_size(int64) ->
+    8;
+element_size(uint64) ->
+    8;
+element_size(double) ->
+    8;
+element_size(float64) ->
+    8;
+element_size({enum, UnderlyingType}) ->
+    element_size(UnderlyingType);
+element_size({array, ElemType, Count}) ->
+    element_size(ElemType) * Count;
+element_size({struct, Fields}) ->
+    {_Offsets, Size} = calc_struct_layout(Fields),
+    Size;
+% offset
+element_size(TableName) when is_atom(TableName) -> 4.
 
 %% Read a scalar value from struct (no offset indirection)
 read_struct_value(Buffer, Pos, bool) ->
@@ -340,7 +424,7 @@ read_struct_value(Buffer, Pos, {array, ElemType, Count}) ->
 
 %% Read fixed-size array elements inline
 read_array_elements(Buffer, Pos, ElemType, Count) ->
-    ElemSize = scalar_size(ElemType),
+    ElemSize = element_size(ElemType),
     Elements = read_array_elements_loop(Buffer, Pos, ElemType, ElemSize, Count, []),
     {Elements, ElemSize * Count}.
 
