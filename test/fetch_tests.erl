@@ -347,6 +347,145 @@ fetch_guard_with_union_type_mismatch_test() ->
     ).
 
 %% =============================================================================
+%% Comparison Guards
+%% =============================================================================
+
+fetch_comparison_guard_greater_test() ->
+    Ctx = simple_ctx(),
+    %% hp is 50, filter for hp > 40 should pass
+    ?assertEqual([50], flatbuferl_fetch:fetch(Ctx, [[{hp, '>', 40}, hp]])),
+    %% hp > 60 should filter out
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [[{hp, '>', 60}, hp]])).
+
+fetch_comparison_guard_less_test() ->
+    Ctx = simple_ctx(),
+    %% hp is 50, filter for hp < 60 should pass
+    ?assertEqual([50], flatbuferl_fetch:fetch(Ctx, [[{hp, '<', 60}, hp]])),
+    %% hp < 40 should filter out
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [[{hp, '<', 40}, hp]])).
+
+fetch_comparison_guard_range_test() ->
+    Ctx = simple_ctx(),
+    %% hp is 50, filter for 40 < hp < 60 should pass
+    ?assertEqual([50], flatbuferl_fetch:fetch(Ctx, [[{hp, '>', 40}, {hp, '<', 60}, hp]])),
+    %% 60 < hp < 80 should filter out
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [[{hp, '>', 60}, {hp, '<', 80}, hp]])).
+
+fetch_comparison_guard_equality_test() ->
+    Ctx = simple_ctx(),
+    %% hp is 50, filter for hp == 50 should pass
+    ?assertEqual([50], flatbuferl_fetch:fetch(Ctx, [[{hp, '==', 50}, hp]])),
+    %% hp /= 50 should filter out
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [[{hp, '/=', 50}, hp]])).
+
+fetch_comparison_guard_on_vector_of_tables_test() ->
+    %% Test comparison guards with wildcards on vector of tables
+    %% Using table_vector_ctx - filter by string comparison
+    Ctx = table_vector_ctx(),
+    %% Filter for value_inner > "one" (lexicographic)
+    %% Extraction spec returns list per match: [[value], [value], ...]
+    Result = flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, '>', <<"one">>}, value_inner]]),
+    %% "two" and "three" are > "one" lexicographically (in original order)
+    ?assertEqual([[<<"two">>], [<<"three">>]], Result).
+
+fetch_membership_guard_in_test() ->
+    Ctx = table_vector_ctx(),
+    %% Filter for value_inner in ["one", "three"]
+    Result = flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, in, [<<"one">>, <<"three">>]}, value_inner]]),
+    ?assertEqual([[<<"one">>], [<<"three">>]], Result).
+
+fetch_membership_guard_not_in_test() ->
+    Ctx = table_vector_ctx(),
+    %% Filter for value_inner not in ["one", "three"]
+    Result = flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, not_in, [<<"one">>, <<"three">>]}, value_inner]]),
+    ?assertEqual([[<<"two">>]], Result).
+
+%% =============================================================================
+%% Nested Paths in Extraction
+%% =============================================================================
+
+fetch_nested_path_extraction_test() ->
+    Ctx = nested_ctx(),
+    %% Extract name and nested pos.x in a single extraction spec
+    Result = flatbuferl_fetch:fetch(Ctx, [[name, [pos, x]]]),
+    ?assertEqual([<<"Player">>, 1.0], Result).
+
+fetch_nested_path_extraction_multiple_test() ->
+    Ctx = nested_ctx(),
+    %% Extract multiple nested paths
+    Result = flatbuferl_fetch:fetch(Ctx, [[[pos, x], [pos, y], [pos, z]]]),
+    ?assertEqual([1.0, 2.0, 3.0], Result).
+
+fetch_nested_path_in_nested_extraction_test() ->
+    Ctx = nested_ctx(),
+    %% Extract with nested extraction inside
+    Result = flatbuferl_fetch:fetch(Ctx, [[name, [pos, [x, y]]]]),
+    ?assertEqual([<<"Player">>, [1.0, 2.0]], Result).
+
+%% =============================================================================
+%% Nested Paths in Guards
+%% =============================================================================
+
+fetch_nested_path_guard_test() ->
+    Ctx = nested_ctx(),
+    %% Guard on nested path [pos, x]
+    Result = flatbuferl_fetch:fetch(Ctx, [[{[pos, x], 1.0}, name]]),
+    ?assertEqual([<<"Player">>], Result).
+
+fetch_nested_path_guard_comparison_test() ->
+    Ctx = nested_ctx(),
+    %% Comparison guard on nested path
+    Result = flatbuferl_fetch:fetch(Ctx, [[{[pos, x], '>', 0.0}, name]]),
+    ?assertEqual([<<"Player">>], Result).
+
+fetch_nested_path_guard_fails_test() ->
+    Ctx = nested_ctx(),
+    %% Guard that fails
+    Result = flatbuferl_fetch:fetch(Ctx, [[{[pos, x], '>', 10.0}, name]]),
+    ?assertEqual(undefined, Result).
+
+%% =============================================================================
+%% Vector of Unions
+%% =============================================================================
+
+union_vector_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/union_vector.fbs"),
+    Data = #{
+        data_type => ['StringData', 'IntData'],
+        data => [
+            #{data => [<<"hello">>, <<"world">>]},
+            #{data => [1, 2, 3]}
+        ]
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_union_vector_types_test() ->
+    Ctx = union_vector_ctx(),
+    ?assertEqual(['StringData', 'IntData'], flatbuferl_fetch:fetch(Ctx, [data, '*', '_type'])).
+
+fetch_union_vector_index_test() ->
+    Ctx = union_vector_ctx(),
+    %% Access first union element
+    Result = flatbuferl_fetch:fetch(Ctx, [data, 0]),
+    ?assertEqual(#{data => [<<"hello">>, <<"world">>]}, Result).
+
+fetch_union_vector_index_type_test() ->
+    Ctx = union_vector_ctx(),
+    ?assertEqual('StringData', flatbuferl_fetch:fetch(Ctx, [data, 0, '_type'])),
+    ?assertEqual('IntData', flatbuferl_fetch:fetch(Ctx, [data, 1, '_type'])).
+
+fetch_union_vector_filter_by_type_test() ->
+    Ctx = union_vector_ctx(),
+    %% Filter to only StringData unions and extract their data
+    Result = flatbuferl_fetch:fetch(Ctx, [data, '*', [{'_type', 'StringData'}, data]]),
+    ?assertEqual([[[<<"hello">>, <<"world">>]]], Result).
+
+fetch_union_vector_size_test() ->
+    Ctx = union_vector_ctx(),
+    ?assertEqual(2, flatbuferl_fetch:fetch(Ctx, [data, '_size'])).
+
+%% =============================================================================
 %% Edge Cases
 %% =============================================================================
 

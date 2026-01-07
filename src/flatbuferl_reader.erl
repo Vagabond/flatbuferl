@@ -271,6 +271,15 @@ read_vector_element(Buffer, Pos, table) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {4, {table, NestedTablePos, Buffer}};
+%% Union type in vector (1-byte discriminator)
+read_vector_element(Buffer, Pos, {union_type, _UnionName}) ->
+    <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
+    {1, TypeIndex};
+%% Union value in vector (offset to table)
+read_vector_element(Buffer, Pos, {union_value, _UnionName}) ->
+    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+    NestedTablePos = Pos + TableOffset,
+    {4, {table, NestedTablePos, Buffer}};
 %% Table in vector (offset to table)
 read_vector_element(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -378,6 +387,8 @@ element_size({struct, Fields}) ->
     {_Offsets, Size} = calc_struct_layout(Fields),
     Size;
 % offset
+element_size({union_type, _}) -> 1;
+element_size({union_value, _}) -> 4;
 element_size(TableName) when is_atom(TableName) -> 4.
 
 %% Read a scalar value from struct (no offset indirection)
