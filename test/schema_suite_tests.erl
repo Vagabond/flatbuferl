@@ -151,6 +151,9 @@ schema_suite_test_() ->
 generate_tests({Name, SchemaPath, RootType, FileId, SampleData}) ->
     {atom_to_list(Name), [
         {atom_to_list(Name) ++ "_parse", fun() -> test_parse(SchemaPath) end},
+        {atom_to_list(Name) ++ "_validate", fun() ->
+            test_validate(SchemaPath, SampleData)
+        end},
         {atom_to_list(Name) ++ "_encode_decode", fun() ->
             test_encode_decode(SchemaPath, RootType, FileId, SampleData)
         end},
@@ -173,6 +176,10 @@ test_parse(SchemaPath) ->
     {ok, {Defs, _Opts}} = flatbuferl_schema:parse_file(SchemaPath),
     ?assert(is_map(Defs)),
     ?assert(maps:size(Defs) > 0).
+
+test_validate(SchemaPath, SampleData) ->
+    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    ?assertEqual(ok, flatbuferl:validate(SampleData, Schema)).
 
 test_encode_decode(SchemaPath, RootType, FileId, SampleData) ->
     {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),

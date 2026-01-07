@@ -10,10 +10,12 @@
     to_map/1,
     to_map/2,
     from_map/2,
-    from_map/3
+    from_map/3,
+    validate/2,
+    validate/3
 ]).
 
--export_type([ctx/0, path/0, decode_opts/0, schema/0]).
+-export_type([ctx/0, path/0, decode_opts/0, schema/0, validate_opts/0, validation_error/0]).
 
 -type schema() :: {flatbuferl_schema:definitions(), flatbuferl_schema:options()}.
 
@@ -365,3 +367,18 @@ normalize_type({Type, Default}) when is_atom(Type), is_boolean(Default) ->
     Type;
 normalize_type(Type) ->
     Type.
+
+%% =============================================================================
+%% Validation
+%% =============================================================================
+
+-type validate_opts() :: flatbuferl_schema:validate_opts().
+-type validation_error() :: flatbuferl_schema:validation_error().
+
+-spec validate(map(), schema()) -> ok | {error, [validation_error()]}.
+validate(Map, Schema) ->
+    validate(Map, Schema, #{}).
+
+-spec validate(map(), schema(), validate_opts()) -> ok | {error, [validation_error()]}.
+validate(Map, Schema, Opts) ->
+    flatbuferl_schema:validate(Map, Schema, Opts).

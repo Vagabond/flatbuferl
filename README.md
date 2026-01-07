@@ -73,6 +73,20 @@ flatbuferl:has(Ctx, [name]).              %% true
 flatbuferl:has(Ctx, [pos]).               %% true or false
 ```
 
+Validating data before encoding:
+```erlang
+%% Validate a map against the schema
+ok = flatbuferl:validate(Data, Schema).
+
+%% With invalid data
+{error, [{type_mismatch, hp, int, <<"not an int">>}]} =
+    flatbuferl:validate(#{hp => <<"not an int">>}, Schema).
+
+%% Strict mode - error on unknown fields
+{error, [{unknown_field, bad_field}]} =
+    flatbuferl:validate(#{bad_field => 1}, Schema, #{unknown_fields => error}).
+```
+
 ## API
 
 ```erlang
@@ -87,6 +101,8 @@ flatbuferl:to_map(Ctx) -> Map.
 flatbuferl:to_map(Ctx, Opts) -> Map.
 flatbuferl:from_map(Map, Schema) -> iodata().
 flatbuferl:from_map(Map, Schema, Opts) -> iodata().
+flatbuferl:validate(Map, Schema) -> ok | {error, [ValidationError]}.
+flatbuferl:validate(Map, Schema, Opts) -> ok | {error, [ValidationError]}.
 flatbuferl:file_id(Ctx | Buffer) -> <<_:32>>.
 flatbuferl:get_bytes(Ctx, Path) -> binary().
 ```
@@ -110,6 +126,13 @@ Encode options:
                                          %% allow: encode deprecated fields, if supplied
                                          %% error: fail to encode if deprecated fields are present
 }
+```
+
+Validation options:
+
+```erlang
+#{unknown_fields => ignore | error}  %% ignore: allow fields not in schema (default)
+                                     %% error: return error for unknown fields
 ```
 
 ## Supported Types
@@ -146,13 +169,13 @@ Supported:
 - Attributes: `id`, `deprecated`, `required`
 - Struct alignment (automatic, based on field sizes)
 - VTable deduplication within tables
+- Map/JSON validation against schema
 
 Not supported:
 - Fixed-size arrays (`[int:4]`)
 - `force_align` attribute
 - `include` directives (parsed but not processed)
 - `rpc_service`
-- Shared strings (strings are not deduplicated across the buffer)
 - Flexbuffers
 
 ## Building
