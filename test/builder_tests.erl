@@ -250,7 +250,7 @@ struct_and_scalar_test() ->
 
 simple_union_test() ->
     %% Parse the union schema
-    {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/union_field.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/union_field.fbs"),
 
     %% Build a buffer with hello variant (flatc-compatible format)
     Map = #{
@@ -273,7 +273,7 @@ simple_union_test() ->
 
 union_bye_variant_test() ->
     %% Test the 'bye' variant of the union
-    {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/union_field.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/union_field.fbs"),
 
     Map = #{data_type => bye, data => #{greeting => 123}},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
@@ -290,7 +290,7 @@ union_bye_variant_test() ->
 
 json_roundtrip_simple_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_monster.fbs"),
     Ctx = flatbuferl:new(Buffer, Schema),
     Original = flatbuferl:to_map(Ctx),
 
@@ -307,7 +307,7 @@ json_roundtrip_simple_test() ->
 
 json_roundtrip_nested_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_nested.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_nested.fbs"),
     Ctx = flatbuferl:new(Buffer, Schema),
     Original = flatbuferl:to_map(Ctx),
 
@@ -327,7 +327,7 @@ json_roundtrip_nested_test() ->
 
 json_roundtrip_vectors_test() ->
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_vector.fbs"),
     Ctx = flatbuferl:new(Buffer, Schema),
     Original = flatbuferl:to_map(Ctx),
 
@@ -347,7 +347,7 @@ json_roundtrip_vectors_test() ->
 flatc_roundtrip_monster_test() ->
     %% Read original, modify, write new buffer, verify flatc can decode it
     {ok, Buffer} = file:read_file("test/vectors/test_monster.bin"),
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_monster.fbs"),
     Ctx = flatbuferl:new(Buffer, Schema),
     Map = flatbuferl:to_map(Ctx),
 
@@ -381,7 +381,7 @@ flatc_roundtrip_monster_test() ->
 flatc_roundtrip_nested_test() ->
     %% Test nested table roundtrip with flatc
     {ok, Buffer} = file:read_file("test/vectors/test_nested.bin"),
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_nested.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_nested.fbs"),
     Ctx = flatbuferl:new(Buffer, Schema),
     Map = flatbuferl:to_map(Ctx),
 
@@ -422,7 +422,7 @@ flatc_roundtrip_nested_test() ->
 flatc_roundtrip_vectors_test() ->
     %% Test vector roundtrip with flatc
     {ok, Buffer} = file:read_file("test/vectors/test_vector.bin"),
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_vector.fbs"),
     Ctx = flatbuferl:new(Buffer, Schema),
     Map = flatbuferl:to_map(Ctx),
 

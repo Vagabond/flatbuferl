@@ -173,16 +173,16 @@ generate_tests({Name, SchemaPath, RootType, FileId, SampleData}) ->
 %% =============================================================================
 
 test_parse(SchemaPath) ->
-    {ok, {Defs, _Opts}} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, {Defs, _Opts}} = flatbuferl:parse_schema_file(SchemaPath),
     ?assert(is_map(Defs)),
     ?assert(maps:size(Defs) > 0).
 
 test_validate(SchemaPath, SampleData) ->
-    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
     ?assertEqual(ok, flatbuferl:validate(SampleData, Schema)).
 
 test_encode_decode(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
 
     %% Encode
     Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
@@ -196,7 +196,7 @@ test_encode_decode(SchemaPath, RootType, FileId, SampleData) ->
     verify_maps_equal(SampleData, Result).
 
 test_json_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
 
     %% Encode to flatbuffer
     Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
@@ -224,7 +224,7 @@ test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData) ->
     end.
 
 test_flatc_roundtrip_with_id(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
 
     %% Build buffer
     Buffer = flatbuferl:from_map(SampleData, Schema),
@@ -252,7 +252,7 @@ test_flatc_roundtrip_with_id(SchemaPath, RootType, FileId, SampleData) ->
     file:delete(TmpJson).
 
 test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
 
     %% Build buffer
     Buffer = flatbuferl:from_map(SampleData, Schema),
@@ -284,7 +284,7 @@ test_flatc_roundtrip_raw(SchemaPath, RootType, FileId, SampleData) ->
 %% =============================================================================
 
 test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
 
     %% Encode sample data to JSON for flatc input
     JsonBin = iolist_to_binary(json:encode(SampleData)),
@@ -375,7 +375,7 @@ zero_copy_test_() ->
     ].
 
 test_zero_copy(SchemaPath, RootType, FileId, SampleData) ->
-    {ok, Schema} = flatbuferl_schema:parse_file(SchemaPath),
+    {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
 
     %% Encode initial buffer
     Buffer = iolist_to_binary(flatbuferl:from_map(SampleData, Schema)),
@@ -619,7 +619,7 @@ union_vector_test_() ->
             ?assertEqual([], maps:get(events, Result))
         end},
         {"union vector from parsed .fbs file", fun() ->
-            {ok, ParsedSchema} = flatbuferl_schema:parse_file("test/schemas/union_vector.fbs"),
+            {ok, ParsedSchema} = flatbuferl:parse_schema_file("test/schemas/union_vector.fbs"),
             Map = #{
                 data_type => ['StringData', 'IntData'],
                 data => [
@@ -721,14 +721,14 @@ optional_scalar_test_() ->
 include_test_() ->
     [
         {"basic include works", fun() ->
-            {ok, {Defs, Opts}} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
+            {ok, {Defs, Opts}} = flatbuferl:parse_schema_file("test/schemas/with_include.fbs"),
             ?assert(maps:is_key('Entity', Defs)),
             ?assert(maps:is_key('Vec3', Defs)),
             ?assert(maps:is_key('Color', Defs)),
             ?assertEqual('Entity', maps:get(root_type, Opts))
         end},
         {"include encode/decode roundtrip", fun() ->
-            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
+            {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/with_include.fbs"),
             Map = #{name => <<"Test">>, pos => #{x => 1.0, y => 2.0, z => 3.0}, color => 1},
             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
             Ctx = flatbuferl:new(Bin, Schema),
@@ -738,11 +738,11 @@ include_test_() ->
             ?assert(abs(maps:get(x, Pos) - 1.0) < 0.001)
         end},
         {"circular include detected", fun() ->
-            Result = flatbuferl_schema:parse_file("test/schemas/circular_a.fbs"),
+            Result = flatbuferl:parse_schema_file("test/schemas/circular_a.fbs"),
             ?assertMatch({error, {circular_include, _}}, Result)
         end},
         {"duplicate type detected", fun() ->
-            Result = flatbuferl_schema:parse_file("test/schemas/duplicate.fbs"),
+            Result = flatbuferl:parse_schema_file("test/schemas/duplicate.fbs"),
             ?assertMatch({error, {duplicate_types, ['Vec3']}}, Result)
         end},
         {"missing include file", fun() ->
@@ -750,7 +750,7 @@ include_test_() ->
                 "/tmp/missing_include.fbs",
                 <<"include \"nonexistent.fbs\";\ntable T { x: int; }\nroot_type T;">>
             ),
-            Result = flatbuferl_schema:parse_file("/tmp/missing_include.fbs"),
+            Result = flatbuferl:parse_schema_file("/tmp/missing_include.fbs"),
             ?assertMatch({error, enoent}, Result),
             file:delete("/tmp/missing_include.fbs")
         end}
@@ -763,7 +763,7 @@ include_test_() ->
 fixed_array_test_() ->
     [
         {"array schema parses", fun() ->
-            {ok, {Defs, _Opts}} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            {ok, {Defs, _Opts}} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             ?assert(maps:is_key('ArrayTable', Defs)),
             {table, Fields} = maps:get('ArrayTable', Defs),
             %% Fields have {Name, Type, Attrs} format after parsing
@@ -772,7 +772,7 @@ fixed_array_test_() ->
             {bytes, {array, byte, 2}, _} = lists:keyfind(bytes, 1, Fields)
         end},
         {"array encode/decode roundtrip", fun() ->
-            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             Map = #{
                 floats => [1.0, 2.0, 3.0],
                 ints => [10, 20, 30, 40],
@@ -789,18 +789,18 @@ fixed_array_test_() ->
             ?assertEqual([-1, 127], maps:get(bytes, Result))
         end},
         {"array validation - correct length", fun() ->
-            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             Map = #{floats => [1.0, 2.0, 3.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
             ?assertEqual(ok, flatbuferl:validate(Map, Schema))
         end},
         {"array validation - wrong length", fun() ->
-            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
             {error, Errors} = flatbuferl:validate(Map, Schema),
             ?assertMatch([{array_length_mismatch, floats, 3, 2}], Errors)
         end},
         {"array validation - wrong element type", fun() ->
-            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             Map = #{
                 floats => [<<"not">>, <<"floats">>, <<"here">>],
                 ints => [1, 2, 3, 4],
@@ -812,7 +812,7 @@ fixed_array_test_() ->
             [{invalid_array_element, floats, 0, _} | _] = Errors
         end},
         {"array encoding error on wrong length", fun() ->
-            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
             ?assertError(
                 {array_length_mismatch, expected, 3, got, 2},

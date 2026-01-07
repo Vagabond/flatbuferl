@@ -6,25 +6,25 @@
 %% =============================================================================
 
 simple_ctx() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_monster.fbs"),
     Data = #{name => <<"Goblin">>, hp => 50, mana => 25},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     flatbuferl:new(Buffer, Schema).
 
 nested_ctx() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_nested.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_nested.fbs"),
     Data = #{name => <<"Player">>, hp => 100, pos => #{x => 1.0, y => 2.0, z => 3.0}},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     flatbuferl:new(Buffer, Schema).
 
 vector_ctx() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_vector.fbs"),
     Data = #{items => [<<"sword">>, <<"shield">>, <<"potion">>], counts => [1, 2, 3]},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     flatbuferl:new(Buffer, Schema).
 
 table_vector_ctx() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/table_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/table_vector.fbs"),
     Data = #{
         inner => [
             #{value_inner => <<"one">>},
@@ -143,7 +143,7 @@ fetch_wildcard_nested_field_test() ->
     ).
 
 fetch_wildcard_empty_vector_test() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_vector.fbs"),
     Data = #{items => [], counts => []},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     Ctx = flatbuferl:new(Buffer, Schema),
@@ -176,7 +176,7 @@ fetch_multi_field_star_test() ->
 
 fetch_multi_field_with_missing_data_test() ->
     %% Test extraction where a field exists in schema but is missing in buffer
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_monster.fbs"),
     %% Only include 'name', hp/mana will use defaults
     Data = #{name => <<"Sparse">>},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
@@ -201,7 +201,7 @@ fetch_struct_wildcard_test() ->
 %% =============================================================================
 
 array_ctx() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
     Data = #{floats => [1.0, 2.0, 3.0], ints => [10, 20, 30, 40]},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     flatbuferl:new(Buffer, Schema).
@@ -236,14 +236,14 @@ fetch_size_of_vector_test() ->
     ?assertEqual(3, flatbuferl_fetch:fetch(Ctx, [counts, '_size'])).
 
 fetch_size_of_empty_vector_test() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_vector.fbs"),
     Data = #{items => [], counts => []},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     Ctx = flatbuferl:new(Buffer, Schema),
     ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [items, '_size'])).
 
 fetch_size_of_missing_vector_test() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_vector.fbs"),
     Data = #{items => [<<"a">>]},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     Ctx = flatbuferl:new(Buffer, Schema),
@@ -258,7 +258,7 @@ fetch_size_of_string_test() ->
     ?assertEqual(6, flatbuferl_fetch:fetch(Ctx, [name, '_size'])).  %% <<"Goblin">> = 6 bytes
 
 fetch_size_of_missing_string_test() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_monster.fbs"),
     Data = #{hp => 50},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     Ctx = flatbuferl:new(Buffer, Schema),
@@ -269,7 +269,7 @@ fetch_size_of_missing_string_test() ->
 %% =============================================================================
 
 union_ctx(Type, Value) ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/union_field.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/union_field.fbs"),
     Data = #{data => Value, data_type => Type, additions_value => 42},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
     flatbuferl:new(Buffer, Schema).
@@ -351,7 +351,7 @@ fetch_guard_with_union_type_mismatch_test() ->
 %% =============================================================================
 
 fetch_undefined_for_missing_vector_test() ->
-    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_vector.fbs"),
     %% Create buffer with only items, no counts
     Data = #{items => [<<"a">>]},
     Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
