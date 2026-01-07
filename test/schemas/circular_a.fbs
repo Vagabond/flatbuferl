@@ -1,0 +1,3 @@
+include "circular_b.fbs";
+table TypeA { x: int; }
+root_type TypeA;

@@ -1,0 +1,2 @@
+include "circular_a.fbs";
+table TypeB { y: int; }

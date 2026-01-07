@@ -1,0 +1,8 @@
+// Common types for include testing
+table Vec3 {
+  x: float;
+  y: float;
+  z: float;
+}
+
+enum Color : byte { Red, Green, Blue }

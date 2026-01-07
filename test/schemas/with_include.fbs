@@ -1,0 +1,9 @@
+include "common.fbs";
+
+table Entity {
+  name: string;
+  pos: Vec3;
+  color: Color;
+}
+
+root_type Entity;

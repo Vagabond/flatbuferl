@@ -1,0 +1,3 @@
+include "self_include.fbs";
+table SelfRef { x: int; }
+root_type SelfRef;

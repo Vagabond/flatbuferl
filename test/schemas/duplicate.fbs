@@ -1,0 +1,7 @@
+include "common.fbs";
+
+// This redefines Vec3 which is already in common.fbs
+table Vec3 { a: int; b: int; }
+
+table Main { v: Vec3; }
+root_type Main;
