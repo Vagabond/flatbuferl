@@ -255,7 +255,8 @@ fetch_size_of_table_vector_test() ->
 
 fetch_size_of_string_test() ->
     Ctx = simple_ctx(),
-    ?assertEqual(6, flatbuferl_fetch:fetch(Ctx, [name, '_size'])).  %% <<"Goblin">> = 6 bytes
+    %% <<"Goblin">> = 6 bytes
+    ?assertEqual(6, flatbuferl_fetch:fetch(Ctx, [name, '_size'])).
 
 fetch_size_of_missing_string_test() ->
     {ok, Schema} = flatbuferl:parse_schema_file("test/vectors/test_monster.fbs"),
@@ -326,7 +327,9 @@ fetch_guard_filter_multiple_test() ->
     %% So this won't match anything since value_inner can't be both
     ?assertEqual(
         [],
-        flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, <<"one">>}, {value_inner, <<"three">>}, value_inner]])
+        flatbuferl_fetch:fetch(Ctx, [
+            inner, '*', [{value_inner, <<"one">>}, {value_inner, <<"three">>}, value_inner]
+        ])
     ).
 
 fetch_guard_with_union_type_test() ->
@@ -391,13 +394,17 @@ fetch_comparison_guard_on_vector_of_tables_test() ->
 fetch_membership_guard_in_test() ->
     Ctx = table_vector_ctx(),
     %% Filter for value_inner in ["one", "three"]
-    Result = flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, in, [<<"one">>, <<"three">>]}, value_inner]]),
+    Result = flatbuferl_fetch:fetch(Ctx, [
+        inner, '*', [{value_inner, in, [<<"one">>, <<"three">>]}, value_inner]
+    ]),
     ?assertEqual([[<<"one">>], [<<"three">>]], Result).
 
 fetch_membership_guard_not_in_test() ->
     Ctx = table_vector_ctx(),
     %% Filter for value_inner not in ["one", "three"]
-    Result = flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, not_in, [<<"one">>, <<"three">>]}, value_inner]]),
+    Result = flatbuferl_fetch:fetch(Ctx, [
+        inner, '*', [{value_inner, not_in, [<<"one">>, <<"three">>]}, value_inner]
+    ]),
     ?assertEqual([[<<"two">>]], Result).
 
 %% =============================================================================

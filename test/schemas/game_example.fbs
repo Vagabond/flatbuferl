@@ -1,0 +1,81 @@
+// Example schema demonstrating fetch/2 capabilities
+// A game state with players, monsters, and inventories
+
+file_identifier "GAME";
+
+// Position in 3D space
+struct Vec3 {
+    x: float;
+    y: float;
+    z: float;
+}
+
+// Item rarity levels
+enum Rarity : ubyte { Common, Uncommon, Rare, Epic, Legendary }
+
+// Base item properties
+table Weapon {
+    name: string;
+    damage: int;
+    rarity: Rarity;
+}
+
+table Armor {
+    name: string;
+    defense: int;
+    rarity: Rarity;
+}
+
+table Consumable {
+    name: string;
+    effect: string;
+    charges: int;
+}
+
+// Items can be weapons, armor, or consumables
+union Item { Weapon, Armor, Consumable }
+
+// A character's inventory slot
+table InventorySlot {
+    item: Item;
+    quantity: int = 1;
+}
+
+// Stats shared by players and monsters
+table Stats {
+    hp: int;
+    max_hp: int;
+    level: int;
+    strength: int;
+    defense: int;
+}
+
+// Player character
+table Player {
+    name: string;
+    pos: Vec3;
+    stats: Stats;
+    inventory: [InventorySlot];
+    gold: int;
+    guild: string;
+}
+
+// Monster/NPC
+table Monster {
+    name: string;
+    pos: Vec3;
+    stats: Stats;
+    loot_table: [InventorySlot];
+    aggro_radius: float;
+    is_boss: bool;
+}
+
+// The complete game state
+table GameState {
+    world_name: string;
+    tick: ulong;
+    players: [Player];
+    monsters: [Monster];
+}
+
+root_type GameState;

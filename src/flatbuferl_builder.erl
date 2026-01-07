@@ -385,6 +385,7 @@ get_field_value(Map, Name) when is_atom(Name) ->
     end.
 
 is_scalar_type({enum, _}) -> true;
+is_scalar_type({enum, _, _}) -> true;
 %% Structs are inline fixed-size data
 is_scalar_type({struct, _}) -> true;
 %% Fixed arrays are inline fixed-size data
@@ -417,7 +418,7 @@ is_scalar_type(_) -> false.
 %% Resolve type name to its definition (for enums and structs)
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
-        {{enum, Base}, _Values} -> {enum, Base};
+        {{enum, Base}, Values} -> {enum, Base, Values};
         {struct, Fields} -> {struct, Fields};
         _ -> Type
     end;
@@ -634,6 +635,7 @@ field_inline_size({union_value, _}) -> 4;
 field_inline_size(Type) when is_atom(Type) -> type_size(Type);
 field_inline_size({struct, _} = T) -> type_size(T);
 field_inline_size({array, _, _} = T) -> type_size(T);
+field_inline_size({enum, _, _} = T) -> type_size(T);
 field_inline_size({enum, _} = T) -> type_size(T);
 field_inline_size({union_type, _}) -> 1;
 %% Default for unknown refs
@@ -1428,6 +1430,15 @@ encode_scalar(Value, float64) ->
     <<Value:64/little-float>>;
 encode_scalar(Value, {enum, Base}) ->
     encode_scalar(Value, Base);
+encode_scalar(Value, {enum, Base, Values}) when is_atom(Value) ->
+    %% Translate enum atom name to integer index
+    case find_enum_index(Value, Values, 0) of
+        {ok, Index} -> encode_scalar(Index, Base);
+        error -> error({unknown_enum_value, Value, Values})
+    end;
+encode_scalar(Value, {enum, Base, _Values}) when is_integer(Value) ->
+    %% Already an integer, use directly
+    encode_scalar(Value, Base);
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
 encode_scalar(List, {array, ElemType, Count}) when is_list(List) ->
@@ -1492,6 +1503,7 @@ type_size(float32) -> 4;
 type_size(double) -> 8;
 type_size(float64) -> 8;
 type_size({enum, Base}) -> type_size(Base);
+type_size({enum, Base, _Values}) -> type_size(Base);
 type_size({struct, Fields}) -> calc_struct_size(Fields);
 type_size({array, ElemType, Count}) -> type_size(ElemType) * Count;
 %% Union type is ubyte
@@ -1520,6 +1532,14 @@ align_offset(Off, Align) ->
 
 extract_default({_, D}) when is_number(D); is_boolean(D) -> D;
 extract_default(_) -> undefined.
+
+%% Find enum value index (0-based)
+find_enum_index(_Value, [], _Index) ->
+    error;
+find_enum_index(Value, [Value | _], Index) ->
+    {ok, Index};
+find_enum_index(Value, [_ | Rest], Index) ->
+    find_enum_index(Value, Rest, Index + 1).
 
 normalize_type({T, D}) when is_atom(T), is_number(D) -> T;
 normalize_type({T, D}) when is_atom(T), is_boolean(D) -> T;

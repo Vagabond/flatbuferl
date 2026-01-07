@@ -81,6 +81,14 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
                         missing ->
                             missing
                     end;
+                {struct, Fields} ->
+                    %% Named struct type - look up and fetch from struct data
+                    case flatbuferl_reader:get_field(TableRef, FieldId, {struct, Fields}, Buffer) of
+                        {ok, StructMap} ->
+                            fetch_from_struct(StructMap, Rest);
+                        missing ->
+                            missing
+                    end;
                 _ ->
                     error({not_a_table, FieldName, NestedType})
             end;
@@ -117,14 +125,24 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
                     error({cannot_traverse, '_type', MoreRest});
                 [ExtractSpec] when is_list(ExtractSpec) ->
                     %% Extraction spec directly after union - pass union type context
-                    case flatbuferl_reader:get_field(TableRef, FieldId, {union_value, UnionName}, Buffer) of
+                    case
+                        flatbuferl_reader:get_field(
+                            TableRef, FieldId, {union_value, UnionName}, Buffer
+                        )
+                    of
                         {ok, ValueRef} ->
-                            extract_fields(ValueRef, Defs, MemberType, ExtractSpec, Buffer, #{union_type => MemberType});
+                            extract_fields(ValueRef, Defs, MemberType, ExtractSpec, Buffer, #{
+                                union_type => MemberType
+                            });
                         missing ->
                             missing
                     end;
                 _ ->
-                    case flatbuferl_reader:get_field(TableRef, FieldId, {union_value, UnionName}, Buffer) of
+                    case
+                        flatbuferl_reader:get_field(
+                            TableRef, FieldId, {union_value, UnionName}, Buffer
+                        )
+                    of
                         {ok, ValueRef} ->
                             do_fetch(ValueRef, Defs, MemberType, Rest, Buffer);
                         missing ->
@@ -152,7 +170,9 @@ traverse_array(TableRef, FieldId, ArrayType, ElemType, Count, Defs, Rest, Buffer
 
 traverse_array_elements(_Elements, _ElemType, Count, _Defs, ['_size'], _Buffer) ->
     {ok, Count};
-traverse_array_elements(Elements, ElemType, Count, Defs, [Index | Rest], Buffer) when is_integer(Index) ->
+traverse_array_elements(Elements, ElemType, Count, Defs, [Index | Rest], Buffer) when
+    is_integer(Index)
+->
     %% Handle negative indices
     ActualIndex =
         if
@@ -183,7 +203,9 @@ traverse_array_elements(_Elements, _ElemType, _Count, _Defs, [Other | _], _Buffe
     error({invalid_path_element, Other}).
 
 %% Vector traversal
-traverse_vector(TableRef, FieldId, {vector, {union_value, UnionName} = ElemType}, Defs, Rest, Buffer) ->
+traverse_vector(
+    TableRef, FieldId, {vector, {union_value, UnionName} = ElemType}, Defs, Rest, Buffer
+) ->
     %% Union vectors have parallel type and value vectors
     TypeFieldId = FieldId - 1,
     TypeVecType = {vector, {union_type, UnionName}},
@@ -220,7 +242,9 @@ traverse_vector(TableRef, FieldId, {vector, ElemType}, Defs, Rest, Buffer) ->
 %% Union vector traversal
 traverse_union_vector({Length, _, _}, _TypeVecInfo, _UnionName, _Defs, ['_size'], _Buffer) ->
     {ok, Length};
-traverse_union_vector({Length, _, _} = ValVecInfo, TypeVecInfo, UnionName, Defs, [Index | Rest], Buffer) when is_integer(Index) ->
+traverse_union_vector(
+    {Length, _, _} = ValVecInfo, TypeVecInfo, UnionName, Defs, [Index | Rest], Buffer
+) when is_integer(Index) ->
     %% Handle negative indices
     ActualIndex =
         if
@@ -229,36 +253,67 @@ traverse_union_vector({Length, _, _} = ValVecInfo, TypeVecInfo, UnionName, Defs,
         end,
     case ActualIndex >= 0 andalso ActualIndex < Length of
         true ->
-            {ok, TypeIndex} = flatbuferl_reader:get_vector_element_at(TypeVecInfo, ActualIndex, Buffer),
-            {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(ValVecInfo, ActualIndex, Buffer),
+            {ok, TypeIndex} = flatbuferl_reader:get_vector_element_at(
+                TypeVecInfo, ActualIndex, Buffer
+            ),
+            {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
+                ValVecInfo, ActualIndex, Buffer
+            ),
             {union, Members} = maps:get(UnionName, Defs),
             MemberType = lists:nth(TypeIndex, Members),
             continue_from_union_element(ValueRef, MemberType, Defs, Rest, Buffer);
         false ->
             missing
     end;
-traverse_union_vector({Length, _, _} = ValVecInfo, TypeVecInfo, UnionName, Defs, ['*' | Rest], Buffer) ->
-    Results = wildcard_over_union_vector(ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, 0, []),
+traverse_union_vector(
+    {Length, _, _} = ValVecInfo, TypeVecInfo, UnionName, Defs, ['*' | Rest], Buffer
+) ->
+    Results = wildcard_over_union_vector(
+        ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, 0, []
+    ),
     {list, Results};
 traverse_union_vector(_ValVecInfo, _TypeVecInfo, _UnionName, _Defs, [Other | _], _Buffer) ->
     error({invalid_path_element, Other}).
 
-wildcard_over_union_vector(_ValVecInfo, _TypeVecInfo, Length, _UnionName, _Defs, _Rest, _Buffer, Idx, Acc) when Idx >= Length ->
+wildcard_over_union_vector(
+    _ValVecInfo, _TypeVecInfo, Length, _UnionName, _Defs, _Rest, _Buffer, Idx, Acc
+) when Idx >= Length ->
     lists:reverse(Acc);
-wildcard_over_union_vector(ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx, Acc) ->
+wildcard_over_union_vector(
+    ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx, Acc
+) ->
     {ok, TypeIndex} = flatbuferl_reader:get_vector_element_at(TypeVecInfo, Idx, Buffer),
     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(ValVecInfo, Idx, Buffer),
     {union, Members} = maps:get(UnionName, Defs),
     MemberType = lists:nth(TypeIndex, Members),
-    case continue_from_union_element(ValueRef, MemberType, Defs, Rest, Buffer) of
+    %% Catch unknown_field errors - different union members have different fields
+    Result =
+        try
+            continue_from_union_element(ValueRef, MemberType, Defs, Rest, Buffer)
+        catch
+            error:{unknown_field, _} -> filtered_out
+        end,
+    case Result of
         {ok, Value} ->
-            wildcard_over_union_vector(ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, [Value | Acc]);
+            wildcard_over_union_vector(
+                ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, [
+                    Value | Acc
+                ]
+            );
         {list, Values} ->
-            wildcard_over_union_vector(ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, [Values | Acc]);
+            wildcard_over_union_vector(
+                ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, [
+                    Values | Acc
+                ]
+            );
         missing ->
-            wildcard_over_union_vector(ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, Acc);
+            wildcard_over_union_vector(
+                ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, Acc
+            );
         filtered_out ->
-            wildcard_over_union_vector(ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, Acc)
+            wildcard_over_union_vector(
+                ValVecInfo, TypeVecInfo, Length, UnionName, Defs, Rest, Buffer, Idx + 1, Acc
+            )
     end.
 
 continue_from_union_element(ValueRef, MemberType, Defs, [], Buffer) ->
@@ -266,7 +321,9 @@ continue_from_union_element(ValueRef, MemberType, Defs, [], Buffer) ->
     to_map(ValueRef, Defs, MemberType, Buffer);
 continue_from_union_element(_ValueRef, MemberType, _Defs, ['_type'], _Buffer) ->
     {ok, MemberType};
-continue_from_union_element(ValueRef, MemberType, Defs, [ExtractSpec], Buffer) when is_list(ExtractSpec) ->
+continue_from_union_element(ValueRef, MemberType, Defs, [ExtractSpec], Buffer) when
+    is_list(ExtractSpec)
+->
     %% Extraction spec - pass union type context
     extract_fields(ValueRef, Defs, MemberType, ExtractSpec, Buffer, #{union_type => MemberType});
 continue_from_union_element(ValueRef, MemberType, Defs, Rest, Buffer) ->
@@ -296,7 +353,15 @@ wildcard_over_vector(_VecInfo, Length, _ElemType, _Defs, _Rest, _Buffer, Idx, Ac
     lists:reverse(Acc);
 wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx, Acc) ->
     {ok, Elem} = flatbuferl_reader:get_vector_element_at(VecInfo, Idx, Buffer),
-    case continue_from_element(Elem, ElemType, Defs, Rest, Buffer) of
+    %% Catch unknown_field errors during wildcard - this happens when iterating
+    %% over unions where different members have different fields
+    Result =
+        try
+            continue_from_element(Elem, ElemType, Defs, Rest, Buffer)
+        catch
+            error:{unknown_field, _} -> filtered_out
+        end,
+    case Result of
         {ok, Value} ->
             wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx + 1, [
                 Value | Acc
@@ -309,7 +374,7 @@ wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx, Acc) ->
             %% Filter out missing elements
             wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx + 1, Acc);
         filtered_out ->
-            %% Guard failed - filter out this element
+            %% Guard failed or field doesn't exist on this type - filter out
             wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx + 1, Acc)
     end.
 
@@ -419,7 +484,9 @@ check_guards([{'_type', ExpectedType} | Rest], TableRef, Defs, TableType, Buffer
         _ ->
             false
     end;
-check_guards([{Field, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when is_atom(Field) ->
+check_guards([{Field, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when
+    is_atom(Field)
+->
     case fetch_field(TableRef, Defs, TableType, Field, Buffer) of
         {ok, ExpectedValue} ->
             check_guards(Rest, TableRef, Defs, TableType, Buffer, Context);
@@ -428,7 +495,9 @@ check_guards([{Field, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer,
         missing ->
             false
     end;
-check_guards([{Path, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when is_list(Path) ->
+check_guards([{Path, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when
+    is_list(Path)
+->
     case do_fetch(TableRef, Defs, TableType, Path, Buffer) of
         {ok, ExpectedValue} ->
             check_guards(Rest, TableRef, Defs, TableType, Buffer, Context);
@@ -438,7 +507,9 @@ check_guards([{Path, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, 
             false
     end;
 %% Comparison guards: {field, op, value}
-check_guards([{Field, Op, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when is_atom(Field) ->
+check_guards([{Field, Op, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when
+    is_atom(Field)
+->
     case fetch_field(TableRef, Defs, TableType, Field, Buffer) of
         {ok, ActualValue} ->
             case compare(Op, ActualValue, ExpectedValue) of
@@ -448,7 +519,9 @@ check_guards([{Field, Op, ExpectedValue} | Rest], TableRef, Defs, TableType, Buf
         missing ->
             false
     end;
-check_guards([{Path, Op, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when is_list(Path) ->
+check_guards([{Path, Op, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, Context) when
+    is_list(Path)
+->
     case do_fetch(TableRef, Defs, TableType, Path, Buffer) of
         {ok, ActualValue} ->
             case compare(Op, ActualValue, ExpectedValue) of

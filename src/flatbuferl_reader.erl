@@ -387,8 +387,10 @@ element_size({struct, Fields}) ->
     {_Offsets, Size} = calc_struct_layout(Fields),
     Size;
 % offset
-element_size({union_type, _}) -> 1;
-element_size({union_value, _}) -> 4;
+element_size({union_type, _}) ->
+    1;
+element_size({union_value, _}) ->
+    4;
 element_size(TableName) when is_atom(TableName) -> 4.
 
 %% Read a scalar value from struct (no offset indirection)
