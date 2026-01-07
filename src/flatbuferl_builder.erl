@@ -953,9 +953,22 @@ encode_string(Bin) ->
     PadLen = (4 - (TotalLen rem 4)) rem 4,
     [<<Len:32/little>>, Bin, <<0, 0:(PadLen * 8)>>].
 
+%% Encode byte vector from binary - allows natural Erlang idiom for [ubyte]
+encode_byte_vector(Bin) ->
+    Len = byte_size(Bin),
+    TotalLen = 4 + Len,
+    PadLen = (4 - (TotalLen rem 4)) rem 4,
+    [<<Len:32/little>>, Bin, <<0:(PadLen * 8)>>].
+
 encode_ref(string, Bin, _Defs) when is_binary(Bin) ->
     %% Return iolist to preserve sub-binary references
     encode_string(Bin);
+encode_ref({vector, ElemType}, Bin, _Defs) when
+    is_binary(Bin),
+    (ElemType == ubyte orelse ElemType == byte orelse ElemType == int8 orelse ElemType == uint8)
+->
+    %% Allow binaries for byte vectors - natural Erlang idiom
+    encode_byte_vector(Bin);
 encode_ref({vector, ElemType}, Values, Defs) when is_list(Values) ->
     encode_vector(ElemType, Values, Defs);
 encode_ref({union_value, UnionName}, #{type := MemberType, value := Value}, Defs) ->

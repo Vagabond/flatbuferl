@@ -17,9 +17,13 @@
     to_map/2,
     from_map/2,
     from_map/3,
+    update/2,
     validate/2,
     validate/3
 ]).
+
+%% @private Context accessors for internal modules
+-export([ctx_buffer/1, ctx_schema/1, ctx_root/1]).
 
 -export_type([ctx/0, path/0, decode_opts/0, schema/0, validate_opts/0, validation_error/0]).
 
@@ -127,6 +131,22 @@ from_map(Map, Schema) ->
 -spec from_map(map(), schema(), flatbuferl_builder:encode_opts()) -> iodata().
 from_map(Map, Schema, Opts) ->
     flatbuferl_builder:from_map(Map, Schema, Opts).
+
+%% @doc Update fields in a FlatBuffer.
+%%
+%% For fixed-size scalar fields that exist in the buffer, performs an efficient
+%% in-place splice without copying the buffer. For variable-length fields or
+%% fields not present in the buffer, falls back to full re-encoding.
+%%
+%% Changes is a nested map mirroring the structure from `to_map/1':
+%% ```
+%% update(Ctx, #{hp => 150})              %% update scalar
+%% update(Ctx, #{pos => #{x => 5.0}})     %% update nested struct field
+%% update(Ctx, #{hp => 200, level => 10}) %% update multiple fields
+%% '''
+-spec update(ctx(), map()) -> iodata().
+update(Ctx, Changes) ->
+    flatbuferl_update:update(Ctx, Changes).
 
 table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     {table, Fields} = maps:get(TableType, Defs),
@@ -357,6 +377,25 @@ file_id(#ctx{buffer = Buffer}) ->
 file_id(Buffer) when is_binary(Buffer) ->
     flatbuferl_reader:get_file_id(Buffer).
 
+%% @hidden
+-spec ctx_buffer(ctx()) -> binary().
+ctx_buffer(#ctx{buffer = Buffer}) -> Buffer.
+
+%% @hidden
+-spec ctx_schema(ctx()) -> schema().
+ctx_schema(#ctx{defs = Defs, root_type = RootType}) ->
+    {Defs, #{root_type => RootType}}.
+
+%% @hidden
+-spec ctx_root(ctx()) ->
+    {
+        Defs :: flatbuferl_schema:definitions(),
+        RootType :: atom(),
+        Root :: flatbuferl_reader:table_ref()
+    }.
+ctx_root(#ctx{defs = Defs, root_type = RootType, root = Root}) ->
+    {Defs, RootType, Root}.
+
 %% =============================================================================
 %% Internal
 %% =============================================================================
@@ -368,10 +407,14 @@ get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
     {table, Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, Type, Default} ->
-            case flatbuferl_reader:get_field(TableRef, FieldId, Type, Buffer) of
-                {ok, Value} -> {ok, Value};
-                missing when Default =/= undefined -> {ok, Default};
-                missing -> missing
+            ReaderType = resolve_for_reader(Type, Defs),
+            case flatbuferl_reader:get_field(TableRef, FieldId, ReaderType, Buffer) of
+                {ok, Value} ->
+                    {ok, convert_enum_value(Value, Type, Defs)};
+                missing when Default =/= undefined ->
+                    {ok, Default};
+                missing ->
+                    missing
             end;
         error ->
             error({unknown_field, FieldName})
@@ -418,6 +461,27 @@ normalize_type({Type, undefined}) when is_atom(Type) ->
     Type;
 normalize_type(Type) ->
     Type.
+
+%% Resolve type name to reader-compatible type
+resolve_for_reader(TypeName, Defs) when is_atom(TypeName) ->
+    case maps:get(TypeName, Defs, undefined) of
+        {{enum, Base}, _Values} -> {enum, Base};
+        _ -> TypeName
+    end;
+resolve_for_reader(Type, _Defs) ->
+    Type.
+
+%% Convert integer enum value back to atom
+convert_enum_value(Value, TypeName, Defs) when is_atom(TypeName), is_integer(Value) ->
+    case maps:get(TypeName, Defs, undefined) of
+        {{enum, _Base}, Values} ->
+            %% Enum values are 0-indexed
+            lists:nth(Value + 1, Values);
+        _ ->
+            Value
+    end;
+convert_enum_value(Value, _Type, _Defs) ->
+    Value.
 
 %% =============================================================================
 %% Validation

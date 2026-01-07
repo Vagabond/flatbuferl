@@ -4,6 +4,7 @@
     get_root/1,
     get_file_id/1,
     get_field/4,
+    get_field_offset/3,
     get_vector_info/4,
     get_vector_element_at/3,
     element_size/1
@@ -12,6 +13,8 @@
 -type buffer() :: binary().
 -type table_ref() :: {table, Offset :: non_neg_integer(), buffer()}.
 -type field_id() :: non_neg_integer().
+
+-export_type([table_ref/0]).
 
 -spec get_root(buffer()) -> table_ref().
 get_root(Buffer) ->
@@ -59,6 +62,28 @@ get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
             end;
         false ->
             %% Field ID beyond vtable - field not present
+            missing
+    end.
+
+%% Get the absolute byte offset of a field in the buffer (for mutation).
+%% Returns {ok, ByteOffset} or missing if field not present.
+-spec get_field_offset(table_ref(), field_id(), buffer()) ->
+    {ok, non_neg_integer()} | missing.
+get_field_offset({table, TableOffset, Buffer}, FieldId, _) ->
+    <<_:TableOffset/binary, VTableSOffset:32/little-signed, _/binary>> = Buffer,
+    VTableOffset = TableOffset - VTableSOffset,
+    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _TableSize:16/little-unsigned,
+        VTableRest/binary>> = Buffer,
+    FieldOffsetPos = 4 + (FieldId * 2),
+    case FieldOffsetPos < VTableSize of
+        true ->
+            FieldOffsetInVTable = FieldOffsetPos - 4,
+            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
+            case FieldOffset of
+                0 -> missing;
+                _ -> {ok, TableOffset + FieldOffset}
+            end;
+        false ->
             missing
     end.
 

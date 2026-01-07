@@ -152,6 +152,25 @@ Guard operators: `'>'`, `'>='`, `'<'`, `'=<'`, `'=='`, `'/='`, `in`, `not_in`
 
 See the `flatbuferl_fetch` module documentation for complete details.
 
+Updating buffers in-place:
+```erlang
+Ctx = flatbuferl:new(Buffer, Schema),
+
+%% Update scalar fields - efficient splice, no buffer copy
+NewIodata = flatbuferl:update(Ctx, #{hp => 150}),
+
+%% Nested struct fields
+NewIodata = flatbuferl:update(Ctx, #{pos => #{x => 5.0, y => 10.0}}),
+
+%% Multiple fields at once
+NewIodata = flatbuferl:update(Ctx, #{hp => 200, pos => #{z => 99.0}}),
+
+%% Variable-length fields fall back to re-encoding automatically
+NewIodata = flatbuferl:update(Ctx, #{name => <<"NewName">>}).
+```
+
+For fixed-size scalar fields that exist in the buffer, `update` performs an efficient splice that returns an iolist referencing the original buffer - no large copies. For variable-length fields (strings, vectors) or fields not present in the buffer, it falls back to full re-encoding via `to_map`/`from_map`.
+
 Validating data before encoding:
 ```erlang
 %% Validate a map against the schema
@@ -181,6 +200,7 @@ flatbuferl:to_map(Ctx) -> Map.
 flatbuferl:to_map(Ctx, Opts) -> Map.
 flatbuferl:from_map(Map, Schema) -> iodata().
 flatbuferl:from_map(Map, Schema, Opts) -> iodata().
+flatbuferl:update(Ctx, Changes) -> iodata().  %% efficient in-place update
 flatbuferl:validate(Map, Schema) -> ok | {error, [ValidationError]}.
 flatbuferl:validate(Map, Schema, Opts) -> ok | {error, [ValidationError]}.
 flatbuferl:file_id(Ctx | Buffer) -> <<_:32>>.
@@ -252,6 +272,7 @@ Supported:
 - Struct alignment (automatic, based on field sizes)
 - VTable deduplication within tables
 - Map/JSON validation against schema
+- In-place updates for scalar fields (zero-copy splice)
 
 Not supported:
 - `force_align` attribute
