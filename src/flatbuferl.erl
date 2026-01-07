@@ -218,6 +218,8 @@ resolve_type(Type, Defs) when is_atom(Type) ->
     end;
 resolve_type({vector, ElemType}, Defs) ->
     {vector, resolve_type(ElemType, Defs)};
+resolve_type({array, ElemType, Count}, Defs) ->
+    {array, resolve_type(ElemType, Defs), Count};
 resolve_type(Type, _Defs) ->
     Type.
 

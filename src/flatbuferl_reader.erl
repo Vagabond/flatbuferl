@@ -195,6 +195,10 @@ read_value(Buffer, Pos, {union_value, _UnionName}) ->
 read_value(Buffer, Pos, {struct, Fields}) ->
     {StructMap, _Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {ok, StructMap};
+%% Array - read inline fixed-size array
+read_value(Buffer, Pos, {array, ElemType, Count}) ->
+    {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
+    {ok, Elements};
 %% Nested table - return table reference for lazy access
 read_value(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -267,6 +271,10 @@ read_vector_element(Buffer, Pos, string) ->
 read_vector_element(Buffer, Pos, {struct, Fields}) ->
     {StructMap, Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {Size, StructMap};
+%% Array in vector (inline data)
+read_vector_element(Buffer, Pos, {array, ElemType, Count}) ->
+    {Elements, Size} = read_array_elements(Buffer, Pos, ElemType, Count),
+    {Size, Elements};
 %% Generic table reference in vector (for union vectors where type is determined separately)
 read_vector_element(Buffer, Pos, table) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -346,7 +354,8 @@ scalar_size(ulong) -> 8;
 scalar_size(int64) -> 8;
 scalar_size(uint64) -> 8;
 scalar_size(double) -> 8;
-scalar_size(float64) -> 8.
+scalar_size(float64) -> 8;
+scalar_size({array, ElemType, Count}) -> scalar_size(ElemType) * Count.
 
 %% Read a scalar value from struct (no offset indirection)
 read_struct_value(Buffer, Pos, bool) ->
@@ -381,4 +390,23 @@ read_struct_value(Buffer, Pos, Type) when Type == ulong; Type == uint64 ->
     {ok, Value};
 read_struct_value(Buffer, Pos, Type) when Type == double; Type == float64 ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
-    {ok, Value}.
+    {ok, Value};
+read_struct_value(Buffer, Pos, {array, ElemType, Count}) ->
+    {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
+    {ok, Elements}.
+
+%% =============================================================================
+%% Array Reading
+%% =============================================================================
+
+%% Read fixed-size array elements inline
+read_array_elements(Buffer, Pos, ElemType, Count) ->
+    ElemSize = scalar_size(ElemType),
+    Elements = read_array_elements_loop(Buffer, Pos, ElemType, ElemSize, Count, []),
+    {Elements, ElemSize * Count}.
+
+read_array_elements_loop(_Buffer, _Pos, _ElemType, _ElemSize, 0, Acc) ->
+    lists:reverse(Acc);
+read_array_elements_loop(Buffer, Pos, ElemType, ElemSize, Count, Acc) ->
+    {ok, Value} = read_struct_value(Buffer, Pos, ElemType),
+    read_array_elements_loop(Buffer, Pos + ElemSize, ElemType, ElemSize, Count - 1, [Value | Acc]).

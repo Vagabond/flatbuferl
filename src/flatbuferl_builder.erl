@@ -362,6 +362,8 @@ get_field_value(Map, Name) when is_atom(Name) ->
 is_scalar_type({enum, _}) -> true;
 %% Structs are inline fixed-size data
 is_scalar_type({struct, _}) -> true;
+%% Fixed arrays are inline fixed-size data
+is_scalar_type({array, _, _}) -> true;
 %% Union type field is ubyte
 is_scalar_type({union_type, _}) -> true;
 is_scalar_type(bool) -> true;
@@ -396,6 +398,8 @@ resolve_type(Type, Defs) when is_atom(Type) ->
     end;
 resolve_type({vector, ElemType}, Defs) ->
     {vector, resolve_type(ElemType, Defs)};
+resolve_type({array, ElemType, Count}, Defs) ->
+    {array, resolve_type(ElemType, Defs), Count};
 resolve_type(Type, _Defs) ->
     Type.
 
@@ -604,6 +608,7 @@ field_inline_size({vector, _}) -> 4;
 field_inline_size({union_value, _}) -> 4;
 field_inline_size(Type) when is_atom(Type) -> type_size(Type);
 field_inline_size({struct, _} = T) -> type_size(T);
+field_inline_size({array, _, _} = T) -> type_size(T);
 field_inline_size({enum, _} = T) -> type_size(T);
 field_inline_size({union_type, _}) -> 1;
 %% Default for unknown refs
@@ -1400,8 +1405,16 @@ encode_scalar(Value, {enum, Base}) ->
     encode_scalar(Value, Base);
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
+encode_scalar(List, {array, ElemType, Count}) when is_list(List) ->
+    encode_array(List, ElemType, Count);
 encode_scalar(TypeIndex, {union_type, _UnionName}) when is_integer(TypeIndex) ->
     <<TypeIndex:8/unsigned>>.
+
+%% Encode fixed-size array as inline data
+encode_array(List, ElemType, Count) ->
+    length(List) == Count orelse
+        error({array_length_mismatch, expected, Count, got, length(List)}),
+    [encode_scalar(Elem, ElemType) || Elem <- List].
 
 %% Encode struct as inline data (returns iolist)
 encode_struct(Map, Fields) ->
@@ -1455,6 +1468,7 @@ type_size(double) -> 8;
 type_size(float64) -> 8;
 type_size({enum, Base}) -> type_size(Base);
 type_size({struct, Fields}) -> calc_struct_size(Fields);
+type_size({array, ElemType, Count}) -> type_size(ElemType) * Count;
 %% Union type is ubyte
 type_size({union_type, _}) -> 1;
 type_size(_) -> 4.

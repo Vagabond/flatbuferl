@@ -12,7 +12,7 @@ option -> namespace string ';' : #{get_name('$1') => get_value_atom('$2')}.
 option -> root_type string ';' : #{get_name('$1') => get_value_atom('$2')}.
 
 % options (quoted)
-option -> include quote string quote ';'         : #{get_name('$1') => get_value_bin('$3')}.
+option -> include quote string quote ';'         : #{include => [get_value_bin('$3')]}.
 option -> attribute quote string quote ';'       : #{get_name('$1') => get_value_bin('$3')}.
 option -> file_identifier quote string quote ';' : #{get_name('$1') => get_value_bin('$3')}.
 option -> file_extension quote string quote ';'  : #{get_name('$1') => get_value_bin('$3')}.
@@ -34,6 +34,7 @@ field -> key_def '(' attributes ')' : add_attrs('$1', '$3').
 
 key_def -> string ':' string              : { get_value_atom('$1'), get_value_atom('$3') }.
 key_def -> string ':' '[' string ']'      : { get_value_atom('$1'), {vector, get_value_atom('$4')}}.
+key_def -> string ':' '[' string ':' int ']' : { get_value_atom('$1'), {array, get_value_atom('$4'), get_value('$6')}}.
 key_def -> string ':' string '=' value    : { get_value_atom('$1'), {get_value_atom('$3'), '$5' }}.
 
 attributes -> attribute_def ',' attributes : maps:merge('$1', '$3').
@@ -64,6 +65,10 @@ get_name({Token, _Line, _Value})  -> Token;
 get_name({Token, _Line})          -> Token.
 
 add_def({Defs, Opts}, Def) -> {maps:merge(Defs, Def), Opts}.
+add_opt({Defs, Opts}, #{include := NewIncludes}) ->
+    %% Accumulate includes into a list
+    Includes = maps:get(include, Opts, []),
+    {Defs, Opts#{include => Includes ++ NewIncludes}};
 add_opt({Defs, Opts}, Opt) -> {Defs, maps:merge(Opts, Opt)}.
 
 add_attrs({Name, Type}, Attrs) when map_size(Attrs) == 0 -> {Name, Type};

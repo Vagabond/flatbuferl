@@ -12,7 +12,7 @@
     root_type => atom(),
     file_identifier => binary(),
     file_extension => binary(),
-    include => binary(),
+    include => [binary()],
     attribute => binary()
 }.
 
@@ -54,9 +54,79 @@ parse(Schema) when is_list(Schema) ->
 %% Parse a schema file
 -spec parse_file(file:filename()) -> {ok, {map(), map()}} | {error, term()}.
 parse_file(Filename) ->
-    case file:read_file(Filename) of
-        {ok, Contents} -> parse(Contents);
-        {error, _} = Err -> Err
+    AbsPath = filename:absname(Filename),
+    parse_file(AbsPath, sets:new()).
+
+%% Internal: parse with cycle detection
+-spec parse_file(file:filename(), sets:set(file:filename())) ->
+    {ok, {map(), map()}} | {error, term()}.
+parse_file(AbsPath, Seen) ->
+    case sets:is_element(AbsPath, Seen) of
+        true ->
+            {error, {circular_include, AbsPath}};
+        false ->
+            case file:read_file(AbsPath) of
+                {ok, Contents} ->
+                    BaseDir = filename:dirname(AbsPath),
+                    NewSeen = sets:add_element(AbsPath, Seen),
+                    parse_with_includes(Contents, BaseDir, NewSeen);
+                {error, _} = Err ->
+                    Err
+            end
+    end.
+
+%% Parse content and process includes
+parse_with_includes(Schema, BaseDir, Seen) when is_binary(Schema) ->
+    parse_with_includes(binary_to_list(Schema), BaseDir, Seen);
+parse_with_includes(Schema, BaseDir, Seen) when is_list(Schema) ->
+    case flatbuferl_lexer:string(Schema) of
+        {ok, Tokens, _} ->
+            case flatbuferl_parser:parse(Tokens) of
+                {ok, {Defs, Opts}} ->
+                    process_includes(Defs, Opts, BaseDir, Seen);
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _, _} = Err ->
+            {error, Err}
+    end.
+
+%% Process include directives
+process_includes(Defs, Opts, BaseDir, Seen) ->
+    Includes = maps:get(include, Opts, []),
+    case process_includes_list(Includes, Defs, BaseDir, Seen) of
+        {ok, MergedDefs} ->
+            %% Remove includes from opts (they've been processed)
+            CleanOpts = maps:remove(include, Opts),
+            {ok, process({MergedDefs, CleanOpts})};
+        {error, _} = Err ->
+            Err
+    end.
+
+process_includes_list([], Defs, _BaseDir, _Seen) ->
+    {ok, Defs};
+process_includes_list([Include | Rest], Defs, BaseDir, Seen) ->
+    IncludePath = filename:absname(binary_to_list(Include), BaseDir),
+    case parse_file(IncludePath, Seen) of
+        {ok, {IncludedDefs, _IncludedOpts}} ->
+            case merge_definitions(Defs, IncludedDefs) of
+                {ok, MergedDefs} ->
+                    process_includes_list(Rest, MergedDefs, BaseDir, Seen);
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Merge definitions, error on duplicates
+merge_definitions(Defs1, Defs2) ->
+    Duplicates = maps:keys(maps:with(maps:keys(Defs1), Defs2)),
+    case Duplicates of
+        [] ->
+            {ok, maps:merge(Defs1, Defs2)};
+        _ ->
+            {error, {duplicate_types, Duplicates}}
     end.
 
 %% Post-process parsed flatbuferl_schema: assign field IDs, validate
@@ -247,6 +317,9 @@ to_field_atom(B) when is_binary(B) ->
 validate_value(Name, Value, {vector, ElemType}, Defs, Opts) ->
     validate_vector(Name, Value, ElemType, Defs, Opts);
 
+validate_value(Name, Value, {array, ElemType, Count}, Defs, Opts) ->
+    validate_array(Name, Value, ElemType, Count, Defs, Opts);
+
 validate_value(Name, Value, {union_type, UnionName}, Defs, _Opts) ->
     validate_union_type(Name, Value, UnionName, Defs);
 
@@ -334,6 +407,23 @@ validate_vector(Name, Values, ElemType, Defs, Opts) when is_list(Values) ->
     lists:reverse(Errors);
 validate_vector(Name, Value, ElemType, _Defs, _Opts) ->
     [{type_mismatch, Name, {vector, ElemType}, Value}].
+
+validate_array(Name, Values, ElemType, Count, Defs, Opts) when is_list(Values), length(Values) == Count ->
+    {Errors, _} = lists:foldl(
+        fun(Elem, {ErrAcc, Idx}) ->
+            case validate_value(Name, Elem, ElemType, Defs, Opts) of
+                [] -> {ErrAcc, Idx + 1};
+                [Err | _] -> {[{invalid_array_element, Name, Idx, Err} | ErrAcc], Idx + 1}
+            end
+        end,
+        {[], 0},
+        Values
+    ),
+    lists:reverse(Errors);
+validate_array(Name, Values, _ElemType, Count, _Defs, _Opts) when is_list(Values) ->
+    [{array_length_mismatch, Name, Count, length(Values)}];
+validate_array(Name, Value, ElemType, Count, _Defs, _Opts) ->
+    [{type_mismatch, Name, {array, ElemType, Count}, Value}].
 
 validate_union_type(Name, Value, UnionName, Defs) ->
     {union, Members} = maps:get(UnionName, Defs),

@@ -164,18 +164,17 @@ Buffers are binary-compatible with flatc. Unsupported features will fail at sche
 
 Supported:
 - Tables, structs, enums, unions, vectors of unions
-- Namespaces, file identifiers
+- Namespaces, file identifiers, include directives
 - Field defaults
 - Attributes: `id`, `deprecated`, `required`
 - Optional scalars (`field: int = null`)
+- Fixed-size arrays (`[int:4]`)
 - Struct alignment (automatic, based on field sizes)
 - VTable deduplication within tables
 - Map/JSON validation against schema
 
 Not supported:
-- Fixed-size arrays (`[int:4]`)
 - `force_align` attribute
-- `include` directives (parsed but not processed)
 - `rpc_service`
 - Flexbuffers
 

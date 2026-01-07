@@ -704,3 +704,134 @@ optional_scalar_test_() ->
              ?assertEqual(ok, flatbuferl:validate(Map, Schema))
          end}
     ].
+
+%% =============================================================================
+%% Include Directive Tests
+%% =============================================================================
+
+include_test_() ->
+    [
+        {"basic include works",
+         fun() ->
+             {ok, {Defs, Opts}} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
+             ?assert(maps:is_key('Entity', Defs)),
+             ?assert(maps:is_key('Vec3', Defs)),
+             ?assert(maps:is_key('Color', Defs)),
+             ?assertEqual('Entity', maps:get(root_type, Opts))
+         end},
+        {"include encode/decode roundtrip",
+         fun() ->
+             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
+             Map = #{name => <<"Test">>, pos => #{x => 1.0, y => 2.0, z => 3.0}, color => 1},
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             ?assertEqual(<<"Test">>, maps:get(name, Result)),
+             Pos = maps:get(pos, Result),
+             ?assert(abs(maps:get(x, Pos) - 1.0) < 0.001)
+         end},
+        {"circular include detected",
+         fun() ->
+             Result = flatbuferl_schema:parse_file("test/schemas/circular_a.fbs"),
+             ?assertMatch({error, {circular_include, _}}, Result)
+         end},
+        {"duplicate type detected",
+         fun() ->
+             Result = flatbuferl_schema:parse_file("test/schemas/duplicate.fbs"),
+             ?assertMatch({error, {duplicate_types, ['Vec3']}}, Result)
+         end},
+        {"missing include file",
+         fun() ->
+             ok = file:write_file("/tmp/missing_include.fbs",
+                 <<"include \"nonexistent.fbs\";\ntable T { x: int; }\nroot_type T;">>),
+             Result = flatbuferl_schema:parse_file("/tmp/missing_include.fbs"),
+             ?assertMatch({error, enoent}, Result),
+             file:delete("/tmp/missing_include.fbs")
+         end}
+    ].
+
+%% =============================================================================
+%% Fixed-Size Array Tests
+%% =============================================================================
+
+fixed_array_test_() ->
+    [
+        {"array schema parses",
+         fun() ->
+             {ok, {Defs, _Opts}} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+             ?assert(maps:is_key('ArrayTable', Defs)),
+             {table, Fields} = maps:get('ArrayTable', Defs),
+             %% Fields have {Name, Type, Attrs} format after parsing
+             {floats, {array, float, 3}, _} = lists:keyfind(floats, 1, Fields),
+             {ints, {array, int, 4}, _} = lists:keyfind(ints, 1, Fields),
+             {bytes, {array, byte, 2}, _} = lists:keyfind(bytes, 1, Fields)
+         end},
+        {"array encode/decode roundtrip",
+         fun() ->
+             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+             Map = #{
+                 floats => [1.0, 2.0, 3.0],
+                 ints => [10, 20, 30, 40],
+                 bytes => [-1, 127]
+             },
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             [F1, F2, F3] = maps:get(floats, Result),
+             ?assert(abs(F1 - 1.0) < 0.001),
+             ?assert(abs(F2 - 2.0) < 0.001),
+             ?assert(abs(F3 - 3.0) < 0.001),
+             ?assertEqual([10, 20, 30, 40], maps:get(ints, Result)),
+             ?assertEqual([-1, 127], maps:get(bytes, Result))
+         end},
+        {"array validation - correct length",
+         fun() ->
+             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+             Map = #{floats => [1.0, 2.0, 3.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
+             ?assertEqual(ok, flatbuferl:validate(Map, Schema))
+         end},
+        {"array validation - wrong length",
+         fun() ->
+             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+             Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
+             {error, Errors} = flatbuferl:validate(Map, Schema),
+             ?assertMatch([{array_length_mismatch, floats, 3, 2}], Errors)
+         end},
+        {"array validation - wrong element type",
+         fun() ->
+             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+             Map = #{floats => [<<"not">>, <<"floats">>, <<"here">>], ints => [1, 2, 3, 4], bytes => [0, 0]},
+             {error, Errors} = flatbuferl:validate(Map, Schema),
+             %% All invalid elements are reported
+             ?assert(length(Errors) >= 1),
+             [{invalid_array_element, floats, 0, _} | _] = Errors
+         end},
+        {"array encoding error on wrong length",
+         fun() ->
+             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+             Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
+             ?assertError({array_length_mismatch, expected, 3, got, 2},
+                          flatbuferl:from_map(Map, Schema))
+         end},
+        {"inline schema array roundtrip",
+         fun() ->
+             Schema = {#{
+                 'Test' => {table, [
+                     {vec3, {array, float, 3}, #{id => 0}},
+                     {matrix, {array, int, 9}, #{id => 1}}
+                 ]}
+             }, #{root_type => 'Test'}},
+             Map = #{
+                 vec3 => [1.5, 2.5, 3.5],
+                 matrix => [1, 0, 0, 0, 1, 0, 0, 0, 1]
+             },
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             [V1, V2, V3] = maps:get(vec3, Result),
+             ?assert(abs(V1 - 1.5) < 0.001),
+             ?assert(abs(V2 - 2.5) < 0.001),
+             ?assert(abs(V3 - 3.5) < 0.001),
+             ?assertEqual([1, 0, 0, 0, 1, 0, 0, 0, 1], maps:get(matrix, Result))
+         end}
+    ].
