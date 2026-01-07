@@ -131,7 +131,26 @@ flatbuferl_fetch:fetch(Ctx, [inventory, '*', [{'_type', 'Weapon'}, name, damage]
 %% [[<<"Sword">>, 10], [<<"Axe">>, 25]]
 ```
 
-See `doc/flatbuferl_fetch.html` for complete documentation on path syntax, guards, and error conditions.
+**Fetch path cheat sheet** - paths as pseudocode:
+
+| Path | Equivalent |
+|------|------------|
+| `[monsters, 0]` | `monsters[0]` |
+| `[monsters, -1]` | `monsters[-1]` (last) |
+| `[monsters, 0, name]` | `monsters[0].name` |
+| `[monsters, '_size']` | `len(monsters)` |
+| `[monsters, '*']` | `[m for m in monsters]` |
+| `[monsters, '*', name]` | `[m.name for m in monsters]` |
+| `[monsters, '*', [name, hp]]` | `[[m.name, m.hp] for m in monsters]` |
+| `[..., [{hp, '>', 50}, name]]` | `[m.name for m in ... if m.hp > 50]` |
+| `[..., [{hp, in, [10,20]}, name]]` | `[m.name for m in ... if m.hp in [10,20]]` |
+| `[..., [{is_boss, true}, {hp, '>', 100}, name]]` | `... if m.is_boss and m.hp > 100` |
+| `[equipped, '_type']` | `type(equipped)` (union discriminator) |
+| `[..., [{'_type', 'Weapon'}, name]]` | `... if type(x) == Weapon` |
+
+Guard operators: `'>'`, `'>='`, `'<'`, `'=<'`, `'=='`, `'/='`, `in`, `not_in`
+
+See the `flatbuferl_fetch` module documentation for complete details.
 
 Validating data before encoding:
 ```erlang
