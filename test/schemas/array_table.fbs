@@ -1,0 +1,7 @@
+table ArrayTable {
+  floats: [float:3];
+  ints: [int:4];
+  bytes: [byte:2];
+}
+
+root_type ArrayTable;

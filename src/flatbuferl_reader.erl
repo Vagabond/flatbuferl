@@ -1,85 +1,24 @@
+%% @private
 -module(flatbuferl_reader).
 -export([
     get_root/1,
     get_file_id/1,
-    get/3,
     get_field/4
 ]).
 
-%% Type definitions for clarity
 -type buffer() :: binary().
 -type table_ref() :: {table, Offset :: non_neg_integer(), buffer()}.
--type schema() :: map().
 -type field_id() :: non_neg_integer().
--type path() :: [atom()].
 
-%% Get root table reference from buffer
 -spec get_root(buffer()) -> table_ref().
 get_root(Buffer) ->
     <<RootOffset:32/little-unsigned, _/binary>> = Buffer,
     {table, RootOffset, Buffer}.
 
-%% Get file identifier (4 bytes after root offset)
 -spec get_file_id(buffer()) -> binary().
 get_file_id(Buffer) ->
     <<_RootOffset:32, FileId:4/binary, _/binary>> = Buffer,
     FileId.
-
-%% High-level path-based access
--spec get(table_ref(), schema(), path()) -> {ok, term()} | missing | {error, term()}.
-get(TableRef, Schema, [FieldName]) ->
-    get_field_by_name(TableRef, Schema, FieldName);
-get(TableRef, Schema, [FieldName | Rest]) ->
-    case get_field_by_name(TableRef, Schema, FieldName) of
-        {ok, NestedTableRef} when element(1, NestedTableRef) == table ->
-            %% Nested path access not supported via flatbuferl_reader:get/3
-            %% Use flatbuferl:get/2 for nested paths
-
-            %% Suppress unused warnings
-            _ = {NestedTableRef, Rest},
-            {error, {unknown_nested_type, FieldName}};
-        {ok, _Other} ->
-            {error, {not_a_table, FieldName}};
-        missing ->
-            missing;
-        {error, _} = Err ->
-            Err
-    end.
-
-%% Get field by name using schema
-get_field_by_name({table, TableOffset, Buffer}, Schema, FieldName) ->
-    case find_field_in_schema(Schema, FieldName) of
-        {ok, FieldId, FieldType} ->
-            get_field({table, TableOffset, Buffer}, FieldId, FieldType, Buffer);
-        error ->
-            {error, {unknown_field, FieldName}}
-    end.
-
-find_field_in_schema({table, Fields}, FieldName) ->
-    find_field_in_list(Fields, FieldName);
-find_field_in_schema(#{} = Defs, FieldName) ->
-    %% Schema is full definitions map, need table name context
-    %% For now just search all tables
-    maps:fold(
-        fun
-            (_Name, {table, Fields}, error) ->
-                find_field_in_list(Fields, FieldName);
-            (_Name, _Def, Acc) ->
-                Acc
-        end,
-        error,
-        Defs
-    ).
-
-find_field_in_list([], _FieldName) ->
-    error;
-find_field_in_list([{Name, Type, Attrs} | _Rest], Name) ->
-    {ok, maps:get(id, Attrs), Type};
-find_field_in_list([{Name, Type} | _Rest], Name) ->
-    %% No attrs, shouldn't happen after processing
-    {ok, 0, Type};
-find_field_in_list([_ | Rest], FieldName) ->
-    find_field_in_list(Rest, FieldName).
 
 %% Low-level field access by ID and type
 -spec get_field(table_ref(), field_id(), atom() | tuple(), buffer()) ->

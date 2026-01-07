@@ -269,14 +269,18 @@ validate_valid_map_test() ->
 validate_wrong_scalar_type_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Orc">>, hp => <<"not an int">>},
-    ?assertMatch({error, [{type_mismatch, hp, int, <<"not an int">>}]},
-                 flatbuferl:validate(Map, Schema)).
+    ?assertMatch(
+        {error, [{type_mismatch, hp, int, <<"not an int">>}]},
+        flatbuferl:validate(Map, Schema)
+    ).
 
 validate_string_type_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => 12345},
-    ?assertMatch({error, [{type_mismatch, name, string, 12345}]},
-                 flatbuferl:validate(Map, Schema)).
+    ?assertMatch(
+        {error, [{type_mismatch, name, string, 12345}]},
+        flatbuferl:validate(Map, Schema)
+    ).
 
 validate_optional_fields_ok_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
@@ -292,8 +296,10 @@ validate_unknown_fields_ignored_test() ->
 validate_unknown_fields_error_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     Map = #{name => <<"Orc">>, unknown_field => 123},
-    ?assertMatch({error, [{unknown_field, unknown_field}]},
-                 flatbuferl:validate(Map, Schema, #{unknown_fields => error})).
+    ?assertMatch(
+        {error, [{unknown_field, unknown_field}]},
+        flatbuferl:validate(Map, Schema, #{unknown_fields => error})
+    ).
 
 validate_vector_valid_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
@@ -303,14 +309,18 @@ validate_vector_valid_test() ->
 validate_vector_wrong_element_type_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
     Map = #{counts => [1, <<"not int">>, 3]},
-    ?assertMatch({error, [{invalid_vector_element, counts, 1, _}]},
-                 flatbuferl:validate(Map, Schema)).
+    ?assertMatch(
+        {error, [{invalid_vector_element, counts, 1, _}]},
+        flatbuferl:validate(Map, Schema)
+    ).
 
 validate_vector_not_a_list_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
     Map = #{counts => 42},
-    ?assertMatch({error, [{type_mismatch, counts, {vector, int}, 42}]},
-                 flatbuferl:validate(Map, Schema)).
+    ?assertMatch(
+        {error, [{type_mismatch, counts, {vector, int}, 42}]},
+        flatbuferl:validate(Map, Schema)
+    ).
 
 validate_nested_table_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_nested.fbs"),
@@ -320,8 +330,10 @@ validate_nested_table_test() ->
 validate_nested_table_invalid_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_nested.fbs"),
     Map = #{name => <<"Player">>, pos => #{x => <<"not a float">>}},
-    ?assertMatch({error, [{nested_errors, pos, [{type_mismatch, x, float, _}]}]},
-                 flatbuferl:validate(Map, Schema)).
+    ?assertMatch(
+        {error, [{nested_errors, pos, [{type_mismatch, x, float, _}]}]},
+        flatbuferl:validate(Map, Schema)
+    ).
 
 validate_binary_keys_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
@@ -332,6 +344,10 @@ validate_binary_keys_test() ->
 validate_int_range_test() ->
     {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
     %% hp is int (32-bit signed), should be -2147483648 to 2147483647
-    Map = #{hp => 3000000000},  %% Out of int32 range
-    ?assertMatch({error, [{type_mismatch, hp, _, 3000000000}]},
-                 flatbuferl:validate(Map, Schema)).
+
+    %% Out of int32 range
+    Map = #{hp => 3000000000},
+    ?assertMatch(
+        {error, [{type_mismatch, hp, _, 3000000000}]},
+        flatbuferl:validate(Map, Schema)
+    ).

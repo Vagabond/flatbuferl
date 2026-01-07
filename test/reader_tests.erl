@@ -268,33 +268,6 @@ type_alias_float64_test() ->
     ?assert(abs(Value - 2.718281828459045) < 0.0000001).
 
 %% =============================================================================
-%% High-level API Tests (get/3 with schema)
-%% =============================================================================
-
-get_with_schema_test() ->
-    Buffer = monster_binary(),
-    {ok, {Defs, _}} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
-    {table, Fields} = maps:get('Monster', Defs),
-    Root = flatbuferl_reader:get_root(Buffer),
-    ?assertEqual({ok, <<"Orc">>}, flatbuferl_reader:get(Root, {table, Fields}, [name])).
-
-get_with_schema_int_test() ->
-    Buffer = monster_binary(),
-    {ok, {Defs, _}} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
-    {table, Fields} = maps:get('Monster', Defs),
-    Root = flatbuferl_reader:get_root(Buffer),
-    ?assertEqual({ok, 150}, flatbuferl_reader:get(Root, {table, Fields}, [hp])).
-
-get_unknown_field_test() ->
-    Buffer = monster_binary(),
-    {ok, {Defs, _}} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
-    {table, Fields} = maps:get('Monster', Defs),
-    Root = flatbuferl_reader:get_root(Buffer),
-    ?assertEqual(
-        {error, {unknown_field, nonexistent}}, flatbuferl_reader:get(Root, {table, Fields}, [nonexistent])
-    ).
-
-%% =============================================================================
 %% Error Path Tests
 %% =============================================================================
 
@@ -328,31 +301,6 @@ field_beyond_vtable_test() ->
     ?assertEqual(missing, flatbuferl_reader:get_field(Root, 100, int, Buffer)).
 
 %% =============================================================================
-%% Schema lookup with full Defs map
-%% =============================================================================
-
-get_with_full_schema_map_test() ->
-    Buffer = monster_binary(),
-    {ok, {Defs, _}} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
-    Root = flatbuferl_reader:get_root(Buffer),
-    %% Pass full Defs map instead of {table, Fields}
-    ?assertEqual({ok, <<"Orc">>}, flatbuferl_reader:get(Root, Defs, [name])).
-
-%% =============================================================================
-%% Nested path traversal test
-%% =============================================================================
-
-nested_path_traversal_test() ->
-    Buffer = nested_binary(),
-    Root = flatbuferl_reader:get_root(Buffer),
-    %% This tests the multi-element path case in get/3
-    %% But get_nested_schema returns error, so we expect an error
-    ?assertEqual(
-        {error, {unknown_nested_type, pos}},
-        flatbuferl_reader:get(Root, {table, [{pos, 'Vec3', #{id => 1}}]}, [pos, x])
-    ).
-
-%% =============================================================================
 %% Additional vector type tests
 %% =============================================================================
 
@@ -379,18 +327,6 @@ vector_double_elements_test() ->
     ?assertEqual(missing, flatbuferl_reader:get_field(Root, 99, {vector, double}, Buffer)).
 
 %% =============================================================================
-%% Missing field returns missing test
-%% =============================================================================
-
-get_missing_field_via_schema_test() ->
-    Buffer = defaults_binary(),
-    {ok, {Defs, _}} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
-    {table, Fields} = maps:get('Monster', Defs),
-    Root = flatbuferl_reader:get_root(Buffer),
-    %% hp is missing in defaults binary
-    ?assertEqual(missing, flatbuferl_reader:get(Root, {table, Fields}, [hp])).
-
-%% =============================================================================
 %% Comprehensive Vector Type Tests
 %% =============================================================================
 
@@ -406,13 +342,16 @@ vector_ubyte_actual_test() ->
 vector_short_actual_test() ->
     Buffer = vectors2_binary(),
     Root = flatbuferl_reader:get_root(Buffer),
-    ?assertEqual({ok, [-100, 0, 100]}, flatbuferl_reader:get_field(Root, 1, {vector, short}, Buffer)).
+    ?assertEqual(
+        {ok, [-100, 0, 100]}, flatbuferl_reader:get_field(Root, 1, {vector, short}, Buffer)
+    ).
 
 vector_long_actual_test() ->
     Buffer = vectors2_binary(),
     Root = flatbuferl_reader:get_root(Buffer),
     ?assertEqual(
-        {ok, [9000000000000, -9000000000000]}, flatbuferl_reader:get_field(Root, 2, {vector, long}, Buffer)
+        {ok, [9000000000000, -9000000000000]},
+        flatbuferl_reader:get_field(Root, 2, {vector, long}, Buffer)
     ).
 
 vector_double_actual_test() ->
@@ -428,4 +367,6 @@ vector_double_actual_test() ->
 vector_bool_actual_test() ->
     Buffer = vectors2_binary(),
     Root = flatbuferl_reader:get_root(Buffer),
-    ?assertEqual({ok, [true, false, true]}, flatbuferl_reader:get_field(Root, 4, {vector, bool}, Buffer)).
+    ?assertEqual(
+        {ok, [true, false, true]}, flatbuferl_reader:get_field(Root, 4, {vector, bool}, Buffer)
+    ).

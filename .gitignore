@@ -1,4 +1,5 @@
 src/flatbuferl_parser.erl
-src/flatbuferl_lexer.erl
+src/internal/flatbuferl_lexer.erl
 
 _build/*
+erl_crash.dump

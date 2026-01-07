@@ -6,7 +6,9 @@
 %% =============================================================================
 
 simple_int_test() ->
-    Schema = {#{test => {table, [{a, int, #{id => 0}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
+    Schema = {#{test => {table, [{a, int, #{id => 0}}]}}, #{
+        root_type => test, file_identifier => <<"TEST">>
+    }},
     Map = #{a => 42},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     ?assertEqual(<<"TEST">>, flatbuferl_reader:get_file_id(Buffer)),
@@ -14,7 +16,9 @@ simple_int_test() ->
     ?assertEqual({ok, 42}, flatbuferl_reader:get_field(Root, 0, int, Buffer)).
 
 two_ints_test() ->
-    Schema = {#{test => {table, [{a, int, #{id => 0}}, {b, int, #{id => 1}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
+    Schema = {#{test => {table, [{a, int, #{id => 0}}, {b, int, #{id => 1}}]}}, #{
+        root_type => test, file_identifier => <<"TEST">>
+    }},
     Map = #{a => 10, b => 20},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -22,7 +26,9 @@ two_ints_test() ->
     ?assertEqual({ok, 20}, flatbuferl_reader:get_field(Root, 1, int, Buffer)).
 
 skip_default_value_test() ->
-    Schema = {#{test => {table, [{a, {int, 100}, #{id => 0}}, {b, int, #{id => 1}}]}}, #{root_type => test}},
+    Schema = {#{test => {table, [{a, {int, 100}, #{id => 0}}, {b, int, #{id => 1}}]}}, #{
+        root_type => test
+    }},
     %% a has default value, should be skipped
     Map = #{a => 100, b => 20},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
@@ -95,7 +101,9 @@ double_test() ->
 %% =============================================================================
 
 simple_string_test() ->
-    Schema = {#{test => {table, [{name, string, #{id => 0}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
+    Schema = {#{test => {table, [{name, string, #{id => 0}}]}}, #{
+        root_type => test, file_identifier => <<"TEST">>
+    }},
     Map = #{name => <<"hello">>},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     ?assertEqual(<<"TEST">>, flatbuferl_reader:get_file_id(Buffer)),
@@ -103,7 +111,9 @@ simple_string_test() ->
     ?assertEqual({ok, <<"hello">>}, flatbuferl_reader:get_field(Root, 0, string, Buffer)).
 
 string_and_int_test() ->
-    Schema = {#{test => {table, [{name, string, #{id => 0}}, {val, int, #{id => 1}}]}}, #{root_type => test}},
+    Schema = {#{test => {table, [{name, string, #{id => 0}}, {val, int, #{id => 1}}]}}, #{
+        root_type => test
+    }},
     Map = #{name => <<"world">>, val => 42},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -127,11 +137,16 @@ string_vector_test() ->
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
     ?assertEqual(
-        {ok, [<<"a">>, <<"bb">>, <<"ccc">>]}, flatbuferl_reader:get_field(Root, 0, {vector, string}, Buffer)
+        {ok, [<<"a">>, <<"bb">>, <<"ccc">>]},
+        flatbuferl_reader:get_field(Root, 0, {vector, string}, Buffer)
     ).
 
 mixed_with_vector_test() ->
-    Schema = {#{test => {table, [{name, string, #{id => 0}}, {scores, {vector, int}, #{id => 1}}]}}, #{root_type => test}},
+    Schema = {
+        #{test => {table, [{name, string, #{id => 0}}, {scores, {vector, int}, #{id => 1}}]}}, #{
+            root_type => test
+        }
+    },
     Map = #{name => <<"test">>, scores => [10, 20, 30]},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -143,10 +158,13 @@ mixed_with_vector_test() ->
 %% =============================================================================
 
 nested_table_test() ->
-    Schema = {#{
-        'Outer' => {table, [{name, string, #{id => 0}}, {inner, 'Inner', #{id => 1}}]},
-        'Inner' => {table, [{value, int, #{id => 0}}]}
-    }, #{root_type => 'Outer'}},
+    Schema = {
+        #{
+            'Outer' => {table, [{name, string, #{id => 0}}, {inner, 'Inner', #{id => 1}}]},
+            'Inner' => {table, [{value, int, #{id => 0}}]}
+        },
+        #{root_type => 'Outer'}
+    },
     Map = #{name => <<"outer">>, inner => #{value => 42}},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -155,10 +173,13 @@ nested_table_test() ->
     ?assertEqual({ok, 42}, flatbuferl_reader:get_field(InnerRef, 0, int, Buffer)).
 
 nested_with_string_test() ->
-    Schema = {#{
-        'Parent' => {table, [{child, 'Child', #{id => 0}}]},
-        'Child' => {table, [{name, string, #{id => 0}}, {age, int, #{id => 1}}]}
-    }, #{root_type => 'Parent'}},
+    Schema = {
+        #{
+            'Parent' => {table, [{child, 'Child', #{id => 0}}]},
+            'Child' => {table, [{name, string, #{id => 0}}, {age, int, #{id => 1}}]}
+        },
+        #{root_type => 'Parent'}
+    },
     Map = #{child => #{name => <<"Alice">>, age => 30}},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -172,10 +193,13 @@ nested_with_string_test() ->
 
 simple_struct_test() ->
     %% Struct Vec2 with two floats
-    Schema = {#{
-        'Vec2' => {struct, [{x, float}, {y, float}]},
-        test => {table, [{pos, 'Vec2', #{id => 0}}]}
-    }, #{root_type => test}},
+    Schema = {
+        #{
+            'Vec2' => {struct, [{x, float}, {y, float}]},
+            test => {table, [{pos, 'Vec2', #{id => 0}}]}
+        },
+        #{root_type => test}
+    },
     Map = #{pos => #{x => 1.0, y => 2.0}},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -185,14 +209,19 @@ simple_struct_test() ->
 
 struct_with_int_and_float_test() ->
     %% Struct with mixed types to test alignment
-    Schema = {#{
-        'Mixed' => {struct, [{a, byte}, {b, float}, {c, short}]},
-        test => {table, [{data, 'Mixed', #{id => 0}}]}
-    }, #{root_type => test}},
+    Schema = {
+        #{
+            'Mixed' => {struct, [{a, byte}, {b, float}, {c, short}]},
+            test => {table, [{data, 'Mixed', #{id => 0}}]}
+        },
+        #{root_type => test}
+    },
     Map = #{data => #{a => 10, b => 3.14, c => 1000}},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
-    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, {struct, [{a, byte}, {b, float}, {c, short}]}, Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(
+        Root, 0, {struct, [{a, byte}, {b, float}, {c, short}]}, Buffer
+    ),
     ?assertEqual(10, maps:get(a, Struct)),
     {ok, BVal} = maps:find(b, Struct),
     ?assert(abs(BVal - 3.14) < 0.001),
@@ -200,10 +229,13 @@ struct_with_int_and_float_test() ->
 
 struct_and_scalar_test() ->
     %% Table with both a struct and a regular scalar
-    Schema = {#{
-        'Vec2' => {struct, [{x, float}, {y, float}]},
-        test => {table, [{pos, 'Vec2', #{id => 0}}, {name, string, #{id => 1}}]}
-    }, #{root_type => test}},
+    Schema = {
+        #{
+            'Vec2' => {struct, [{x, float}, {y, float}]},
+            test => {table, [{pos, 'Vec2', #{id => 0}}, {name, string, #{id => 1}}]}
+        },
+        #{root_type => test}
+    },
     Map = #{pos => #{x => 5.0, y => 10.0}, name => <<"test">>},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -429,7 +461,7 @@ flatc_roundtrip_vectors_test() ->
 
 string_dedup_vector_test() ->
     %% Vector with duplicate strings should be smaller than with unique strings
-    Schema = { #{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test}},
+    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test}},
 
     %% 3 duplicate strings
     MapDup = #{items => [<<"same">>, <<"same">>, <<"same">>]},
@@ -477,7 +509,9 @@ string_dedup_single_test() ->
 
 string_dedup_flatc_compat_test() ->
     %% Test that deduplicated buffers are valid per flatc
-    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{root_type => test, file_identifier => <<"TEST">>}},
+    Schema = {#{test => {table, [{items, {vector, string}, #{id => 0}}]}}, #{
+        root_type => test, file_identifier => <<"TEST">>
+    }},
     Map = #{items => [<<"hello">>, <<"world">>, <<"hello">>]},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
 

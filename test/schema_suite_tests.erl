@@ -357,12 +357,15 @@ zero_copy_test_cases() ->
     %% Test cases with large strings (>64 bytes to be refc binaries)
     LargeString = list_to_binary(lists:duplicate(200, $X)),
     [
-        {monster_zero_copy, "test/vectors/test_monster.fbs", 'Monster', <<"MONS">>,
-            #{name => LargeString, hp => 100, mana => 50}},
-        {string_table_zero_copy, "test/schemas/string_table.fbs", string_table, no_file_id,
-            #{my_string => LargeString, my_bool => true}},
-        {nested_zero_copy, "test/vectors/test_nested.fbs", 'Entity', <<"NEST">>,
-            #{name => LargeString, hp => 100, pos => #{x => 1.0, y => 2.0, z => 3.0}}}
+        {monster_zero_copy, "test/vectors/test_monster.fbs", 'Monster', <<"MONS">>, #{
+            name => LargeString, hp => 100, mana => 50
+        }},
+        {string_table_zero_copy, "test/schemas/string_table.fbs", string_table, no_file_id, #{
+            my_string => LargeString, my_bool => true
+        }},
+        {nested_zero_copy, "test/vectors/test_nested.fbs", 'Entity', <<"NEST">>, #{
+            name => LargeString, hp => 100, pos => #{x => 1.0, y => 2.0, z => 3.0}
+        }}
     ].
 
 zero_copy_test_() ->
@@ -414,136 +417,146 @@ run_in_isolated_process(Fun) ->
     Parent = self(),
     Ref = make_ref(),
     spawn_link(fun() -> Parent ! {Ref, Fun()} end),
-    receive {Ref, Res} -> Res after 5000 -> error(timeout) end.
+    receive
+        {Ref, Res} -> Res
+    after 5000 -> error(timeout)
+    end.
 
 %% =============================================================================
 %% Required and Deprecated Field Tests
 %% =============================================================================
 
 required_field_test_() ->
-    Schema = {#{
-        'TestTable' => {table, [
-            {name, string, #{id => 0, required => true}},
-            {value, int, #{id => 1}}
-        ]}
-    }, #{root_type => 'TestTable'}},
+    Schema = {
+        #{
+            'TestTable' =>
+                {table, [
+                    {name, string, #{id => 0, required => true}},
+                    {value, int, #{id => 1}}
+                ]}
+        },
+        #{root_type => 'TestTable'}
+    },
     [
-        {"required field present passes",
-         fun() ->
-             Map = #{name => <<"test">>, value => 42},
-             Data = flatbuferl_builder:from_map(Map, Schema),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(<<"test">>, maps:get(name, Result)),
-             ?assertEqual(42, maps:get(value, Result))
-         end},
-        {"required field missing errors",
-         fun() ->
-             Map = #{value => 42},
-             ?assertError({required_field_missing, 'TestTable', name},
-                          flatbuferl_builder:from_map(Map, Schema))
-         end},
-        {"required field empty string still valid",
-         fun() ->
-             Map = #{name => <<>>, value => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema),
-             ?assert(is_list(Data) orelse is_binary(Data))
-         end}
+        {"required field present passes", fun() ->
+            Map = #{name => <<"test">>, value => 42},
+            Data = flatbuferl_builder:from_map(Map, Schema),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(<<"test">>, maps:get(name, Result)),
+            ?assertEqual(42, maps:get(value, Result))
+        end},
+        {"required field missing errors", fun() ->
+            Map = #{value => 42},
+            ?assertError(
+                {required_field_missing, 'TestTable', name},
+                flatbuferl_builder:from_map(Map, Schema)
+            )
+        end},
+        {"required field empty string still valid", fun() ->
+            Map = #{name => <<>>, value => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema),
+            ?assert(is_list(Data) orelse is_binary(Data))
+        end}
     ].
 
 deprecated_encode_test_() ->
-    Schema = {#{
-        'TestTable' => {table, [
-            {name, string, #{id => 0}},
-            {old_field, int, #{id => 1, deprecated => true}},
-            {new_field, int, #{id => 2}}
-        ]}
-    }, #{root_type => 'TestTable'}},
+    Schema = {
+        #{
+            'TestTable' =>
+                {table, [
+                    {name, string, #{id => 0}},
+                    {old_field, int, #{id => 1, deprecated => true}},
+                    {new_field, int, #{id => 2}}
+                ]}
+        },
+        #{root_type => 'TestTable'}
+    },
     [
-        {"deprecated field skipped by default",
-         fun() ->
-             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             %% Field wasn't encoded, so won't appear even with allow
-             Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
-             ?assertEqual(false, maps:is_key(old_field, Result)),
-             ?assertEqual(10, maps:get(new_field, Result))
-         end},
-        {"deprecated field allowed with option",
-         fun() ->
-             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
-             ?assertEqual(42, maps:get(old_field, Result))
-         end},
-        {"deprecated field errors with option",
-         fun() ->
-             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             ?assertError({deprecated_field_set, 'TestTable', old_field},
-                          flatbuferl_builder:from_map(Map, Schema, #{deprecated => error}))
-         end},
-        {"deprecated field not set passes error option",
-         fun() ->
-             Map = #{name => <<"test">>, new_field => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => error}),
-             ?assert(is_list(Data) orelse is_binary(Data))
-         end}
+        {"deprecated field skipped by default", fun() ->
+            Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            %% Field wasn't encoded, so won't appear even with allow
+            Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
+            ?assertEqual(false, maps:is_key(old_field, Result)),
+            ?assertEqual(10, maps:get(new_field, Result))
+        end},
+        {"deprecated field allowed with option", fun() ->
+            Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
+            ?assertEqual(42, maps:get(old_field, Result))
+        end},
+        {"deprecated field errors with option", fun() ->
+            Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+            ?assertError(
+                {deprecated_field_set, 'TestTable', old_field},
+                flatbuferl_builder:from_map(Map, Schema, #{deprecated => error})
+            )
+        end},
+        {"deprecated field not set passes error option", fun() ->
+            Map = #{name => <<"test">>, new_field => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => error}),
+            ?assert(is_list(Data) orelse is_binary(Data))
+        end}
     ].
 
 deprecated_decode_test_() ->
-    Schema = {#{
-        'TestTable' => {table, [
-            {name, string, #{id => 0}},
-            {old_field, int, #{id => 1, deprecated => true}},
-            {new_field, int, #{id => 2}}
-        ]}
-    }, #{root_type => 'TestTable'}},
+    Schema = {
+        #{
+            'TestTable' =>
+                {table, [
+                    {name, string, #{id => 0}},
+                    {old_field, int, #{id => 1, deprecated => true}},
+                    {new_field, int, #{id => 2}}
+                ]}
+        },
+        #{root_type => 'TestTable'}
+    },
     [
-        {"deprecated field skipped by default",
-         fun() ->
-             %% First encode with deprecated field (allow it)
-             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
-             Bin = iolist_to_binary(Data),
-             %% Now decode with default options - should skip
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(false, maps:is_key(old_field, Result)),
-             ?assertEqual(10, maps:get(new_field, Result))
-         end},
-        {"deprecated field allowed with option",
-         fun() ->
-             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
-             ?assertEqual(42, maps:get(old_field, Result)),
-             ?assertEqual(10, maps:get(new_field, Result))
-         end},
-        {"deprecated field errors on decode if present",
-         fun() ->
-             Map = #{name => <<"test">>, old_field => 42, new_field => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             ?assertError({deprecated_field_present, 'TestTable', old_field},
-                          flatbuferl:to_map(Ctx, #{deprecated => error}))
-         end},
-        {"deprecated field not present passes error option",
-         fun() ->
-             Map = #{name => <<"test">>, new_field => 10},
-             Data = flatbuferl_builder:from_map(Map, Schema),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx, #{deprecated => error}),
-             ?assertEqual(10, maps:get(new_field, Result))
-         end}
+        {"deprecated field skipped by default", fun() ->
+            %% First encode with deprecated field (allow it)
+            Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
+            Bin = iolist_to_binary(Data),
+            %% Now decode with default options - should skip
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(false, maps:is_key(old_field, Result)),
+            ?assertEqual(10, maps:get(new_field, Result))
+        end},
+        {"deprecated field allowed with option", fun() ->
+            Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx, #{deprecated => allow}),
+            ?assertEqual(42, maps:get(old_field, Result)),
+            ?assertEqual(10, maps:get(new_field, Result))
+        end},
+        {"deprecated field errors on decode if present", fun() ->
+            Map = #{name => <<"test">>, old_field => 42, new_field => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema, #{deprecated => allow}),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            ?assertError(
+                {deprecated_field_present, 'TestTable', old_field},
+                flatbuferl:to_map(Ctx, #{deprecated => error})
+            )
+        end},
+        {"deprecated field not present passes error option", fun() ->
+            Map = #{name => <<"test">>, new_field => 10},
+            Data = flatbuferl_builder:from_map(Map, Schema),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx, #{deprecated => error}),
+            ?assertEqual(10, maps:get(new_field, Result))
+        end}
     ].
 
 %% =============================================================================
@@ -551,80 +564,80 @@ deprecated_decode_test_() ->
 %% =============================================================================
 
 union_vector_test_() ->
-    Schema = {#{
-        'Event' => {union, ['Login', 'Logout']},
-        'Login' => {table, [{user, string, #{id => 0}}]},
-        'Logout' => {table, [{user, string, #{id => 0}}]},
-        'EventLog' => {table, [
-            {events_type, {vector, {union_type, 'Event'}}, #{id => 0}},
-            {events, {vector, {union_value, 'Event'}}, #{id => 1}}
-        ]}
-    }, #{root_type => 'EventLog'}},
+    Schema = {
+        #{
+            'Event' => {union, ['Login', 'Logout']},
+            'Login' => {table, [{user, string, #{id => 0}}]},
+            'Logout' => {table, [{user, string, #{id => 0}}]},
+            'EventLog' =>
+                {table, [
+                    {events_type, {vector, {union_type, 'Event'}}, #{id => 0}},
+                    {events, {vector, {union_value, 'Event'}}, #{id => 1}}
+                ]}
+        },
+        #{root_type => 'EventLog'}
+    },
     [
-        {"union vector encode/decode roundtrip",
-         fun() ->
-             Map = #{
-                 events_type => ['Login', 'Logout', 'Login'],
-                 events => [
-                     #{user => <<"alice">>},
-                     #{user => <<"bob">>},
-                     #{user => <<"charlie">>}
-                 ]
-             },
-             Data = flatbuferl_builder:from_map(Map, Schema),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(['Login', 'Logout', 'Login'], maps:get(events_type, Result)),
-             Events = maps:get(events, Result),
-             ?assertEqual(3, length(Events)),
-             ?assertEqual(#{user => <<"alice">>}, lists:nth(1, Events)),
-             ?assertEqual(#{user => <<"bob">>}, lists:nth(2, Events)),
-             ?assertEqual(#{user => <<"charlie">>}, lists:nth(3, Events))
-         end},
-        {"union vector with binary type names",
-         fun() ->
-             Map = #{
-                 events_type => [<<"Login">>, <<"Logout">>],
-                 events => [#{user => <<"x">>}, #{user => <<"y">>}]
-             },
-             Data = flatbuferl_builder:from_map(Map, Schema),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(['Login', 'Logout'], maps:get(events_type, Result))
-         end},
-        {"empty union vector",
-         fun() ->
-             Map = #{events_type => [], events => []},
-             Data = flatbuferl_builder:from_map(Map, Schema),
-             Bin = iolist_to_binary(Data),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual([], maps:get(events_type, Result)),
-             ?assertEqual([], maps:get(events, Result))
-         end},
-        {"union vector from parsed .fbs file",
-         fun() ->
-             {ok, ParsedSchema} = flatbuferl_schema:parse_file("test/schemas/union_vector.fbs"),
-             Map = #{
-                 data_type => ['StringData', 'IntData'],
-                 data => [
-                     #{data => [<<"hello">>, <<"world">>]},
-                     #{data => [1, 2, 3]}
-                 ]
-             },
-             Encoded = flatbuferl_builder:from_map(Map, ParsedSchema),
-             Bin = iolist_to_binary(Encoded),
-             ?assertEqual(<<"UVEC">>, flatbuferl:file_id(Bin)),
-             Ctx = flatbuferl:new(Bin, ParsedSchema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(['StringData', 'IntData'], maps:get(data_type, Result)),
-             DataVals = maps:get(data, Result),
-             ?assertEqual(2, length(DataVals)),
-             ?assertEqual([<<"hello">>, <<"world">>], maps:get(data, lists:nth(1, DataVals))),
-             ?assertEqual([1, 2, 3], maps:get(data, lists:nth(2, DataVals)))
-         end}
+        {"union vector encode/decode roundtrip", fun() ->
+            Map = #{
+                events_type => ['Login', 'Logout', 'Login'],
+                events => [
+                    #{user => <<"alice">>},
+                    #{user => <<"bob">>},
+                    #{user => <<"charlie">>}
+                ]
+            },
+            Data = flatbuferl_builder:from_map(Map, Schema),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(['Login', 'Logout', 'Login'], maps:get(events_type, Result)),
+            Events = maps:get(events, Result),
+            ?assertEqual(3, length(Events)),
+            ?assertEqual(#{user => <<"alice">>}, lists:nth(1, Events)),
+            ?assertEqual(#{user => <<"bob">>}, lists:nth(2, Events)),
+            ?assertEqual(#{user => <<"charlie">>}, lists:nth(3, Events))
+        end},
+        {"union vector with binary type names", fun() ->
+            Map = #{
+                events_type => [<<"Login">>, <<"Logout">>],
+                events => [#{user => <<"x">>}, #{user => <<"y">>}]
+            },
+            Data = flatbuferl_builder:from_map(Map, Schema),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(['Login', 'Logout'], maps:get(events_type, Result))
+        end},
+        {"empty union vector", fun() ->
+            Map = #{events_type => [], events => []},
+            Data = flatbuferl_builder:from_map(Map, Schema),
+            Bin = iolist_to_binary(Data),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual([], maps:get(events_type, Result)),
+            ?assertEqual([], maps:get(events, Result))
+        end},
+        {"union vector from parsed .fbs file", fun() ->
+            {ok, ParsedSchema} = flatbuferl_schema:parse_file("test/schemas/union_vector.fbs"),
+            Map = #{
+                data_type => ['StringData', 'IntData'],
+                data => [
+                    #{data => [<<"hello">>, <<"world">>]},
+                    #{data => [1, 2, 3]}
+                ]
+            },
+            Encoded = flatbuferl_builder:from_map(Map, ParsedSchema),
+            Bin = iolist_to_binary(Encoded),
+            ?assertEqual(<<"UVEC">>, flatbuferl:file_id(Bin)),
+            Ctx = flatbuferl:new(Bin, ParsedSchema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(['StringData', 'IntData'], maps:get(data_type, Result)),
+            DataVals = maps:get(data, Result),
+            ?assertEqual(2, length(DataVals)),
+            ?assertEqual([<<"hello">>, <<"world">>], maps:get(data, lists:nth(1, DataVals))),
+            ?assertEqual([1, 2, 3], maps:get(data, lists:nth(2, DataVals)))
+        end}
     ].
 
 %% =============================================================================
@@ -632,77 +645,73 @@ union_vector_test_() ->
 %% =============================================================================
 
 optional_scalar_test_() ->
-    Schema = {#{
-        'TestTable' => {table, [
-            {opt_int, {int, undefined}, #{id => 0}},
-            {opt_bool, {bool, undefined}, #{id => 1}},
-            {reg_int, {int, 0}, #{id => 2}},
-            {reg_int_default, {int, 100}, #{id => 3}}
-        ]}
-    }, #{root_type => 'TestTable'}},
+    Schema = {
+        #{
+            'TestTable' =>
+                {table, [
+                    {opt_int, {int, undefined}, #{id => 0}},
+                    {opt_bool, {bool, undefined}, #{id => 1}},
+                    {reg_int, {int, 0}, #{id => 2}},
+                    {reg_int_default, {int, 100}, #{id => 3}}
+                ]}
+        },
+        #{root_type => 'TestTable'}
+    },
     [
-        {"optional scalar set to value",
-         fun() ->
-             Map = #{opt_int => 42, reg_int => 10},
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(42, maps:get(opt_int, Result)),
-             ?assertEqual(10, maps:get(reg_int, Result))
-         end},
-        {"optional scalar set to zero is distinguishable from not set",
-         fun() ->
-             Map = #{opt_int => 0, reg_int => 10},
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(0, maps:get(opt_int, Result)),
-             ?assert(maps:is_key(opt_int, Result))
-         end},
-        {"optional scalar not set - absent from result",
-         fun() ->
-             Map = #{reg_int => 10},
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(false, maps:is_key(opt_int, Result)),
-             ?assertEqual(10, maps:get(reg_int, Result))
-         end},
-        {"optional scalar explicit undefined - absent from result",
-         fun() ->
-             Map = #{opt_int => undefined, reg_int => 10},
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(false, maps:is_key(opt_int, Result))
-         end},
-        {"optional bool set to false is written",
-         fun() ->
-             Map = #{opt_bool => false, reg_int => 10},
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(false, maps:get(opt_bool, Result)),
-             ?assert(maps:is_key(opt_bool, Result))
-         end},
-        {"regular scalar with default - returns default when missing",
-         fun() ->
-             Map = #{reg_int => 10},
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(100, maps:get(reg_int_default, Result))
-         end},
-        {"validation allows undefined for optional scalar",
-         fun() ->
-             Map = #{opt_int => undefined, reg_int => 10},
-             ?assertEqual(ok, flatbuferl:validate(Map, Schema))
-         end},
-        {"validation allows omitted optional scalar",
-         fun() ->
-             Map = #{reg_int => 10},
-             ?assertEqual(ok, flatbuferl:validate(Map, Schema))
-         end}
+        {"optional scalar set to value", fun() ->
+            Map = #{opt_int => 42, reg_int => 10},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(42, maps:get(opt_int, Result)),
+            ?assertEqual(10, maps:get(reg_int, Result))
+        end},
+        {"optional scalar set to zero is distinguishable from not set", fun() ->
+            Map = #{opt_int => 0, reg_int => 10},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(0, maps:get(opt_int, Result)),
+            ?assert(maps:is_key(opt_int, Result))
+        end},
+        {"optional scalar not set - absent from result", fun() ->
+            Map = #{reg_int => 10},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(false, maps:is_key(opt_int, Result)),
+            ?assertEqual(10, maps:get(reg_int, Result))
+        end},
+        {"optional scalar explicit undefined - absent from result", fun() ->
+            Map = #{opt_int => undefined, reg_int => 10},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(false, maps:is_key(opt_int, Result))
+        end},
+        {"optional bool set to false is written", fun() ->
+            Map = #{opt_bool => false, reg_int => 10},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(false, maps:get(opt_bool, Result)),
+            ?assert(maps:is_key(opt_bool, Result))
+        end},
+        {"regular scalar with default - returns default when missing", fun() ->
+            Map = #{reg_int => 10},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(100, maps:get(reg_int_default, Result))
+        end},
+        {"validation allows undefined for optional scalar", fun() ->
+            Map = #{opt_int => undefined, reg_int => 10},
+            ?assertEqual(ok, flatbuferl:validate(Map, Schema))
+        end},
+        {"validation allows omitted optional scalar", fun() ->
+            Map = #{reg_int => 10},
+            ?assertEqual(ok, flatbuferl:validate(Map, Schema))
+        end}
     ].
 
 %% =============================================================================
@@ -711,43 +720,40 @@ optional_scalar_test_() ->
 
 include_test_() ->
     [
-        {"basic include works",
-         fun() ->
-             {ok, {Defs, Opts}} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
-             ?assert(maps:is_key('Entity', Defs)),
-             ?assert(maps:is_key('Vec3', Defs)),
-             ?assert(maps:is_key('Color', Defs)),
-             ?assertEqual('Entity', maps:get(root_type, Opts))
-         end},
-        {"include encode/decode roundtrip",
-         fun() ->
-             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
-             Map = #{name => <<"Test">>, pos => #{x => 1.0, y => 2.0, z => 3.0}, color => 1},
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             ?assertEqual(<<"Test">>, maps:get(name, Result)),
-             Pos = maps:get(pos, Result),
-             ?assert(abs(maps:get(x, Pos) - 1.0) < 0.001)
-         end},
-        {"circular include detected",
-         fun() ->
-             Result = flatbuferl_schema:parse_file("test/schemas/circular_a.fbs"),
-             ?assertMatch({error, {circular_include, _}}, Result)
-         end},
-        {"duplicate type detected",
-         fun() ->
-             Result = flatbuferl_schema:parse_file("test/schemas/duplicate.fbs"),
-             ?assertMatch({error, {duplicate_types, ['Vec3']}}, Result)
-         end},
-        {"missing include file",
-         fun() ->
-             ok = file:write_file("/tmp/missing_include.fbs",
-                 <<"include \"nonexistent.fbs\";\ntable T { x: int; }\nroot_type T;">>),
-             Result = flatbuferl_schema:parse_file("/tmp/missing_include.fbs"),
-             ?assertMatch({error, enoent}, Result),
-             file:delete("/tmp/missing_include.fbs")
-         end}
+        {"basic include works", fun() ->
+            {ok, {Defs, Opts}} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
+            ?assert(maps:is_key('Entity', Defs)),
+            ?assert(maps:is_key('Vec3', Defs)),
+            ?assert(maps:is_key('Color', Defs)),
+            ?assertEqual('Entity', maps:get(root_type, Opts))
+        end},
+        {"include encode/decode roundtrip", fun() ->
+            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/with_include.fbs"),
+            Map = #{name => <<"Test">>, pos => #{x => 1.0, y => 2.0, z => 3.0}, color => 1},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(<<"Test">>, maps:get(name, Result)),
+            Pos = maps:get(pos, Result),
+            ?assert(abs(maps:get(x, Pos) - 1.0) < 0.001)
+        end},
+        {"circular include detected", fun() ->
+            Result = flatbuferl_schema:parse_file("test/schemas/circular_a.fbs"),
+            ?assertMatch({error, {circular_include, _}}, Result)
+        end},
+        {"duplicate type detected", fun() ->
+            Result = flatbuferl_schema:parse_file("test/schemas/duplicate.fbs"),
+            ?assertMatch({error, {duplicate_types, ['Vec3']}}, Result)
+        end},
+        {"missing include file", fun() ->
+            ok = file:write_file(
+                "/tmp/missing_include.fbs",
+                <<"include \"nonexistent.fbs\";\ntable T { x: int; }\nroot_type T;">>
+            ),
+            Result = flatbuferl_schema:parse_file("/tmp/missing_include.fbs"),
+            ?assertMatch({error, enoent}, Result),
+            file:delete("/tmp/missing_include.fbs")
+        end}
     ].
 
 %% =============================================================================
@@ -756,82 +762,85 @@ include_test_() ->
 
 fixed_array_test_() ->
     [
-        {"array schema parses",
-         fun() ->
-             {ok, {Defs, _Opts}} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
-             ?assert(maps:is_key('ArrayTable', Defs)),
-             {table, Fields} = maps:get('ArrayTable', Defs),
-             %% Fields have {Name, Type, Attrs} format after parsing
-             {floats, {array, float, 3}, _} = lists:keyfind(floats, 1, Fields),
-             {ints, {array, int, 4}, _} = lists:keyfind(ints, 1, Fields),
-             {bytes, {array, byte, 2}, _} = lists:keyfind(bytes, 1, Fields)
-         end},
-        {"array encode/decode roundtrip",
-         fun() ->
-             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
-             Map = #{
-                 floats => [1.0, 2.0, 3.0],
-                 ints => [10, 20, 30, 40],
-                 bytes => [-1, 127]
-             },
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             [F1, F2, F3] = maps:get(floats, Result),
-             ?assert(abs(F1 - 1.0) < 0.001),
-             ?assert(abs(F2 - 2.0) < 0.001),
-             ?assert(abs(F3 - 3.0) < 0.001),
-             ?assertEqual([10, 20, 30, 40], maps:get(ints, Result)),
-             ?assertEqual([-1, 127], maps:get(bytes, Result))
-         end},
-        {"array validation - correct length",
-         fun() ->
-             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
-             Map = #{floats => [1.0, 2.0, 3.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
-             ?assertEqual(ok, flatbuferl:validate(Map, Schema))
-         end},
-        {"array validation - wrong length",
-         fun() ->
-             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
-             Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
-             {error, Errors} = flatbuferl:validate(Map, Schema),
-             ?assertMatch([{array_length_mismatch, floats, 3, 2}], Errors)
-         end},
-        {"array validation - wrong element type",
-         fun() ->
-             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
-             Map = #{floats => [<<"not">>, <<"floats">>, <<"here">>], ints => [1, 2, 3, 4], bytes => [0, 0]},
-             {error, Errors} = flatbuferl:validate(Map, Schema),
-             %% All invalid elements are reported
-             ?assert(length(Errors) >= 1),
-             [{invalid_array_element, floats, 0, _} | _] = Errors
-         end},
-        {"array encoding error on wrong length",
-         fun() ->
-             {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
-             Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
-             ?assertError({array_length_mismatch, expected, 3, got, 2},
-                          flatbuferl:from_map(Map, Schema))
-         end},
-        {"inline schema array roundtrip",
-         fun() ->
-             Schema = {#{
-                 'Test' => {table, [
-                     {vec3, {array, float, 3}, #{id => 0}},
-                     {matrix, {array, int, 9}, #{id => 1}}
-                 ]}
-             }, #{root_type => 'Test'}},
-             Map = #{
-                 vec3 => [1.5, 2.5, 3.5],
-                 matrix => [1, 0, 0, 0, 1, 0, 0, 0, 1]
-             },
-             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
-             Ctx = flatbuferl:new(Bin, Schema),
-             Result = flatbuferl:to_map(Ctx),
-             [V1, V2, V3] = maps:get(vec3, Result),
-             ?assert(abs(V1 - 1.5) < 0.001),
-             ?assert(abs(V2 - 2.5) < 0.001),
-             ?assert(abs(V3 - 3.5) < 0.001),
-             ?assertEqual([1, 0, 0, 0, 1, 0, 0, 0, 1], maps:get(matrix, Result))
-         end}
+        {"array schema parses", fun() ->
+            {ok, {Defs, _Opts}} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            ?assert(maps:is_key('ArrayTable', Defs)),
+            {table, Fields} = maps:get('ArrayTable', Defs),
+            %% Fields have {Name, Type, Attrs} format after parsing
+            {floats, {array, float, 3}, _} = lists:keyfind(floats, 1, Fields),
+            {ints, {array, int, 4}, _} = lists:keyfind(ints, 1, Fields),
+            {bytes, {array, byte, 2}, _} = lists:keyfind(bytes, 1, Fields)
+        end},
+        {"array encode/decode roundtrip", fun() ->
+            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            Map = #{
+                floats => [1.0, 2.0, 3.0],
+                ints => [10, 20, 30, 40],
+                bytes => [-1, 127]
+            },
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            [F1, F2, F3] = maps:get(floats, Result),
+            ?assert(abs(F1 - 1.0) < 0.001),
+            ?assert(abs(F2 - 2.0) < 0.001),
+            ?assert(abs(F3 - 3.0) < 0.001),
+            ?assertEqual([10, 20, 30, 40], maps:get(ints, Result)),
+            ?assertEqual([-1, 127], maps:get(bytes, Result))
+        end},
+        {"array validation - correct length", fun() ->
+            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            Map = #{floats => [1.0, 2.0, 3.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
+            ?assertEqual(ok, flatbuferl:validate(Map, Schema))
+        end},
+        {"array validation - wrong length", fun() ->
+            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
+            {error, Errors} = flatbuferl:validate(Map, Schema),
+            ?assertMatch([{array_length_mismatch, floats, 3, 2}], Errors)
+        end},
+        {"array validation - wrong element type", fun() ->
+            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            Map = #{
+                floats => [<<"not">>, <<"floats">>, <<"here">>],
+                ints => [1, 2, 3, 4],
+                bytes => [0, 0]
+            },
+            {error, Errors} = flatbuferl:validate(Map, Schema),
+            %% All invalid elements are reported
+            ?assert(length(Errors) >= 1),
+            [{invalid_array_element, floats, 0, _} | _] = Errors
+        end},
+        {"array encoding error on wrong length", fun() ->
+            {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+            Map = #{floats => [1.0, 2.0], ints => [1, 2, 3, 4], bytes => [0, 0]},
+            ?assertError(
+                {array_length_mismatch, expected, 3, got, 2},
+                flatbuferl:from_map(Map, Schema)
+            )
+        end},
+        {"inline schema array roundtrip", fun() ->
+            Schema = {
+                #{
+                    'Test' =>
+                        {table, [
+                            {vec3, {array, float, 3}, #{id => 0}},
+                            {matrix, {array, int, 9}, #{id => 1}}
+                        ]}
+                },
+                #{root_type => 'Test'}
+            },
+            Map = #{
+                vec3 => [1.5, 2.5, 3.5],
+                matrix => [1, 0, 0, 0, 1, 0, 0, 0, 1]
+            },
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Result = flatbuferl:to_map(Ctx),
+            [V1, V2, V3] = maps:get(vec3, Result),
+            ?assert(abs(V1 - 1.5) < 0.001),
+            ?assert(abs(V2 - 2.5) < 0.001),
+            ?assert(abs(V3 - 3.5) < 0.001),
+            ?assertEqual([1, 0, 0, 0, 1, 0, 0, 0, 1], maps:get(matrix, Result))
+        end}
     ].

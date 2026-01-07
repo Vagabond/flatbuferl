@@ -1,3 +1,4 @@
+%% @private
 -module(flatbuferl_schema).
 -export([parse/1, parse_file/1, process/1, validate/3]).
 
@@ -25,13 +26,13 @@
 }.
 
 -type validation_error() ::
-    {type_mismatch, atom(), expected_type(), term()} |
-    {missing_required, atom()} |
-    {unknown_field, atom()} |
-    {invalid_enum, atom(), term(), [atom()]} |
-    {invalid_union_type, atom(), term(), [atom()]} |
-    {invalid_vector_element, atom(), non_neg_integer(), validation_error()} |
-    {nested_errors, atom(), [validation_error()]}.
+    {type_mismatch, atom(), expected_type(), term()}
+    | {missing_required, atom()}
+    | {unknown_field, atom()}
+    | {invalid_enum, atom(), term(), [atom()]}
+    | {invalid_union_type, atom(), term(), [atom()]}
+    | {invalid_vector_element, atom(), non_neg_integer(), validation_error()}
+    | {nested_errors, atom(), [validation_error()]}.
 
 -type expected_type() :: atom() | {vector, atom()} | {enum, atom()} | {union, atom()}.
 
@@ -233,7 +234,8 @@ find_next_id(Candidate, ExplicitIds) ->
 %% Validation
 %% =============================================================================
 
--spec validate(map(), {definitions(), options()}, validate_opts()) -> ok | {error, [validation_error()]}.
+-spec validate(map(), {definitions(), options()}, validate_opts()) ->
+    ok | {error, [validation_error()]}.
 validate(Map, {Defs, SchemaOpts}, Opts) ->
     RootType = maps:get(root_type, SchemaOpts),
     case validate_table(Map, RootType, Defs, Opts) of
@@ -263,21 +265,22 @@ validate_table_fields(Map, Fields, Defs, Opts) ->
     ),
 
     %% Check for unknown fields if strict mode
-    UnknownErrors = case maps:get(unknown_fields, Opts, ignore) of
-        error ->
-            lists:filtermap(
-                fun(Key) ->
-                    KeyAtom = to_field_atom(Key),
-                    case sets:is_element(KeyAtom, KnownFields) of
-                        true -> false;
-                        false -> {true, {unknown_field, KeyAtom}}
-                    end
-                end,
-                maps:keys(Map)
-            );
-        ignore ->
-            []
-    end,
+    UnknownErrors =
+        case maps:get(unknown_fields, Opts, ignore) of
+            error ->
+                lists:filtermap(
+                    fun(Key) ->
+                        KeyAtom = to_field_atom(Key),
+                        case sets:is_element(KeyAtom, KnownFields) of
+                            true -> false;
+                            false -> {true, {unknown_field, KeyAtom}}
+                        end
+                    end,
+                    maps:keys(Map)
+                );
+            ignore ->
+                []
+        end,
 
     %% Validate each field
     FieldErrors = lists:flatmap(
@@ -302,7 +305,8 @@ validate_field(Map, FieldDef, Defs, Opts) ->
 
 get_map_value(Map, Key) ->
     case maps:find(Key, Map) of
-        {ok, V} -> V;
+        {ok, V} ->
+            V;
         error ->
             BinKey = atom_to_binary(Key),
             maps:get(BinKey, Map, undefined)
@@ -310,28 +314,25 @@ get_map_value(Map, Key) ->
 
 to_field_atom(A) when is_atom(A) -> A;
 to_field_atom(B) when is_binary(B) ->
-    try binary_to_existing_atom(B, utf8)
-    catch error:badarg -> binary_to_atom(B, utf8)
+    try
+        binary_to_existing_atom(B, utf8)
+    catch
+        error:badarg -> binary_to_atom(B, utf8)
     end.
 
 validate_value(Name, Value, {vector, ElemType}, Defs, Opts) ->
     validate_vector(Name, Value, ElemType, Defs, Opts);
-
 validate_value(Name, Value, {array, ElemType, Count}, Defs, Opts) ->
     validate_array(Name, Value, ElemType, Count, Defs, Opts);
-
 validate_value(Name, Value, {union_type, UnionName}, Defs, _Opts) ->
     validate_union_type(Name, Value, UnionName, Defs);
-
 validate_value(_Name, Value, {union_value, _UnionName}, _Defs, _Opts) when is_map(Value) ->
     [];
 validate_value(Name, Value, {union_value, UnionName}, _Defs, _Opts) ->
     [{type_mismatch, Name, {union_value, UnionName}, Value}];
-
 %% Strip default value wrapper and recurse
 validate_value(Name, Value, {Type, _Default}, Defs, Opts) when is_atom(Type) ->
     validate_value(Name, Value, Type, Defs, Opts);
-
 validate_value(Name, Value, Type, Defs, Opts) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, _BaseType}, Members} ->
@@ -354,7 +355,10 @@ validate_scalar(_Name, Value, byte) when is_integer(Value), Value >= -128, Value
 validate_scalar(_Name, Value, ubyte) when is_integer(Value), Value >= 0, Value =< 255 -> [];
 validate_scalar(_Name, Value, short) when is_integer(Value), Value >= -32768, Value =< 32767 -> [];
 validate_scalar(_Name, Value, ushort) when is_integer(Value), Value >= 0, Value =< 65535 -> [];
-validate_scalar(_Name, Value, int) when is_integer(Value), Value >= -2147483648, Value =< 2147483647 -> [];
+validate_scalar(_Name, Value, int) when
+    is_integer(Value), Value >= -2147483648, Value =< 2147483647
+->
+    [];
 validate_scalar(_Name, Value, uint) when is_integer(Value), Value >= 0, Value =< 4294967295 -> [];
 validate_scalar(_Name, Value, long) when is_integer(Value) -> [];
 validate_scalar(_Name, Value, ulong) when is_integer(Value), Value >= 0 -> [];
@@ -365,7 +369,10 @@ validate_scalar(_Name, Value, int8) when is_integer(Value), Value >= -128, Value
 validate_scalar(_Name, Value, uint8) when is_integer(Value), Value >= 0, Value =< 255 -> [];
 validate_scalar(_Name, Value, int16) when is_integer(Value), Value >= -32768, Value =< 32767 -> [];
 validate_scalar(_Name, Value, uint16) when is_integer(Value), Value >= 0, Value =< 65535 -> [];
-validate_scalar(_Name, Value, int32) when is_integer(Value), Value >= -2147483648, Value =< 2147483647 -> [];
+validate_scalar(_Name, Value, int32) when
+    is_integer(Value), Value >= -2147483648, Value =< 2147483647
+->
+    [];
 validate_scalar(_Name, Value, uint32) when is_integer(Value), Value >= 0, Value =< 4294967295 -> [];
 validate_scalar(_Name, Value, int64) when is_integer(Value) -> [];
 validate_scalar(_Name, Value, uint64) when is_integer(Value), Value >= 0 -> [];
@@ -408,7 +415,9 @@ validate_vector(Name, Values, ElemType, Defs, Opts) when is_list(Values) ->
 validate_vector(Name, Value, ElemType, _Defs, _Opts) ->
     [{type_mismatch, Name, {vector, ElemType}, Value}].
 
-validate_array(Name, Values, ElemType, Count, Defs, Opts) when is_list(Values), length(Values) == Count ->
+validate_array(Name, Values, ElemType, Count, Defs, Opts) when
+    is_list(Values), length(Values) == Count
+->
     {Errors, _} = lists:foldl(
         fun(Elem, {ErrAcc, Idx}) ->
             case validate_value(Name, Elem, ElemType, Defs, Opts) of
@@ -427,14 +436,18 @@ validate_array(Name, Value, ElemType, Count, _Defs, _Opts) ->
 
 validate_union_type(Name, Value, UnionName, Defs) ->
     {union, Members} = maps:get(UnionName, Defs),
-    MemberAtom = case Value of
-        A when is_atom(A) -> A;
-        B when is_binary(B) ->
-            try binary_to_existing_atom(B, utf8)
-            catch error:badarg -> B
-            end;
-        _ -> Value
-    end,
+    MemberAtom =
+        case Value of
+            A when is_atom(A) -> A;
+            B when is_binary(B) ->
+                try
+                    binary_to_existing_atom(B, utf8)
+                catch
+                    error:badarg -> B
+                end;
+            _ ->
+                Value
+        end,
     case lists:member(MemberAtom, Members) of
         true -> [];
         false -> [{invalid_union_type, Name, Value, Members}]
@@ -442,16 +455,17 @@ validate_union_type(Name, Value, UnionName, Defs) ->
 
 validate_struct(Name, Value, Fields) when is_map(Value) ->
     Errors = lists:flatmap(
-        fun({FieldName, FieldType}) ->
-            case get_map_value(Value, FieldName) of
-                undefined -> [{missing_required, FieldName}];
-                FieldValue -> validate_scalar(FieldName, FieldValue, FieldType)
-            end;
-           ({FieldName, FieldType, _Attrs}) ->
-            case get_map_value(Value, FieldName) of
-                undefined -> [{missing_required, FieldName}];
-                FieldValue -> validate_scalar(FieldName, FieldValue, FieldType)
-            end
+        fun
+            ({FieldName, FieldType}) ->
+                case get_map_value(Value, FieldName) of
+                    undefined -> [{missing_required, FieldName}];
+                    FieldValue -> validate_scalar(FieldName, FieldValue, FieldType)
+                end;
+            ({FieldName, FieldType, _Attrs}) ->
+                case get_map_value(Value, FieldName) of
+                    undefined -> [{missing_required, FieldName}];
+                    FieldValue -> validate_scalar(FieldName, FieldValue, FieldType)
+                end
         end,
         Fields
     ),

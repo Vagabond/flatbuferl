@@ -60,13 +60,17 @@ sequential_ids_test() ->
     ).
 
 explicit_ids_test() ->
-    {ok, {Defs, _}} = flatbuferl_schema:parse("table T { a: int (id: 2); b: int (id: 0); c: int (id: 1); }"),
+    {ok, {Defs, _}} = flatbuferl_schema:parse(
+        "table T { a: int (id: 2); b: int (id: 0); c: int (id: 1); }"
+    ),
     {table, Fields} = maps:get('T', Defs),
     %% Fields keep original order, IDs as specified
     [{a, int, #{id := 2}}, {b, int, #{id := 0}}, {c, int, #{id := 1}}] = Fields.
 
 mixed_ids_test() ->
-    {ok, {Defs, _}} = flatbuferl_schema:parse("table T { a: int (id: 0); b: int (id: 2); c: int; d: int; }"),
+    {ok, {Defs, _}} = flatbuferl_schema:parse(
+        "table T { a: int (id: 0); b: int (id: 2); c: int; d: int; }"
+    ),
     {table, Fields} = maps:get('T', Defs),
     %% c and d should fill gaps and continue after explicit IDs
     [

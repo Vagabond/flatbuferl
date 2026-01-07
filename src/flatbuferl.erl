@@ -1,6 +1,12 @@
+%% @doc FlatBuffers implementation for Erlang.
+%%
+%% Schemas are parsed at runtime without code generation. Encoding produces
+%% iolists and decoding returns sub-binaries, both avoiding unnecessary copies.
 -module(flatbuferl).
 
 -export([
+    parse_schema/1,
+    parse_schema_file/1,
     new/2,
     get/2,
     get/3,
@@ -39,9 +45,26 @@
 -type path() :: [atom()].
 
 %% =============================================================================
+%% Schema Parsing
+%% =============================================================================
+
+%% @doc Parse a FlatBuffers schema from a string or binary.
+-spec parse_schema(string() | binary()) -> {ok, schema()} | {error, term()}.
+parse_schema(Schema) ->
+    flatbuferl_schema:parse(Schema).
+
+%% @doc Parse a FlatBuffers schema from a file.
+%% Resolves `include' directives relative to the file's directory.
+-spec parse_schema_file(file:filename()) -> {ok, schema()} | {error, term()}.
+parse_schema_file(Filename) ->
+    flatbuferl_schema:parse_file(Filename).
+
+%% =============================================================================
 %% Context Creation
 %% =============================================================================
 
+%% @doc Create a decoding context from a buffer and schema.
+%% The context can be used with `get/2', `has/2', and `to_map/1'.
 -spec new(binary(), schema()) -> ctx().
 new(Buffer, {Defs, SchemaOpts}) ->
     RootType = maps:get(root_type, SchemaOpts),
@@ -57,6 +80,7 @@ new(Buffer, {Defs, SchemaOpts}) ->
 %% Access API
 %% =============================================================================
 
+%% @doc Get a field value by path. Raises if field is missing and has no default.
 -spec get(ctx(), path()) -> term().
 get(Ctx, Path) ->
     case get_internal(Ctx, Path) of
@@ -64,6 +88,7 @@ get(Ctx, Path) ->
         missing -> error({missing_field, Path, no_default})
     end.
 
+%% @doc Get a field value by path, returning Default if missing.
 -spec get(ctx(), path(), term()) -> term().
 get(Ctx, Path, Default) ->
     case get_internal(Ctx, Path) of
@@ -71,6 +96,7 @@ get(Ctx, Path, Default) ->
         missing -> Default
     end.
 
+%% @doc Check if a field is present in the buffer.
 -spec has(ctx(), path()) -> boolean().
 has(Ctx, Path) ->
     case get_internal(Ctx, Path) of
@@ -82,18 +108,22 @@ has(Ctx, Path) ->
 %% Full Deserialization
 %% =============================================================================
 
+%% @doc Decode the entire buffer to an Erlang map.
 -spec to_map(ctx()) -> map().
 to_map(Ctx) ->
     to_map(Ctx, #{}).
 
+%% @doc Decode the entire buffer to an Erlang map with options.
 -spec to_map(ctx(), decode_opts()) -> map().
 to_map(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}, Opts) ->
     table_to_map(Root, Defs, RootType, Buffer, Opts).
 
+%% @doc Encode an Erlang map to FlatBuffers iodata.
 -spec from_map(map(), schema()) -> iodata().
 from_map(Map, Schema) ->
     flatbuferl_builder:from_map(Map, Schema).
 
+%% @doc Encode an Erlang map to FlatBuffers iodata with options.
 -spec from_map(map(), schema(), flatbuferl_builder:encode_opts()) -> iodata().
 from_map(Map, Schema, Opts) ->
     flatbuferl_builder:from_map(Map, Schema, Opts).
@@ -110,12 +140,18 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
                     Acc;
                 {true, error} ->
                     %% Check if field is present in buffer
-                    case flatbuferl_reader:get_field(TableRef, FieldId, resolve_type(Type, Defs), Buffer) of
+                    case
+                        flatbuferl_reader:get_field(
+                            TableRef, FieldId, resolve_type(Type, Defs), Buffer
+                        )
+                    of
                         {ok, _} -> error({deprecated_field_present, TableType, FieldName});
                         missing -> Acc
                     end;
                 _ ->
-                    decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc)
+                    decode_field(
+                        FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc
+                    )
             end
         end,
         #{},
@@ -150,7 +186,9 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
         {union_value, UnionName} ->
             %% Union value field - output the nested table directly
             TypeFieldId = FieldId - 1,
-            case flatbuferl_reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
+            case
+                flatbuferl_reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer)
+            of
                 {ok, 0} ->
                     %% NONE type
                     Acc;
@@ -159,7 +197,9 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
                         {ok, TableValueRef} ->
                             {union, Members} = maps:get(UnionName, Defs),
                             MemberType = lists:nth(TypeIndex, Members),
-                            ConvertedValue = table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts),
+                            ConvertedValue = table_to_map(
+                                TableValueRef, Defs, MemberType, Buffer, Opts
+                            ),
                             Acc#{FieldName => ConvertedValue};
                         missing ->
                             Acc
@@ -190,7 +230,9 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
                                     MemberType = lists:nth(TypeIdx, Members),
                                     table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
                                 end,
-                                TypeIndices, TableRefs),
+                                TypeIndices,
+                                TableRefs
+                            ),
                             Acc#{FieldName => DecodedValues};
                         missing ->
                             Acc
@@ -226,7 +268,9 @@ resolve_type(Type, _Defs) ->
 convert_value({table, _, _} = TableRef, Type, Defs, Buffer, Opts) when is_atom(Type) ->
     %% Nested table - recursively convert
     table_to_map(TableRef, Defs, Type, Buffer, Opts);
-convert_value(Values, {vector, ElemType}, Defs, Buffer, Opts) when is_list(Values), is_atom(ElemType) ->
+convert_value(Values, {vector, ElemType}, Defs, Buffer, Opts) when
+    is_list(Values), is_atom(ElemType)
+->
     %% Vector of tables - convert each element
     case maps:get(ElemType, Defs, undefined) of
         {table, _} ->
@@ -241,6 +285,7 @@ convert_value(Value, _Type, _Defs, _Buffer, _Opts) ->
 %% Raw Bytes Access
 %% =============================================================================
 
+%% @doc Get raw bytes for a field, returning a sub-binary from the buffer.
 -spec get_bytes(ctx(), path()) -> binary().
 get_bytes(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}, Path) ->
     case get_bytes_internal(Root, Defs, RootType, Path, Buffer) of
@@ -305,6 +350,7 @@ get_field_bytes({table, TableOffset, Buffer}, FieldId, _Buffer) ->
 %% Metadata
 %% =============================================================================
 
+%% @doc Extract the 4-byte file identifier from a buffer.
 -spec file_id(ctx() | binary()) -> binary().
 file_id(#ctx{buffer = Buffer}) ->
     flatbuferl_reader:get_file_id(Buffer);
@@ -368,7 +414,8 @@ normalize_type({Type, Default}) when is_atom(Type), is_number(Default) ->
 normalize_type({Type, Default}) when is_atom(Type), is_boolean(Default) ->
     Type;
 normalize_type({Type, undefined}) when is_atom(Type) ->
-    Type;  %% optional scalar
+    %% optional scalar
+    Type;
 normalize_type(Type) ->
     Type.
 
@@ -379,10 +426,12 @@ normalize_type(Type) ->
 -type validate_opts() :: flatbuferl_schema:validate_opts().
 -type validation_error() :: flatbuferl_schema:validation_error().
 
+%% @doc Validate an Erlang map against a schema before encoding.
 -spec validate(map(), schema()) -> ok | {error, [validation_error()]}.
 validate(Map, Schema) ->
     validate(Map, Schema, #{}).
 
+%% @doc Validate an Erlang map against a schema with options.
 -spec validate(map(), schema(), validate_opts()) -> ok | {error, [validation_error()]}.
 validate(Map, Schema, Opts) ->
     flatbuferl_schema:validate(Map, Schema, Opts).

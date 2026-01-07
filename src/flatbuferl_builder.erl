@@ -1,3 +1,4 @@
+%% @private
 -module(flatbuferl_builder).
 
 -export([from_map/2, from_map/3]).
@@ -30,11 +31,12 @@ from_map(Map, Schema) ->
 -spec from_map(map(), schema(), encode_opts()) -> iodata().
 from_map(Map, {Defs, SchemaOpts}, Opts) ->
     RootType = maps:get(root_type, SchemaOpts),
-    FileId = case maps:get(file_id, Opts, true) of
-        true -> maps:get(file_identifier, SchemaOpts, no_file_id);
-        false -> no_file_id;
-        <<_:32>> = Override -> Override
-    end,
+    FileId =
+        case maps:get(file_id, Opts, true) of
+            true -> maps:get(file_identifier, SchemaOpts, no_file_id);
+            false -> no_file_id;
+            <<_:32>> = Override -> Override
+        end,
     from_map_internal(Map, Defs, RootType, FileId, Opts).
 
 from_map_internal(Map, Defs, RootType, FileId, Opts) ->
@@ -195,7 +197,7 @@ encode_root_vtable_after(
     ].
 
 file_id_bin(no_file_id) -> <<>>;
-file_id_bin(B) when byte_size(B) =:= 4 -> B;
+file_id_bin(B) when byte_size(B) == 4 -> B;
 file_id_bin(_) -> error(invalid_file_id).
 
 %% =============================================================================
@@ -205,7 +207,9 @@ file_id_bin(_) -> error(invalid_file_id).
 validate_fields(Map, Fields, TableType, Opts) ->
     lists:foreach(
         fun(FieldDef) ->
-            {Name, _FieldId, _Type, _Default, Required, Deprecated} = parse_field_def_full(FieldDef),
+            {Name, _FieldId, _Type, _Default, Required, Deprecated} = parse_field_def_full(
+                FieldDef
+            ),
             HasValue = has_field_value(Map, Name),
             %% Check required
             case {Required, HasValue} of
@@ -294,7 +298,11 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                             T when is_binary(T) -> binary_to_atom(T);
                             _ -> error({missing_union_type_field, TypeFieldName})
                         end,
-                    [{FieldId, {union_value, UnionName}, #{type => MemberType, value => TableValue}}];
+                    [
+                        {FieldId, {union_value, UnionName}, #{
+                            type => MemberType, value => TableValue
+                        }}
+                    ];
                 _ ->
                     []
             end;
@@ -305,10 +313,17 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                     [];
                 TypeList when is_list(TypeList) ->
                     {union, Members} = maps:get(UnionName, Defs),
-                    TypeIndices = [begin
-                        T = if is_binary(MT) -> binary_to_atom(MT); true -> MT end,
-                        find_union_index(T, Members, 1)
-                    end || MT <- TypeList],
+                    TypeIndices = [
+                        begin
+                            T =
+                                case is_binary(MT) of
+                                    true -> binary_to_atom(MT);
+                                    false -> MT
+                                end,
+                            find_union_index(T, Members, 1)
+                        end
+                     || MT <- TypeList
+                    ],
                     [{FieldId, {vector, ubyte}, TypeIndices}];
                 _ ->
                     []
@@ -321,18 +336,28 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                 undefined ->
                     [];
                 ValueList when is_list(ValueList) ->
-                    TypeList = case get_field_value(Map, TypeFieldName) of
-                        TL when is_list(TL) -> TL;
-                        _ -> error({missing_union_type_field, TypeFieldName})
-                    end,
-                    length(TypeList) =:= length(ValueList) orelse
-                        error({union_vector_length_mismatch, Name, length(TypeList), length(ValueList)}),
+                    TypeList =
+                        case get_field_value(Map, TypeFieldName) of
+                            TL when is_list(TL) -> TL;
+                            _ -> error({missing_union_type_field, TypeFieldName})
+                        end,
+                    length(TypeList) == length(ValueList) orelse
+                        error(
+                            {union_vector_length_mismatch, Name, length(TypeList),
+                                length(ValueList)}
+                        ),
                     TaggedValues = lists:zipwith(
                         fun(T, V) ->
-                            Type0 = if is_binary(T) -> binary_to_atom(T); true -> T end,
+                            Type0 =
+                                case is_binary(T) of
+                                    true -> binary_to_atom(T);
+                                    false -> T
+                                end,
                             #{type => Type0, value => V}
                         end,
-                        TypeList, ValueList),
+                        TypeList,
+                        ValueList
+                    ),
                     [{FieldId, {vector, {union_value, UnionName}}, TaggedValues}];
                 _ ->
                     []
@@ -340,7 +365,7 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
         _ ->
             case get_field_value(Map, Name) of
                 undefined -> [];
-                Value when Value =:= Default -> [];
+                Value when Value == Default -> [];
                 Value -> [{FieldId, resolve_type(Type, Defs), Value}]
             end
     end.
@@ -478,7 +503,7 @@ calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs) ->
 %% - If there's an id=0 ref: ascending order (1, 2, ..., N, 0)
 %% - If NO id=0 ref: descending order (N, N-1, ..., 1)
 sort_refs_flatc_order(Refs) ->
-    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _}) -> Id =:= 0 end, Refs),
+    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _}) -> Id == 0 end, Refs),
     case ZeroRefs of
         [] ->
             %% No id=0 ref: descending order
@@ -493,7 +518,7 @@ sort_refs_flatc_order(Refs) ->
 
 %% 4-tuple version for refs with offset
 sort_refs_flatc_order_4(Refs) ->
-    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _, _}) -> Id =:= 0 end, Refs),
+    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _, _}) -> Id == 0 end, Refs),
     case ZeroRefs of
         [] ->
             %% No id=0 ref: descending order
@@ -511,7 +536,7 @@ find_first_8byte_field_offset(Fields, TableSize) ->
     AllFields = lists:sort(fun field_layout_order/2, Fields),
     Slots = place_fields_backward(AllFields, TableSize),
     %% Find 8-byte fields and get their offsets
-    EightByteFields = [{Id, Type} || {Id, Type, _} <- AllFields, type_size(Type) =:= 8],
+    EightByteFields = [{Id, Type} || {Id, Type, _} <- AllFields, type_size(Type) == 8],
     case EightByteFields of
         [] ->
             none;
@@ -1098,7 +1123,7 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
     EncodedElems = lists:map(
         fun({OrigIdx, VTable, Scalars, Refs}) ->
             OwnerIdx = maps:get(VTable, VTableOwners),
-            IsOwner = OrigIdx =:= OwnerIdx,
+            IsOwner = OrigIdx == OwnerIdx,
             %% Owner elements use normal padding (they're last and need trailing padding)
             %% Non-owner elements use minimal padding (followed by vtable which needs 2-byte align)
             TableBin =
@@ -1356,9 +1381,9 @@ encode_nested_table(TableType, Map, Defs) ->
 
 encode_scalar(Value, bool) ->
     <<
-        (if
-            Value -> 1;
-            true -> 0
+        (case Value of
+            true -> 1;
+            false -> 0
         end):8
     >>;
 encode_scalar(Value, byte) ->
@@ -1498,7 +1523,8 @@ extract_default(_) -> undefined.
 
 normalize_type({T, D}) when is_atom(T), is_number(D) -> T;
 normalize_type({T, D}) when is_atom(T), is_boolean(D) -> T;
-normalize_type({T, undefined}) when is_atom(T) -> T;  %% optional scalar
+%% optional scalar
+normalize_type({T, undefined}) when is_atom(T) -> T;
 normalize_type(T) -> T.
 
 -ifdef(TEST).
@@ -1570,6 +1596,9 @@ run_in_isolated_process(Fun) ->
     Parent = self(),
     Ref = make_ref(),
     spawn_link(fun() -> Parent ! {Ref, Fun()} end),
-    receive {Ref, Result} -> Result after 5000 -> error(timeout) end.
+    receive
+        {Ref, Result} -> Result
+    after 5000 -> error(timeout)
+    end.
 
 -endif.
