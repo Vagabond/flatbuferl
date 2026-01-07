@@ -365,6 +365,8 @@ normalize_type({Type, Default}) when is_atom(Type), is_number(Default) ->
     Type;
 normalize_type({Type, Default}) when is_atom(Type), is_boolean(Default) ->
     Type;
+normalize_type({Type, undefined}) when is_atom(Type) ->
+    Type;  %% optional scalar
 normalize_type(Type) ->
     Type.
 

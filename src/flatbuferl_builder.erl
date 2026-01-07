@@ -1484,6 +1484,7 @@ extract_default(_) -> undefined.
 
 normalize_type({T, D}) when is_atom(T), is_number(D) -> T;
 normalize_type({T, D}) when is_atom(T), is_boolean(D) -> T;
+normalize_type({T, undefined}) when is_atom(T) -> T;  %% optional scalar
 normalize_type(T) -> T.
 
 -ifdef(TEST).

@@ -1,4 +1,4 @@
-src/schema_parser.erl
-src/schema_lexer.erl
+src/flatbuferl_parser.erl
+src/flatbuferl_lexer.erl
 
 _build/*

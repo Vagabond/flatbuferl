@@ -167,6 +167,7 @@ Supported:
 - Namespaces, file identifiers
 - Field defaults
 - Attributes: `id`, `deprecated`, `required`
+- Optional scalars (`field: int = null`)
 - Struct alignment (automatic, based on field sizes)
 - VTable deduplication within tables
 - Map/JSON validation against schema

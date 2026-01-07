@@ -1,5 +1,5 @@
 Nonterminals root definition option fields field key_def value attribute_def attributes atoms atom.
-Terminals  table struct enum union namespace root_type include attribute file_identifier file_extension float int bool string '}' '{' '(' ')' '[' ']' ';' ',' ':' '=' quote.
+Terminals  table struct enum union namespace root_type include attribute file_identifier file_extension float int bool null string '}' '{' '(' ')' '[' ']' ';' ',' ':' '=' quote.
 Rootsymbol root.
 
 root -> definition      : {'$1', #{}}.
@@ -44,6 +44,7 @@ attribute_def -> string                    : #{ get_value_atom('$1') => true }.
 value -> int      : get_value('$1').
 value -> float    : get_value('$1').
 value -> bool     : get_value('$1').
+value -> null     : undefined.
 value -> string   : get_value_bin('$1').
 
 % enums + unions

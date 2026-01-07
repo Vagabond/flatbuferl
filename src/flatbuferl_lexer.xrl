@@ -20,6 +20,7 @@ attribute{WS}			  : {token, {attribute, TokenLine}}.
 file_identifier{WS}	: {token, {file_identifier, TokenLine}}.
 file_extension{WS}  : {token, {file_extension, TokenLine}}.
 
+null            : {token, {null, TokenLine}}.
 {FLOAT}         : {Val, _} = string:to_float(TokenChars), {token, {float, TokenLine, Val}}.
 {INT}           : {Val, _} = string:to_integer(TokenChars), {token, {int, TokenLine, Val}}.
 {BOOL}          : {token, {int, TokenLine, get_bool(TokenChars)}}.

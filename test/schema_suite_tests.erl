@@ -626,3 +626,81 @@ union_vector_test_() ->
              ?assertEqual([1, 2, 3], maps:get(data, lists:nth(2, DataVals)))
          end}
     ].
+
+%% =============================================================================
+%% Optional Scalar Tests
+%% =============================================================================
+
+optional_scalar_test_() ->
+    Schema = {#{
+        'TestTable' => {table, [
+            {opt_int, {int, undefined}, #{id => 0}},
+            {opt_bool, {bool, undefined}, #{id => 1}},
+            {reg_int, {int, 0}, #{id => 2}},
+            {reg_int_default, {int, 100}, #{id => 3}}
+        ]}
+    }, #{root_type => 'TestTable'}},
+    [
+        {"optional scalar set to value",
+         fun() ->
+             Map = #{opt_int => 42, reg_int => 10},
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             ?assertEqual(42, maps:get(opt_int, Result)),
+             ?assertEqual(10, maps:get(reg_int, Result))
+         end},
+        {"optional scalar set to zero is distinguishable from not set",
+         fun() ->
+             Map = #{opt_int => 0, reg_int => 10},
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             ?assertEqual(0, maps:get(opt_int, Result)),
+             ?assert(maps:is_key(opt_int, Result))
+         end},
+        {"optional scalar not set - absent from result",
+         fun() ->
+             Map = #{reg_int => 10},
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             ?assertEqual(false, maps:is_key(opt_int, Result)),
+             ?assertEqual(10, maps:get(reg_int, Result))
+         end},
+        {"optional scalar explicit undefined - absent from result",
+         fun() ->
+             Map = #{opt_int => undefined, reg_int => 10},
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             ?assertEqual(false, maps:is_key(opt_int, Result))
+         end},
+        {"optional bool set to false is written",
+         fun() ->
+             Map = #{opt_bool => false, reg_int => 10},
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             ?assertEqual(false, maps:get(opt_bool, Result)),
+             ?assert(maps:is_key(opt_bool, Result))
+         end},
+        {"regular scalar with default - returns default when missing",
+         fun() ->
+             Map = #{reg_int => 10},
+             Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+             Ctx = flatbuferl:new(Bin, Schema),
+             Result = flatbuferl:to_map(Ctx),
+             ?assertEqual(100, maps:get(reg_int_default, Result))
+         end},
+        {"validation allows undefined for optional scalar",
+         fun() ->
+             Map = #{opt_int => undefined, reg_int => 10},
+             ?assertEqual(ok, flatbuferl:validate(Map, Schema))
+         end},
+        {"validation allows omitted optional scalar",
+         fun() ->
+             Map = #{reg_int => 10},
+             ?assertEqual(ok, flatbuferl:validate(Map, Schema))
+         end}
+    ].
