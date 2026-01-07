@@ -197,6 +197,121 @@ fetch_struct_wildcard_test() ->
     ?assertEqual(3.0, maps:get(z, Result)).
 
 %% =============================================================================
+%% _size Pseudo-field
+%% =============================================================================
+
+fetch_size_of_vector_test() ->
+    Ctx = vector_ctx(),
+    ?assertEqual(3, flatbuferl_fetch:fetch(Ctx, [items, '_size'])),
+    ?assertEqual(3, flatbuferl_fetch:fetch(Ctx, [counts, '_size'])).
+
+fetch_size_of_empty_vector_test() ->
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    Data = #{items => [], counts => []},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [items, '_size'])).
+
+fetch_size_of_missing_vector_test() ->
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_vector.fbs"),
+    Data = #{items => [<<"a">>]},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [counts, '_size'])).
+
+fetch_size_of_table_vector_test() ->
+    Ctx = table_vector_ctx(),
+    ?assertEqual(3, flatbuferl_fetch:fetch(Ctx, [inner, '_size'])).
+
+fetch_size_of_string_test() ->
+    Ctx = simple_ctx(),
+    ?assertEqual(6, flatbuferl_fetch:fetch(Ctx, [name, '_size'])).  %% <<"Goblin">> = 6 bytes
+
+fetch_size_of_missing_string_test() ->
+    {ok, Schema} = flatbuferl_schema:parse_file("test/vectors/test_monster.fbs"),
+    Data = #{hp => 50},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [name, '_size'])).
+
+%% =============================================================================
+%% _type Pseudo-field (Unions)
+%% =============================================================================
+
+union_ctx(Type, Value) ->
+    {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/union_field.fbs"),
+    Data = #{data => Value, data_type => Type, additions_value => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_union_type_hello_test() ->
+    Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
+    ?assertEqual(hello, flatbuferl_fetch:fetch(Ctx, [data, '_type'])).
+
+fetch_union_type_bye_test() ->
+    Ctx = union_ctx(bye, #{greeting => 99}),
+    ?assertEqual(bye, flatbuferl_fetch:fetch(Ctx, [data, '_type'])).
+
+fetch_union_field_test() ->
+    Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
+    ?assertEqual(<<"Hi">>, flatbuferl_fetch:fetch(Ctx, [data, salute])).
+
+fetch_union_field_wrong_type_test() ->
+    %% Accessing 'greeting' when the union is 'hello' (which has 'salute')
+    Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
+    ?assertError({unknown_field, greeting}, flatbuferl_fetch:fetch(Ctx, [data, greeting])).
+
+fetch_union_extract_field_test() ->
+    Ctx = union_ctx(bye, #{greeting => 99}),
+    ?assertEqual([99], flatbuferl_fetch:fetch(Ctx, [data, [greeting]])).
+
+%% =============================================================================
+%% Guards (Filters)
+%% =============================================================================
+
+fetch_guard_filter_test() ->
+    Ctx = table_vector_ctx(),
+    %% Filter to only elements where value_inner == <<"two">>
+    ?assertEqual(
+        [[<<"two">>]],
+        flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, <<"two">>}, value_inner]])
+    ).
+
+fetch_guard_filter_all_test() ->
+    Ctx = table_vector_ctx(),
+    %% Filter that matches nothing
+    ?assertEqual(
+        [],
+        flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, <<"nonexistent">>}, value_inner]])
+    ).
+
+fetch_guard_filter_multiple_test() ->
+    Ctx = table_vector_ctx(),
+    %% Filter to elements where value_inner is "one" or "three" - but guards are AND
+    %% So this won't match anything since value_inner can't be both
+    ?assertEqual(
+        [],
+        flatbuferl_fetch:fetch(Ctx, [inner, '*', [{value_inner, <<"one">>}, {value_inner, <<"three">>}, value_inner]])
+    ).
+
+fetch_guard_with_union_type_test() ->
+    %% Filter by union type
+    Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
+    %% This is a single union, not a vector, so guards apply to extraction
+    ?assertEqual(
+        [<<"Hi">>],
+        flatbuferl_fetch:fetch(Ctx, [data, [{'_type', hello}, salute]])
+    ).
+
+fetch_guard_with_union_type_mismatch_test() ->
+    Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
+    %% Guard for bye type should filter out, returning undefined
+    ?assertEqual(
+        undefined,
+        flatbuferl_fetch:fetch(Ctx, [data, [{'_type', bye}, salute]])
+    ).
+
+%% =============================================================================
 %% Edge Cases
 %% =============================================================================
 
