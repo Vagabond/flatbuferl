@@ -948,6 +948,50 @@ vector_element_scalar_continue_test() ->
     %% Just accessing element - hits continue_from_element with scalar
     ?assertEqual(3, flatbuferl_fetch:fetch(Ctx, [int_vector, 2])).
 
+%% Unknown field in wildcard over non-union vector should raise error
+wildcard_unknown_field_should_error_test() ->
+    {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/game_example.fbs"),
+    GameState = #{
+        world_name => <<"Test">>,
+        tick => 1,
+        players => [],
+        monsters => [
+            #{
+                name => <<"Goblin">>,
+                pos => #{x => 0.0, y => 0.0, z => 0.0},
+                stats => #{hp => 30, max_hp => 30, level => 1, strength => 5, defense => 3},
+                loot_table => [],
+                aggro_radius => 10.0,
+                is_boss => false
+            }
+        ]
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(GameState, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    %% Field doesn't exist in Monster schema - should raise error, not return []
+    ?assertError(
+        {unknown_field, totally_bogus_field},
+        flatbuferl_fetch:fetch(Ctx, [monsters, '*', totally_bogus_field])
+    ).
+
+%% Unknown field in union vector wildcard should also error if NO union member has it
+union_vector_wildcard_unknown_field_should_error_test() ->
+    Ctx = game_state_ctx(),
+    %% 'totally_bogus' doesn't exist on Weapon, Armor, or Consumable
+    %% Should error, not silently return []
+    ?assertError(
+        {unknown_field, totally_bogus},
+        flatbuferl_fetch:fetch(Ctx, [players, 0, inventory, '*', item, totally_bogus])
+    ).
+
+%% Union vector wildcard SHOULD filter when field exists on SOME members
+union_vector_wildcard_filters_properly_test() ->
+    Ctx = game_state_ctx(),
+    %% 'damage' exists on Weapon but not Armor/Consumable
+    %% Should filter out non-weapons, not error
+    Damages = flatbuferl_fetch:fetch(Ctx, [players, 0, inventory, '*', item, damage]),
+    ?assertEqual([50], Damages).
+
 wildcard_over_vector_missing_continuation_test() ->
     %% Test wildcard where continuation returns missing for some elements
     %% This tests the 'missing' branch in wildcard_over_vector

@@ -1,23 +1,200 @@
 %% @doc Path-based access to FlatBuffer data.
 %%
-%% Provides `fetch/2' for flexible path-based access with support for:
-%% - Vector/array indexing: `[monsters, 0, name]'
-%% - Wildcards: `[monsters, '*', name]'
-%% - Multi-field extraction: `[monsters, 0, [name, hp]]'
+%% This module provides {@link fetch/2} for flexible path-based access to
+%% FlatBuffer data with support for vector indexing, wildcards, multi-field
+%% extraction, guards, and union type handling.
+%%
+%% == Path Elements ==
+%%
+%% A path is a list of elements that navigate through the FlatBuffer structure:
+%%
+%% <ul>
+%% <li><b>atom</b> - Field name</li>
+%% <li><b>integer</b> - Vector/array index (negative counts from end)</li>
+%% <li><b>'*'</b> - Wildcard, iterates all elements in vector/array</li>
+%% <li><b>'_type'</b> - Union type discriminator (pseudo-field)</li>
+%% <li><b>'_size'</b> - Vector/array/string length (pseudo-field)</li>
+%% <li><b>[spec]</b> - Multi-field extraction list</li>
+%% </ul>
+%%
+%% == Basic Field Access ==
+%%
+%% ```
+%% fetch(Ctx, [name])              -> <<"Bob">>
+%% fetch(Ctx, [pos, x])            -> 1.0
+%% fetch(Ctx, [nonexistent])       -> undefined
+%% '''
+%%
+%% == Vector/Array Indexing ==
+%%
+%% ```
+%% fetch(Ctx, [monsters, 0])       -> #{name => <<"Goblin">>, ...}
+%% fetch(Ctx, [monsters, 0, name]) -> <<"Goblin">>
+%% fetch(Ctx, [monsters, -1, name])-> <<"Dragon">>  % last element
+%% fetch(Ctx, [monsters, 100])     -> undefined     % out of bounds
+%% '''
+%%
+%% == Wildcards ==
+%%
+%% The wildcard '*' iterates all elements. Result is always a list.
+%%
+%% ```
+%% fetch(Ctx, [monsters, '*'])           -> [#{...}, #{...}, ...]
+%% fetch(Ctx, [monsters, '*', name])     -> [<<"Goblin">>, <<"Orc">>]
+%% fetch(Ctx, [monsters, '*', stats, hp])-> [30, 5000]  % nested access
+%% '''
+%%
+%% Elements where the traversal returns missing data are filtered out:
+%%
+%% ```
+%% %% If some monsters have no stats table set:
+%% fetch(Ctx, [monsters, '*', stats, hp])-> [5000]  % only monsters with stats
+%% '''
+%%
+%% == Multi-Field Extraction ==
+%%
+%% List as final element extracts multiple fields:
+%%
+%% ```
+%% fetch(Ctx, [monsters, 0, [name, hp]])     -> [<<"Goblin">>, 10]
+%% fetch(Ctx, [monsters, '*', [name, hp]])   -> [[<<"Goblin">>, 10], ...]
+%% '''
+%%
+%% Nested paths in extraction:
+%%
+%% ```
+%% fetch(Ctx, [monsters, '*', [name, [pos, x]]])
+%% %% -> [[<<"Goblin">>, 1.0], [<<"Orc">>, 2.0], ...]
+%% '''
+%%
+%% Use '*' in extraction to get the whole element as a map:
+%%
+%% ```
+%% fetch(Ctx, [monsters, 0, [name, '*']])
+%% %% -> [<<"Goblin">>, #{name => <<"Goblin">>, hp => 10, ...}]
+%% '''
+%%
+%% == Guards (Filters) ==
+%%
+%% Tuples in extraction act as guards. Guards filter but produce no output.
+%%
+%% Equality guard - `{field, value}':
+%%
+%% ```
+%% fetch(Ctx, [monsters, '*', [{is_boss, true}, name]])
+%% %% -> [[<<"Dragon Lord">>]]  % only boss monsters
+%% '''
+%%
+%% Comparison guard - `{field, Op, value}' where Op is one of:
+%% '>', '>=', '&lt;', '=&lt;', '==', '/=', in, not_in
+%%
+%% ```
+%% fetch(Ctx, [monsters, '*', [{hp, '>', 50}, name]])
+%% %% -> [[<<"Dragon">>], [<<"Ogre">>]]
+%%
+%% fetch(Ctx, [items, '*', [{rarity, in, [rare, epic]}, name]])
+%% %% -> items with rarity in the given list
+%% '''
+%%
+%% Multiple guards are ANDed together.
+%%
+%% == Unions ==
+%%
+%% Use '_type' to get the union type discriminator:
+%%
+%% ```
+%% fetch(Ctx, [equipped, '_type'])           -> 'Weapon'
+%% fetch(Ctx, [equipped, name])              -> <<"Sword">>  % auto-resolves
+%% fetch(Ctx, [equipped, ['_type', name]])   -> ['Weapon', <<"Sword">>]
+%% '''
+%%
+%% Filter by union type:
+%%
+%% ```
+%% fetch(Ctx, [inventory, '*', [{'_type', 'Weapon'}, name, damage]])
+%% %% -> [[<<"Sword">>, 10], [<<"Axe">>, 25]]
+%% '''
+%%
+%% When iterating union vectors, elements are filtered if the requested
+%% field doesn't exist on that union member's type:
+%%
+%% ```
+%% %% inventory contains Weapon, Armor, and Consumable items
+%% %% only Weapon has 'damage' field
+%% fetch(Ctx, [inventory, '*', item, damage])
+%% %% -> [50, 25]  % only weapons, others filtered out
+%% '''
+%%
+%% == Size Pseudo-field ==
+%%
+%% The '_size' pseudo-field returns the length of vectors, arrays, or strings:
+%%
+%% ```
+%% fetch(Ctx, [monsters, '_size'])   -> 3
+%% fetch(Ctx, [name, '_size'])       -> 5  % string length
+%% '''
+%%
+%% == Error Conditions ==
+%%
+%% Errors are raised when the path is incompatible with the schema
+%% (the lookup is impossible regardless of the data):
+%%
+%% <ul>
+%% <li><b>{unknown_field, Name}</b> - Field does not exist in schema</li>
+%% <li><b>{not_a_table, Name, Type}</b> - Path continues into a scalar field</li>
+%% <li><b>{not_a_vector, Name, Type}</b> - Index or wildcard on non-vector field</li>
+%% <li><b>{invalid_path_element, Elem}</b> - Unrecognized element in path</li>
+%% </ul>
+%%
+%% These are programmer errors indicating a bug in the path specification,
+%% not runtime conditions. Missing data returns `undefined' or filters out.
+%%
+%% @end
 -module(flatbuferl_fetch).
 
 -export([fetch/2]).
 
 -type path() :: [path_element()].
--type path_element() :: atom() | integer() | '*' | [extract_spec()].
--type extract_spec() :: atom() | '*' | [path_element()].
+%% A list of path elements for navigating FlatBuffer data.
 
--export_type([path/0]).
+-type path_element() :: atom() | integer() | '*' | [extract_spec()].
+%% An element in a fetch path.
+%% Can be a field name (atom), vector index (integer, negative from end),
+%% wildcard ('*'), or extraction spec (list).
+
+-type extract_spec() ::
+    atom()
+    | '*'
+    | [path_element()]
+    | {atom(), term()}
+    | {atom(), guard_op(), term()}
+    | {[path_element()], term()}
+    | {[path_element()], guard_op(), term()}.
+%% Specification for multi-field extraction.
+%% Can be a field name, nested path, '*' for whole element, or guard tuple.
+
+-type guard_op() :: '>' | '>=' | '<' | '=<' | '==' | '/=' | in | not_in.
+%% Comparison operators for guards.
+
+-export_type([path/0, path_element/0, extract_spec/0, guard_op/0]).
 
 %% @doc Fetch a value from a FlatBuffer context using a path.
 %%
-%% Returns `undefined' for missing single values, `[]' for wildcards with no matches.
-%% Raises on programmer errors (unknown field, type mismatch).
+%% Navigates through the FlatBuffer structure following the path elements.
+%% Supports field access, vector indexing, wildcards, multi-field extraction,
+%% and filtering with guards.
+%%
+%% Returns:
+%% <ul>
+%% <li>The value at the path for successful single access</li>
+%% <li>`undefined' for missing fields or out-of-bounds indices</li>
+%% <li>A list for wildcard access (possibly empty if all filtered)</li>
+%% <li>A list of values for multi-field extraction</li>
+%% </ul>
+%%
+%% Raises exceptions when the path is incompatible with the schema (the
+%% lookup is impossible regardless of data). Missing data at runtime
+%% returns `undefined' or filters out in wildcards.
 -spec fetch(flatbuferl:ctx(), path()) -> term() | undefined.
 fetch(Ctx, Path) ->
     {Buffer, Defs, RootType, Root} = unpack_ctx(Ctx),
@@ -136,6 +313,31 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
                             });
                         missing ->
                             missing
+                    end;
+                [FieldName | _] when is_atom(FieldName), FieldName /= '*' ->
+                    %% Path continues with a field name. First validate the field
+                    %% exists on at least one union member (schema validation).
+                    case any_union_member_has_field(Members, FieldName, Defs) of
+                        false ->
+                            error({unknown_field, FieldName});
+                        true ->
+                            %% Field exists on some member. Check if THIS member has it.
+                            case type_has_field(MemberType, FieldName, Defs) of
+                                false ->
+                                    %% This member doesn't have it - filter out
+                                    missing;
+                                true ->
+                                    case
+                                        flatbuferl_reader:get_field(
+                                            TableRef, FieldId, {union_value, UnionName}, Buffer
+                                        )
+                                    of
+                                        {ok, ValueRef} ->
+                                            do_fetch(ValueRef, Defs, MemberType, Rest, Buffer);
+                                        missing ->
+                                            missing
+                                    end
+                            end
                     end;
                 _ ->
                     case
@@ -353,15 +555,9 @@ wildcard_over_vector(_VecInfo, Length, _ElemType, _Defs, _Rest, _Buffer, Idx, Ac
     lists:reverse(Acc);
 wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx, Acc) ->
     {ok, Elem} = flatbuferl_reader:get_vector_element_at(VecInfo, Idx, Buffer),
-    %% Catch unknown_field errors during wildcard - this happens when iterating
-    %% over unions where different members have different fields
-    Result =
-        try
-            continue_from_element(Elem, ElemType, Defs, Rest, Buffer)
-        catch
-            error:{unknown_field, _} -> filtered_out
-        end,
-    case Result of
+    %% For regular (non-union) vectors, all elements have the same type.
+    %% Unknown fields are schema errors and should raise, not filter.
+    case continue_from_element(Elem, ElemType, Defs, Rest, Buffer) of
         {ok, Value} ->
             wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx + 1, [
                 Value | Acc
@@ -371,10 +567,10 @@ wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx, Acc) ->
                 Values | Acc
             ]);
         missing ->
-            %% Filter out missing elements
+            %% Filter out elements with missing data
             wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx + 1, Acc);
         filtered_out ->
-            %% Guard failed or field doesn't exist on this type - filter out
+            %% Guard failed - filter out
             wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx + 1, Acc)
     end.
 
@@ -575,6 +771,22 @@ find_field([{Name, Type} | _], Name) ->
     {ok, 0, normalize_type(Type), Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
+
+%% Check if a type has a given field
+type_has_field(TypeName, FieldName, Defs) ->
+    case maps:get(TypeName, Defs, undefined) of
+        {table, Fields} -> field_exists(Fields, FieldName);
+        _ -> false
+    end.
+
+field_exists([], _Name) -> false;
+field_exists([{Name, _, _} | _], Name) -> true;
+field_exists([{Name, _} | _], Name) -> true;
+field_exists([_ | Rest], Name) -> field_exists(Rest, Name).
+
+%% Check if any union member has a given field
+any_union_member_has_field(Members, FieldName, Defs) ->
+    lists:any(fun(Member) -> type_has_field(Member, FieldName, Defs) end, Members).
 
 extract_default({_Type, Default}) when is_number(Default); is_boolean(Default) ->
     Default;

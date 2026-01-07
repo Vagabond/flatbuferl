@@ -73,6 +73,66 @@ flatbuferl:has(Ctx, [name]).              %% true
 flatbuferl:has(Ctx, [pos]).               %% true or false
 ```
 
+Advanced path-based queries with `fetch` - supports vector indexing, wildcards, multi-field extraction, and filtering. Use `get` for simple field access with default handling; use `fetch` when you need to index into vectors or query across collections:
+```erlang
+Ctx = flatbuferl:new(Buffer, Schema),
+
+%% Vector indexing (positive and negative)
+flatbuferl_fetch:fetch(Ctx, [items, 0]).        %% <<"sword">>
+flatbuferl_fetch:fetch(Ctx, [items, -1]).       %% <<"shield">> (last element)
+flatbuferl_fetch:fetch(Ctx, [items, 100]).      %% undefined (out of bounds)
+
+%% Wildcards - iterate all elements (always returns a list)
+flatbuferl_fetch:fetch(Ctx, [items, '*']).      %% [<<"sword">>, <<"shield">>]
+
+%% Multi-field extraction
+flatbuferl_fetch:fetch(Ctx, [pos, [x, y]]).     %% [1.5, 2.5]
+
+%% Size pseudo-field
+flatbuferl_fetch:fetch(Ctx, [items, '_size']).  %% 2
+flatbuferl_fetch:fetch(Ctx, [name, '_size']).   %% 6 (string byte length)
+```
+
+For vectors of tables, wildcards and extraction combine for powerful queries:
+```erlang
+%% Schema: table Monster { name: string; hp: int; is_boss: bool; }
+%%         table Game { monsters: [Monster]; }
+
+%% Get all monster names
+flatbuferl_fetch:fetch(Ctx, [monsters, '*', name]).
+%% [<<"Goblin">>, <<"Orc">>, <<"Dragon">>]
+
+%% Get name and hp for each monster
+flatbuferl_fetch:fetch(Ctx, [monsters, '*', [name, hp]]).
+%% [[<<"Goblin">>, 10], [<<"Orc">>, 30], [<<"Dragon">>, 500]]
+
+%% Filter with guards - only bosses
+flatbuferl_fetch:fetch(Ctx, [monsters, '*', [{is_boss, true}, name]]).
+%% [[<<"Dragon">>]]
+
+%% Comparison guards
+flatbuferl_fetch:fetch(Ctx, [monsters, '*', [{hp, '>', 20}, name]]).
+%% [[<<"Orc">>], [<<"Dragon">>]]
+```
+
+Union type handling:
+```erlang
+%% Schema: union Item { Weapon, Armor, Consumable }
+%%         table Player { equipped: Item; inventory: [Item]; }
+
+%% Get union type discriminator
+flatbuferl_fetch:fetch(Ctx, [equipped, '_type']).     %% 'Weapon'
+
+%% Access fields (auto-resolves union type)
+flatbuferl_fetch:fetch(Ctx, [equipped, name]).        %% <<"Sword">>
+
+%% Filter union vectors by type
+flatbuferl_fetch:fetch(Ctx, [inventory, '*', [{'_type', 'Weapon'}, name, damage]]).
+%% [[<<"Sword">>, 10], [<<"Axe">>, 25]]
+```
+
+See `doc/flatbuferl_fetch.html` for complete documentation on path syntax, guards, and error conditions.
+
 Validating data before encoding:
 ```erlang
 %% Validate a map against the schema
@@ -94,9 +154,10 @@ flatbuferl:parse_schema(String | Binary) -> {ok, Schema} | {error, Reason}.
 flatbuferl:parse_schema_file(Filename) -> {ok, Schema} | {error, Reason}.
 
 flatbuferl:new(Buffer, Schema) -> Ctx.
-flatbuferl:get(Ctx, Path) -> Value.
-flatbuferl:get(Ctx, Path, Default) -> Value.
+flatbuferl:get(Ctx, Path) -> Value.           %% Path = [atom()], errors on missing
+flatbuferl:get(Ctx, Path, Default) -> Value.  %% returns Default if missing
 flatbuferl:has(Ctx, Path) -> boolean().
+flatbuferl_fetch:fetch(Ctx, Path) -> Value.   %% advanced paths with indexing/wildcards/guards
 flatbuferl:to_map(Ctx) -> Map.
 flatbuferl:to_map(Ctx, Opts) -> Map.
 flatbuferl:from_map(Map, Schema) -> iodata().

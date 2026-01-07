@@ -287,10 +287,12 @@ fetch_union_field_test() ->
     Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
     ?assertEqual(<<"Hi">>, flatbuferl_fetch:fetch(Ctx, [data, salute])).
 
-fetch_union_field_wrong_type_test() ->
+fetch_union_field_other_member_test() ->
     %% Accessing 'greeting' when the union is 'hello' (which has 'salute')
+    %% Since 'greeting' exists on 'bye' (another union member), this returns
+    %% undefined rather than erroring - it's valid schema, just missing data.
     Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
-    ?assertError({unknown_field, greeting}, flatbuferl_fetch:fetch(Ctx, [data, greeting])).
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [data, greeting])).
 
 fetch_union_extract_field_test() ->
     Ctx = union_ctx(bye, #{greeting => 99}),
