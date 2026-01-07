@@ -63,8 +63,8 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
     case lookup_field(Defs, TableType, FieldName) of
         {ok, FieldId, {vector, _} = VecType, _Default} ->
             traverse_vector(TableRef, FieldId, VecType, Defs, Rest, Buffer);
-        {ok, _FieldId, {array, _ElemType, Count}, _Default} when Rest == ['_size'] ->
-            {ok, Count};
+        {ok, FieldId, {array, ElemType, Count} = ArrayType, _Default} ->
+            traverse_array(TableRef, FieldId, ArrayType, ElemType, Count, Defs, Rest, Buffer);
         {ok, FieldId, string, _Default} when Rest == ['_size'] ->
             case flatbuferl_reader:get_field(TableRef, FieldId, string, Buffer) of
                 {ok, Bin} -> {ok, byte_size(Bin)};
@@ -134,6 +134,53 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
         missing ->
             missing
     end.
+
+%% Array traversal (fixed-size arrays)
+traverse_array(_TableRef, _FieldId, _ArrayType, _ElemType, Count, _Defs, ['_size'], _Buffer) ->
+    {ok, Count};
+traverse_array(TableRef, FieldId, ArrayType, ElemType, Count, Defs, Rest, Buffer) ->
+    case flatbuferl_reader:get_field(TableRef, FieldId, ArrayType, Buffer) of
+        {ok, Elements} when is_list(Elements) ->
+            traverse_array_elements(Elements, ElemType, Count, Defs, Rest, Buffer);
+        missing ->
+            case Rest of
+                ['*' | _] -> {list, []};
+                [Index | _] when is_integer(Index) -> missing;
+                _ -> missing
+            end
+    end.
+
+traverse_array_elements(_Elements, _ElemType, Count, _Defs, ['_size'], _Buffer) ->
+    {ok, Count};
+traverse_array_elements(Elements, ElemType, Count, Defs, [Index | Rest], Buffer) when is_integer(Index) ->
+    %% Handle negative indices
+    ActualIndex =
+        if
+            Index < 0 -> Count + Index;
+            true -> Index
+        end,
+    case ActualIndex >= 0 andalso ActualIndex < Count of
+        true ->
+            Elem = lists:nth(ActualIndex + 1, Elements),
+            continue_from_element(Elem, ElemType, Defs, Rest, Buffer);
+        false ->
+            missing
+    end;
+traverse_array_elements(Elements, ElemType, _Count, Defs, ['*' | Rest], Buffer) ->
+    Results = lists:filtermap(
+        fun(Elem) ->
+            case continue_from_element(Elem, ElemType, Defs, Rest, Buffer) of
+                {ok, Value} -> {true, Value};
+                {list, Values} -> {true, Values};
+                missing -> false;
+                filtered_out -> false
+            end
+        end,
+        Elements
+    ),
+    {list, Results};
+traverse_array_elements(_Elements, _ElemType, _Count, _Defs, [Other | _], _Buffer) ->
+    error({invalid_path_element, Other}).
 
 %% Vector traversal
 traverse_vector(TableRef, FieldId, {vector, ElemType}, Defs, Rest, Buffer) ->
@@ -268,7 +315,7 @@ extract_fields(TableRef, Defs, TableType, Specs, Buffer, Context) ->
     case check_guards(Guards, TableRef, Defs, TableType, Buffer, Context) of
         true ->
             Values = lists:map(
-                fun(Spec) -> extract_one(Spec, TableRef, Defs, TableType, Buffer) end,
+                fun(Spec) -> extract_one(Spec, TableRef, Defs, TableType, Buffer, Context) end,
                 Extractors
             ),
             {ok, Values};
@@ -312,15 +359,18 @@ check_guards([{Path, ExpectedValue} | Rest], TableRef, Defs, TableType, Buffer, 
             false
     end.
 
-extract_one('*', TableRef, Defs, TableType, Buffer) ->
+extract_one('*', TableRef, Defs, TableType, Buffer, _Context) ->
     {ok, Map} = to_map(TableRef, Defs, TableType, Buffer),
     Map;
-extract_one(FieldName, TableRef, Defs, TableType, Buffer) when is_atom(FieldName) ->
+extract_one('_type', _TableRef, _Defs, _TableType, _Buffer, Context) ->
+    %% Extract union type from context
+    maps:get(union_type, Context, undefined);
+extract_one(FieldName, TableRef, Defs, TableType, Buffer, _Context) when is_atom(FieldName) ->
     case fetch_field(TableRef, Defs, TableType, FieldName, Buffer) of
         {ok, V} -> V;
         missing -> undefined
     end;
-extract_one(SubPath, TableRef, Defs, TableType, Buffer) when is_list(SubPath) ->
+extract_one(SubPath, TableRef, Defs, TableType, Buffer, _Context) when is_list(SubPath) ->
     case do_fetch(TableRef, Defs, TableType, SubPath, Buffer) of
         {ok, V} -> V;
         {list, V} -> V;

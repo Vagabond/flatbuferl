@@ -197,6 +197,36 @@ fetch_struct_wildcard_test() ->
     ?assertEqual(3.0, maps:get(z, Result)).
 
 %% =============================================================================
+%% Fixed-Size Array Access
+%% =============================================================================
+
+array_ctx() ->
+    {ok, Schema} = flatbuferl_schema:parse_file("test/schemas/array_table.fbs"),
+    Data = #{floats => [1.0, 2.0, 3.0], ints => [10, 20, 30, 40]},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_array_index_test() ->
+    Ctx = array_ctx(),
+    ?assertEqual(1.0, flatbuferl_fetch:fetch(Ctx, [floats, 0])),
+    ?assertEqual(3.0, flatbuferl_fetch:fetch(Ctx, [floats, 2])).
+
+fetch_array_negative_index_test() ->
+    Ctx = array_ctx(),
+    ?assertEqual(3.0, flatbuferl_fetch:fetch(Ctx, [floats, -1])),
+    ?assertEqual(1.0, flatbuferl_fetch:fetch(Ctx, [floats, -3])).
+
+fetch_array_wildcard_test() ->
+    Ctx = array_ctx(),
+    ?assertEqual([1.0, 2.0, 3.0], flatbuferl_fetch:fetch(Ctx, [floats, '*'])),
+    ?assertEqual([10, 20, 30, 40], flatbuferl_fetch:fetch(Ctx, [ints, '*'])).
+
+fetch_array_size_test() ->
+    Ctx = array_ctx(),
+    ?assertEqual(3, flatbuferl_fetch:fetch(Ctx, [floats, '_size'])),
+    ?assertEqual(4, flatbuferl_fetch:fetch(Ctx, [ints, '_size'])).
+
+%% =============================================================================
 %% _size Pseudo-field
 %% =============================================================================
 
@@ -264,6 +294,11 @@ fetch_union_field_wrong_type_test() ->
 fetch_union_extract_field_test() ->
     Ctx = union_ctx(bye, #{greeting => 99}),
     ?assertEqual([99], flatbuferl_fetch:fetch(Ctx, [data, [greeting]])).
+
+fetch_union_extract_type_and_field_test() ->
+    %% Extract both '_type' and a field from a union
+    Ctx = union_ctx(hello, #{salute => <<"Hi">>}),
+    ?assertEqual([hello, <<"Hi">>], flatbuferl_fetch:fetch(Ctx, [data, ['_type', salute]])).
 
 %% =============================================================================
 %% Guards (Filters)
