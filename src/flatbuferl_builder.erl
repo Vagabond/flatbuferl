@@ -56,12 +56,9 @@ from_map(Map, {Defs, SchemaOpts}, Opts) ->
 from_map_internal(Map, Defs, RootType, FileId, Opts) ->
     {table, Fields} = maps:get(RootType, Defs),
     validate_fields(Map, Fields, RootType, Opts),
-    FieldValues = collect_fields(Map, Fields, Defs, Opts),
-    {Scalars, Refs} = lists:partition(
-        fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-        FieldValues
-    ),
-    %% Compute AllFields once - both partitions are already sorted, merge is O(n)
+    %% Collect and partition in one pass - both lists already sorted by layout_key
+    {Scalars, Refs} = collect_fields_partitioned(Map, Fields, Defs, Opts),
+    %% Merge is O(n) since both partitions are already sorted
     AllFields = merge_by_layout_key(Scalars, Refs),
 
     %% Precompute table metrics once
@@ -257,20 +254,30 @@ has_field_value(Map, Name) when is_atom(Name) ->
 %% Field Collection
 %% =============================================================================
 
-collect_fields(Map, Fields, Defs, Opts) ->
+%% Collect fields and partition into {Scalars, Refs} in one pass
+%% Both lists are returned already sorted by layout_key descending
+collect_fields_partitioned(Map, Fields, Defs, Opts) ->
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
-    lists:flatmap(
+    {ScalarsRev, RefsRev} = lists:foldl(
         fun
-            (#{deprecated := true}) when DeprecatedOpt == skip ->
-                [];
-            (FieldDef) ->
-                collect_field(Map, FieldDef, Defs)
+            (#{deprecated := true}, Acc) when DeprecatedOpt == skip ->
+                Acc;
+            (FieldDef, {SAcc, RAcc}) ->
+                case collect_field(Map, FieldDef, Defs) of
+                    [] -> {SAcc, RAcc};
+                    [#field{is_scalar = true} = F] -> {[F | SAcc], RAcc};
+                    [#field{is_scalar = false} = F] -> {SAcc, [F | RAcc]}
+                end
         end,
+        {[], []},
         Fields
-    ).
+    ),
+    %% Fields in schema are already in layout_key order (descending by size*65536+id)
+    %% Since we processed in order and prepended, we need to reverse
+    {lists:reverse(ScalarsRev), lists:reverse(RefsRev)}.
 
-collect_fields(Map, Fields, Defs) ->
-    collect_fields(Map, Fields, Defs, #{}).
+collect_fields_partitioned(Map, Fields, Defs) ->
+    collect_fields_partitioned(Map, Fields, Defs, #{}).
 
 %% Returns #field{} records
 collect_field(
@@ -707,11 +714,7 @@ calc_ref_padding_for_refs([#field{type = Type, value = Value} | _], Pos, Defs) w
     case maps:get(Type, Defs, undefined) of
         {table, Fields} ->
             %% Calculate nested vtable size
-            FieldValues = collect_fields(Value, Fields, Defs),
-            {Scalars, Refs} = lists:partition(
-                fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-                FieldValues
-            ),
+            {Scalars, Refs} = collect_fields_partitioned(Value, Fields, Defs),
             VTableSize = calc_vtable_size(Scalars, Refs),
             %% Pad to make (Pos + VTableSize) 4-byte aligned
             SOffsetPos = Pos + VTableSize,
@@ -826,11 +829,7 @@ calc_ref_padding([#field{type = Type, value = Value} | _], Pos, Defs) when
     case maps:get(Type, Defs, undefined) of
         {table, Fields} ->
             %% Calculate nested vtable size
-            FieldValues = collect_fields(Value, Fields, Defs),
-            {Scalars, Refs} = lists:partition(
-                fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-                FieldValues
-            ),
+            {Scalars, Refs} = collect_fields_partitioned(Value, Fields, Defs),
             VTableSize = calc_vtable_size(Scalars, Refs),
             %% Pad to make (Pos + VTableSize) 4-byte aligned
             SOffsetPos = Pos + VTableSize,
@@ -877,11 +876,7 @@ collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen) when is_
         {table, Fields} ->
             lists:foldl(
                 fun(Value, {Acc, S}) ->
-                    FieldValues = collect_fields(Value, Fields, Defs),
-                    {Scalars, Refs} = lists:partition(
-                        fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-                        FieldValues
-                    ),
+                    {Scalars, Refs} = collect_fields_partitioned(Value, Fields, Defs),
                     VT = build_vtable(Scalars, Refs, 4),
                     case maps:is_key(VT, S) of
                         true -> {Acc, S};
@@ -898,11 +893,7 @@ collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen) when is_atom(Type), is_
     %% Nested table
     case maps:get(Type, Defs, undefined) of
         {table, Fields} ->
-            FieldValues = collect_fields(Value, Fields, Defs),
-            {Scalars, Refs} = lists:partition(
-                fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-                FieldValues
-            ),
+            {Scalars, Refs} = collect_fields_partitioned(Value, Fields, Defs),
             VT = build_vtable(Scalars, Refs, 4),
             case maps:is_key(VT, Seen) of
                 true -> {VTAcc, Seen};
@@ -1030,11 +1021,7 @@ is_nested_table_type(Type, Value, Defs) when is_atom(Type), is_map(Value) ->
     case maps:get(Type, Defs, undefined) of
         {table, Fields} ->
             %% Calculate vtable size for this nested table
-            FieldValues = collect_fields(Value, Fields, Defs),
-            {Scalars, Refs} = lists:partition(
-                fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-                FieldValues
-            ),
+            {Scalars, Refs} = collect_fields_partitioned(Value, Fields, Defs),
             VTableSize = calc_vtable_size(Scalars, Refs),
             {true, VTableSize};
         _ ->
@@ -1287,14 +1274,10 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
     ReversedIndexedValues = lists:reverse(IndexedValues),
 
     %% Collect vtable info for each element
+    {table, Fields} = maps:get(TableType, Defs),
     ElemVTables = lists:map(
         fun({OrigIdx, Value}) ->
-            {table, Fields} = maps:get(TableType, Defs),
-            FieldValues = collect_fields(Value, Fields, Defs),
-            {Scalars, Refs} = lists:partition(
-                fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-                FieldValues
-            ),
+            {Scalars, Refs} = collect_fields_partitioned(Value, Fields, Defs),
             VTable = build_vtable(Scalars, Refs, 4),
             {OrigIdx, VTable, Scalars, Refs}
         end,
@@ -1550,11 +1533,7 @@ encode_ref_minimal_padding(Type, Value, Defs) ->
 encode_nested_table(TableType, Map, Defs) ->
     %% Build a nested table - vtable first, then table (positive soffset, like flatc)
     {table, Fields} = maps:get(TableType, Defs),
-    FieldValues = collect_fields(Map, Fields, Defs),
-    {Scalars, Refs} = lists:partition(
-        fun(#field{is_scalar = IsScalar}) -> IsScalar end,
-        FieldValues
-    ),
+    {Scalars, Refs} = collect_fields_partitioned(Map, Fields, Defs),
 
     VTable = build_vtable(Scalars, Refs, 4),
     VTableSize = vtable_size(VTable),
