@@ -152,8 +152,8 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     {table, Fields} = maps:get(TableType, Defs),
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
     lists:foldl(
-        fun(FieldDef, Acc) ->
-            {FieldName, FieldId, Type, Default, Deprecated} = parse_field_def_full(FieldDef),
+        fun(#{name := FieldName, id := FieldId, type := Type, default := Default,
+              deprecated := Deprecated}, Acc) ->
             %% Handle deprecated fields
             case {Deprecated, DeprecatedOpt} of
                 {true, skip} ->
@@ -168,6 +168,12 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
                         {ok, _} -> error({deprecated_field_present, TableType, FieldName});
                         missing -> Acc
                     end;
+                {true, allow} ->
+                    %% For deprecated fields with allow, only include if actually present
+                    %% (don't fall back to default value)
+                    decode_field_no_default(
+                        FieldName, FieldId, Type, TableRef, Defs, Buffer, Opts, Acc
+                    );
                 _ ->
                     decode_field(
                         FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc
@@ -177,15 +183,6 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
         #{},
         Fields
     ).
-
-parse_field_def_full({Name, Type, Attrs}) ->
-    FieldId = maps:get(id, Attrs, 0),
-    Deprecated = maps:get(deprecated, Attrs, false),
-    Default = extract_default(Type),
-    {Name, FieldId, normalize_type(Type), Default, Deprecated};
-parse_field_def_full({Name, Type}) ->
-    Default = extract_default(Type),
-    {Name, 0, normalize_type(Type), Default, false}.
 
 decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc) ->
     ResolvedType = resolve_type(Type, Defs),
@@ -269,6 +266,16 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
                 missing ->
                     Acc
             end
+    end.
+
+%% Decode field but don't include default values for missing fields (for deprecated fields)
+decode_field_no_default(FieldName, FieldId, Type, TableRef, Defs, Buffer, Opts, Acc) ->
+    ResolvedType = resolve_type(Type, Defs),
+    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+        {ok, Value} ->
+            Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
+        missing ->
+            Acc
     end.
 
 %% Resolve type name to its definition (for enums and structs)
@@ -437,35 +444,10 @@ get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
 
 find_field([], _Name) ->
     error;
-find_field([{Name, Type, Attrs} | _], Name) ->
-    FieldId = maps:get(id, Attrs),
-    Default = extract_default(Type),
-    {ok, FieldId, normalize_type(Type), Default};
-find_field([{Name, Type} | _], Name) ->
-    Default = extract_default(Type),
-    {ok, 0, normalize_type(Type), Default};
+find_field([#{name := Name, id := FieldId, type := Type, default := Default} | _], Name) ->
+    {ok, FieldId, Type, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
-
-extract_default({_Type, Default}) when is_number(Default); is_boolean(Default); is_atom(Default) ->
-    Default;
-extract_default(_) ->
-    undefined.
-
-normalize_type({Type, Default}) when is_atom(Type), is_number(Default) ->
-    Type;
-normalize_type({Type, Default}) when is_atom(Type), is_boolean(Default) ->
-    Type;
-normalize_type({Type, Default}) when is_atom(Type), is_atom(Default),
-    Type /= vector, Type /= enum, Type /= struct,
-    Type /= array, Type /= union_type, Type /= union_value ->
-    %% enum with default value (not a type constructor)
-    Type;
-normalize_type({Type, undefined}) when is_atom(Type) ->
-    %% optional scalar
-    Type;
-normalize_type(Type) ->
-    Type.
 
 %% Resolve type name to reader-compatible type
 %% Handle types with defaults (unwrap first, but not type constructors)

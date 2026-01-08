@@ -141,9 +141,121 @@ process_def({table, Fields}, Defs) ->
     ExpandedFields = expand_union_fields(Fields, Defs),
     %% Fix enum default values (parser stores as binary, need atom)
     NormalizedFields = normalize_enum_defaults(ExpandedFields, Defs),
-    {table, assign_field_ids(NormalizedFields)};
+    %% Assign field IDs
+    FieldsWithIds = assign_field_ids(NormalizedFields),
+    %% Convert to optimized map format with precomputed values
+    OptimizedFields = [optimize_field(F, Defs) || F <- FieldsWithIds],
+    {table, OptimizedFields};
 process_def(Other, _Defs) ->
     Other.
+
+%% Convert field tuple to optimized map with precomputed values
+%% Pass through already-optimized map fields (from included schemas)
+optimize_field(#{name := _} = Map, _Defs) ->
+    Map;
+optimize_field({Name, Type, Attrs}, Defs) ->
+    NormalizedType = normalize_type(Type),
+    #{
+        name => Name,
+        id => maps:get(id, Attrs, 0),
+        type => NormalizedType,
+        default => extract_default(Type),
+        required => maps:get(required, Attrs, false),
+        deprecated => maps:get(deprecated, Attrs, false),
+        inline_size => field_inline_size(NormalizedType, Defs)
+    };
+optimize_field({Name, Type}, Defs) ->
+    NormalizedType = normalize_type(Type),
+    #{
+        name => Name,
+        id => 0,
+        type => NormalizedType,
+        default => extract_default(Type),
+        required => false,
+        deprecated => false,
+        inline_size => field_inline_size(NormalizedType, Defs)
+    }.
+
+%% Normalize type: strip default value wrapper, but preserve type constructors
+normalize_type({Type, _Default}) when is_atom(Type),
+    Type /= vector, Type /= enum, Type /= struct,
+    Type /= array, Type /= union_type, Type /= union_value ->
+    Type;
+normalize_type(Type) -> Type.
+
+%% Extract default value from type, but not from type constructors
+extract_default({Type, D}) when is_atom(Type), (is_number(D) orelse is_boolean(D) orelse is_atom(D)),
+    Type /= vector, Type /= enum, Type /= struct,
+    Type /= array, Type /= union_type, Type /= union_value ->
+    D;
+extract_default(_) -> undefined.
+
+%% Size of field as stored inline in table (refs are 4-byte uoffsets)
+field_inline_size(string, _Defs) -> 4;
+field_inline_size({vector, _}, _Defs) -> 4;
+field_inline_size({union_value, _}, _Defs) -> 4;
+field_inline_size({union_type, _}, _Defs) -> 1;
+field_inline_size({struct, Fields}, Defs) -> calc_struct_size(Fields, Defs);
+field_inline_size({array, ElemType, Count}, Defs) -> type_size(ElemType, Defs) * Count;
+field_inline_size({enum, Base}, Defs) -> type_size(Base, Defs);
+field_inline_size({enum, Base, _Values}, Defs) -> type_size(Base, Defs);
+field_inline_size(Type, Defs) when is_atom(Type) ->
+    %% Check if it's a user-defined type
+    case maps:get(Type, Defs, undefined) of
+        {struct, Fields} -> calc_struct_size(Fields, Defs);
+        {{enum, Base}, _Members} -> type_size(Base, Defs);
+        _ -> type_size(Type, Defs)
+    end;
+field_inline_size(_, _Defs) -> 4.
+
+%% Type sizes
+type_size(bool, _) -> 1;
+type_size(byte, _) -> 1;
+type_size(ubyte, _) -> 1;
+type_size(int8, _) -> 1;
+type_size(uint8, _) -> 1;
+type_size(short, _) -> 2;
+type_size(ushort, _) -> 2;
+type_size(int16, _) -> 2;
+type_size(uint16, _) -> 2;
+type_size(int, _) -> 4;
+type_size(uint, _) -> 4;
+type_size(int32, _) -> 4;
+type_size(uint32, _) -> 4;
+type_size(long, _) -> 8;
+type_size(ulong, _) -> 8;
+type_size(int64, _) -> 8;
+type_size(uint64, _) -> 8;
+type_size(float, _) -> 4;
+type_size(float32, _) -> 4;
+type_size(double, _) -> 8;
+type_size(float64, _) -> 8;
+type_size({enum, Base}, Defs) -> type_size(Base, Defs);
+type_size({enum, Base, _Values}, Defs) -> type_size(Base, Defs);
+type_size({struct, Fields}, Defs) -> calc_struct_size(Fields, Defs);
+type_size({array, ElemType, Count}, Defs) -> type_size(ElemType, Defs) * Count;
+type_size({union_type, _}, _) -> 1;
+type_size(_, _) -> 4.
+
+%% Calculate struct size with proper alignment
+calc_struct_size(Fields, Defs) ->
+    {_, EndOffset, MaxAlign} = lists:foldl(
+        fun({_Name, Type}, {_, CurOffset, MaxAlignAcc}) ->
+            Size = type_size(Type, Defs),
+            Align = Size,
+            AlignedOffset = align_offset(CurOffset, Align),
+            {ok, AlignedOffset + Size, max(MaxAlignAcc, Align)}
+        end,
+        {ok, 0, 1},
+        Fields
+    ),
+    align_offset(EndOffset, MaxAlign).
+
+align_offset(Off, Align) ->
+    case Off rem Align of
+        0 -> Off;
+        R -> Off + (Align - R)
+    end.
 
 %% Expand union fields into type field + value field
 expand_union_fields(Fields, Defs) ->
@@ -181,6 +293,7 @@ expand_union_fields(Fields, Defs) ->
         Fields
     ).
 
+normalize_field(#{name := Name, type := Type} = Map) -> {Name, Type, Map};
 normalize_field({Name, Type}) -> {Name, Type, #{}};
 normalize_field({Name, Type, Attrs}) -> {Name, Type, Attrs}.
 
@@ -243,11 +356,13 @@ assign_field_ids(Fields) ->
     ),
     Processed.
 
+get_explicit_id(#{id := Id}) -> Id;
 get_explicit_id({_Name, _Type, Attrs}) when is_map(Attrs) ->
     maps:get(id, Attrs, undefined);
 get_explicit_id({_Name, _Type}) ->
     undefined.
 
+set_field_id(#{} = Map, Id) -> Map#{id => Id};
 set_field_id({Name, Type, Attrs}, Id) ->
     {Name, Type, Attrs#{id => Id}};
 set_field_id({Name, Type}, Id) ->
@@ -286,7 +401,7 @@ validate_table_fields(Map, Fields, Defs, Opts) ->
     %% Build set of known field names
     KnownFields = lists:foldl(
         fun(FieldDef, Acc) ->
-            Name = element(1, FieldDef),
+            Name = get_field_name(FieldDef),
             sets:add_element(Name, Acc)
         end,
         sets:new(),
@@ -320,8 +435,7 @@ validate_table_fields(Map, Fields, Defs, Opts) ->
     UnknownErrors ++ FieldErrors.
 
 validate_field(Map, FieldDef, Defs, Opts) ->
-    {Name, Type, Attrs} = normalize_field(FieldDef),
-    Required = maps:get(required, Attrs, false),
+    {Name, Type, Required} = get_field_info(FieldDef),
 
     case get_map_value(Map, Name) of
         undefined when Required ->
@@ -331,6 +445,19 @@ validate_field(Map, FieldDef, Defs, Opts) ->
         Value ->
             validate_value(Name, Value, Type, Defs, Opts)
     end.
+
+%% Get field name from either map or tuple format
+get_field_name(#{name := Name}) -> Name;
+get_field_name({Name, _Type}) -> Name;
+get_field_name({Name, _Type, _Attrs}) -> Name.
+
+%% Get field info from either map or tuple format
+get_field_info(#{name := Name, type := Type, required := Required}) ->
+    {Name, Type, Required};
+get_field_info({Name, Type, Attrs}) ->
+    {Name, Type, maps:get(required, Attrs, false)};
+get_field_info({Name, Type}) ->
+    {Name, Type, false}.
 
 get_map_value(Map, Key) ->
     case maps:find(Key, Map) of

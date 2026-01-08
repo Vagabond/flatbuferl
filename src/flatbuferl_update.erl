@@ -558,13 +558,8 @@ lookup_field_info(Defs, TableType, FieldName) ->
 
 find_field([], _Name) ->
     error;
-find_field([{Name, Type, Attrs} | _], Name) ->
-    FieldId = maps:get(id, Attrs, 0),
-    Default = extract_default(Type),
-    {ok, FieldId, normalize_type(Type), Default};
-find_field([{Name, Type} | _], Name) ->
-    Default = extract_default(Type),
-    {ok, 0, normalize_type(Type), Default};
+find_field([#{name := Name, id := FieldId, type := Type, default := Default} | _], Name) ->
+    {ok, FieldId, Type, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
 

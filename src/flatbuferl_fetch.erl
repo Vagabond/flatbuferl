@@ -762,13 +762,8 @@ lookup_field(Defs, TableType, FieldName) ->
 
 find_field([], _Name) ->
     error;
-find_field([{Name, Type, Attrs} | _], Name) ->
-    FieldId = maps:get(id, Attrs),
-    Default = extract_default(Type),
-    {ok, FieldId, normalize_type(Type), Default};
-find_field([{Name, Type} | _], Name) ->
-    Default = extract_default(Type),
-    {ok, 0, normalize_type(Type), Default};
+find_field([#{name := Name, id := FieldId, type := Type, default := Default} | _], Name) ->
+    {ok, FieldId, Type, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
 
@@ -780,27 +775,12 @@ type_has_field(TypeName, FieldName, Defs) ->
     end.
 
 field_exists([], _Name) -> false;
-field_exists([{Name, _, _} | _], Name) -> true;
-field_exists([{Name, _} | _], Name) -> true;
+field_exists([#{name := Name} | _], Name) -> true;
 field_exists([_ | Rest], Name) -> field_exists(Rest, Name).
 
 %% Check if any union member has a given field
 any_union_member_has_field(Members, FieldName, Defs) ->
     lists:any(fun(Member) -> type_has_field(Member, FieldName, Defs) end, Members).
-
-extract_default({_Type, Default}) when is_number(Default); is_boolean(Default) ->
-    Default;
-extract_default(_) ->
-    undefined.
-
-normalize_type({Type, Default}) when is_atom(Type), is_number(Default) ->
-    Type;
-normalize_type({Type, Default}) when is_atom(Type), is_boolean(Default) ->
-    Type;
-normalize_type({Type, undefined}) when is_atom(Type) ->
-    Type;
-normalize_type(Type) ->
-    Type.
 
 %% Type resolution
 resolve_type(Type, Defs) when is_atom(Type) ->
@@ -818,27 +798,17 @@ resolve_type(Type, _Defs) ->
 to_map(TableRef, Defs, TableType, Buffer) ->
     {table, Fields} = maps:get(TableType, Defs),
     Map = lists:foldl(
-        fun
-            ({FieldName, Type, Attrs}, Acc) ->
-                FieldId = maps:get(id, Attrs),
-                ResolvedType = resolve_type(normalize_type(Type), Defs),
-                case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                    {ok, Value} ->
-                        Acc#{FieldName => convert_value(Value, Type, Defs, Buffer)};
-                    missing ->
-                        case extract_default(Type) of
-                            undefined -> Acc;
-                            Default -> Acc#{FieldName => Default}
-                        end
-                end;
-            ({FieldName, Type}, Acc) ->
-                ResolvedType = resolve_type(normalize_type(Type), Defs),
-                case flatbuferl_reader:get_field(TableRef, 0, ResolvedType, Buffer) of
-                    {ok, Value} ->
-                        Acc#{FieldName => convert_value(Value, Type, Defs, Buffer)};
-                    missing ->
-                        Acc
-                end
+        fun(#{name := FieldName, id := FieldId, type := Type, default := Default}, Acc) ->
+            ResolvedType = resolve_type(Type, Defs),
+            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                {ok, Value} ->
+                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer)};
+                missing ->
+                    case Default of
+                        undefined -> Acc;
+                        _ -> Acc#{FieldName => Default}
+                    end
+            end
         end,
         #{},
         Fields

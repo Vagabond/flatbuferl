@@ -1,6 +1,58 @@
 -module(schema_suite_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+%% Helper to create field maps in new format
+field(Name, Type) -> field(Name, Type, #{}).
+field(Name, Type, Attrs) ->
+    NormType = normalize_type(Type),
+    #{
+        name => Name,
+        id => maps:get(id, Attrs, 0),
+        type => NormType,
+        default => extract_default(Type),
+        required => maps:get(required, Attrs, false),
+        deprecated => maps:get(deprecated, Attrs, false),
+        inline_size => maps:get(inline_size, Attrs, type_size(NormType))
+    }.
+
+normalize_type({T, _Default}) when is_atom(T),
+    T /= vector, T /= enum, T /= struct, T /= array, T /= union_type, T /= union_value ->
+    T;
+normalize_type(T) -> T.
+
+extract_default({_, Default}) when is_number(Default); is_boolean(Default) -> Default;
+extract_default(bool) -> false;
+extract_default(byte) -> 0;
+extract_default(ubyte) -> 0;
+extract_default(short) -> 0;
+extract_default(ushort) -> 0;
+extract_default(int) -> 0;
+extract_default(uint) -> 0;
+extract_default(long) -> 0;
+extract_default(ulong) -> 0;
+extract_default(float) -> 0.0;
+extract_default(double) -> 0.0;
+extract_default(_) -> undefined.
+
+type_size(bool) -> 1;
+type_size(byte) -> 1;
+type_size(ubyte) -> 1;
+type_size(short) -> 2;
+type_size(ushort) -> 2;
+type_size(int) -> 4;
+type_size(uint) -> 4;
+type_size(long) -> 8;
+type_size(ulong) -> 8;
+type_size(float) -> 4;
+type_size(double) -> 8;
+type_size(string) -> 4;
+type_size({vector, _}) -> 4;
+type_size({enum, _, _}) -> 1;
+type_size({union_type, _}) -> 1;
+type_size({union_value, _}) -> 4;
+type_size({array, T, N}) -> type_size(T) * N;
+type_size(_TableOrStruct) -> 4.
+
 %% =============================================================================
 %% Test Case Definitions
 %% Each case: {Name, SchemaPath, RootType, FileId, SampleData}
@@ -431,8 +483,8 @@ required_field_test_() ->
         #{
             'TestTable' =>
                 {table, [
-                    {name, string, #{id => 0, required => true}},
-                    {value, int, #{id => 1}}
+                    field(name, string, #{required => true}),
+                    field(value, int, #{id => 1})
                 ]}
         },
         #{root_type => 'TestTable'}
@@ -466,9 +518,9 @@ deprecated_encode_test_() ->
         #{
             'TestTable' =>
                 {table, [
-                    {name, string, #{id => 0}},
-                    {old_field, int, #{id => 1, deprecated => true}},
-                    {new_field, int, #{id => 2}}
+                    field(name, string),
+                    field(old_field, int, #{id => 1, deprecated => true}),
+                    field(new_field, int, #{id => 2})
                 ]}
         },
         #{root_type => 'TestTable'}
@@ -511,9 +563,9 @@ deprecated_decode_test_() ->
         #{
             'TestTable' =>
                 {table, [
-                    {name, string, #{id => 0}},
-                    {old_field, int, #{id => 1, deprecated => true}},
-                    {new_field, int, #{id => 2}}
+                    field(name, string),
+                    field(old_field, int, #{id => 1, deprecated => true}),
+                    field(new_field, int, #{id => 2})
                 ]}
         },
         #{root_type => 'TestTable'}
@@ -567,12 +619,12 @@ union_vector_test_() ->
     Schema = {
         #{
             'Event' => {union, ['Login', 'Logout']},
-            'Login' => {table, [{user, string, #{id => 0}}]},
-            'Logout' => {table, [{user, string, #{id => 0}}]},
+            'Login' => {table, [field(user, string)]},
+            'Logout' => {table, [field(user, string)]},
             'EventLog' =>
                 {table, [
-                    {events_type, {vector, {union_type, 'Event'}}, #{id => 0}},
-                    {events, {vector, {union_value, 'Event'}}, #{id => 1}}
+                    field(events_type, {vector, {union_type, 'Event'}}),
+                    field(events, {vector, {union_value, 'Event'}}, #{id => 1})
                 ]}
         },
         #{root_type => 'EventLog'}
@@ -649,10 +701,10 @@ optional_scalar_test_() ->
         #{
             'TestTable' =>
                 {table, [
-                    {opt_int, {int, undefined}, #{id => 0}},
-                    {opt_bool, {bool, undefined}, #{id => 1}},
-                    {reg_int, {int, 0}, #{id => 2}},
-                    {reg_int_default, {int, 100}, #{id => 3}}
+                    field(opt_int, {int, undefined}),
+                    field(opt_bool, {bool, undefined}, #{id => 1}),
+                    field(reg_int, {int, 0}, #{id => 2}),
+                    field(reg_int_default, {int, 100}, #{id => 3})
                 ]}
         },
         #{root_type => 'TestTable'}
@@ -766,10 +818,10 @@ fixed_array_test_() ->
             {ok, {Defs, _Opts}} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             ?assert(maps:is_key('ArrayTable', Defs)),
             {table, Fields} = maps:get('ArrayTable', Defs),
-            %% Fields have {Name, Type, Attrs} format after parsing
-            {floats, {array, float, 3}, _} = lists:keyfind(floats, 1, Fields),
-            {ints, {array, int, 4}, _} = lists:keyfind(ints, 1, Fields),
-            {bytes, {array, byte, 2}, _} = lists:keyfind(bytes, 1, Fields)
+            %% Fields are now maps with precomputed values
+            [#{name := floats, type := {array, float, 3}},
+             #{name := ints, type := {array, int, 4}},
+             #{name := bytes, type := {array, byte, 2}}] = Fields
         end},
         {"array encode/decode roundtrip", fun() ->
             {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
@@ -824,8 +876,8 @@ fixed_array_test_() ->
                 #{
                     'Test' =>
                         {table, [
-                            {vec3, {array, float, 3}, #{id => 0}},
-                            {matrix, {array, int, 9}, #{id => 1}}
+                            field(vec3, {array, float, 3}),
+                            field(matrix, {array, int, 9}, #{id => 1})
                         ]}
                 },
                 #{root_type => 'Test'}

@@ -13,7 +13,7 @@ simple_table_test() ->
 
 table_with_defaults_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("table Monster { hp: int = 100; }"),
-    {table, [{hp, {int, 100}, #{id := 0}}]} = maps:get('Monster', Defs).
+    {table, [#{name := hp, type := int, default := 100, id := 0}]} = maps:get('Monster', Defs).
 
 enum_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("enum Color : byte { Red, Green, Blue }"),
@@ -27,7 +27,7 @@ enum_default_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema(Schema),
     {table, Fields} = maps:get('Pixel', Defs),
     %% Default should be atom 'Blue', not binary <<"Blue">>
-    ?assertMatch([{color, {'Color', 'Blue'}, #{id := 0}}], Fields).
+    ?assertMatch([#{name := color, type := 'Color', default := 'Blue', id := 0}], Fields).
 
 enum_default_roundtrip_test() ->
     %% Full encode/decode roundtrip with enum default
@@ -52,7 +52,7 @@ union_test() ->
 
 vector_field_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("table Inventory { items: [string]; }"),
-    {table, [{items, {vector, string}, #{id := 0}}]} = maps:get('Inventory', Defs).
+    {table, [#{name := items, type := {vector, string}, id := 0}]} = maps:get('Inventory', Defs).
 
 %% =============================================================================
 %% Options Tests
@@ -77,14 +77,7 @@ file_identifier_test() ->
 sequential_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { a: int; b: int; c: int; }"),
     {table, Fields} = maps:get('T', Defs),
-    ?assertEqual(
-        [
-            {a, int, #{id => 0}},
-            {b, int, #{id => 1}},
-            {c, int, #{id => 2}}
-        ],
-        Fields
-    ).
+    [#{name := a, id := 0}, #{name := b, id := 1}, #{name := c, id := 2}] = Fields.
 
 explicit_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema(
@@ -92,7 +85,7 @@ explicit_ids_test() ->
     ),
     {table, Fields} = maps:get('T', Defs),
     %% Fields keep original order, IDs as specified
-    [{a, int, #{id := 2}}, {b, int, #{id := 0}}, {c, int, #{id := 1}}] = Fields.
+    [#{name := a, id := 2}, #{name := b, id := 0}, #{name := c, id := 1}] = Fields.
 
 mixed_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema(
@@ -101,14 +94,13 @@ mixed_ids_test() ->
     {table, Fields} = maps:get('T', Defs),
     %% c and d should fill gaps and continue after explicit IDs
     [
-        {a, int, #{id := 0}},
-        {b, int, #{id := 2}},
+        #{name := a, id := 0},
+        #{name := b, id := 2},
         %% fills gap
-        {c, int, #{id := 1}},
+        #{name := c, id := 1},
         %% continues after 2
-        {d, int, #{id := 3}}
-    ] =
-        Fields.
+        #{name := d, id := 3}
+    ] = Fields.
 
 %% =============================================================================
 %% Attribute Tests
@@ -117,14 +109,11 @@ mixed_ids_test() ->
 deprecated_attr_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { old: int (deprecated); new: int; }"),
     {table, Fields} = maps:get('T', Defs),
-    [
-        {old, int, #{deprecated := true, id := _}},
-        {new, int, #{id := _}}
-    ] = Fields.
+    [#{name := old, deprecated := true}, #{name := new, deprecated := false}] = Fields.
 
 multiple_attrs_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { f: int (id: 5, deprecated); }"),
-    {table, [{f, int, #{id := 5, deprecated := true}}]} = maps:get('T', Defs).
+    {table, [#{name := f, id := 5, deprecated := true}]} = maps:get('T', Defs).
 
 %% =============================================================================
 %% Complex Schema File Tests

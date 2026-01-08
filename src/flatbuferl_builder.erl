@@ -44,7 +44,7 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
     validate_fields(Map, Fields, RootType, Opts),
     FieldValues = collect_fields(Map, Fields, Defs, Opts),
     {Scalars, Refs} = lists:partition(
-        fun({_Id, Type, _Val}) -> is_scalar_type(Type) end,
+        fun({_Id, Type, _Val, _Size}) -> is_scalar_type(Type) end,
         FieldValues
     ),
 
@@ -159,7 +159,7 @@ encode_root_vtable_after(
     %% Build field layout to get ref field offsets
     AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
     Slots = place_fields_backward(AllFields, TableSizeWithPadding),
-    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
+    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value, _Size} <- AllFields],
     SortedLayout = lists:sort(fun({_, _, _, A}, {_, _, _, B}) -> A =< B end, FieldLayout),
 
     %% Extract refs in flatc order with field offsets
@@ -207,9 +207,7 @@ file_id_bin(_) -> error(invalid_file_id).
 validate_fields(Map, Fields, TableType, Opts) ->
     lists:foreach(
         fun(FieldDef) ->
-            {Name, _FieldId, _Type, _Default, Required, Deprecated} = parse_field_def_full(
-                FieldDef
-            ),
+            {Name, Required, Deprecated} = get_field_attrs(FieldDef),
             HasValue = has_field_value(Map, Name),
             %% Check required
             case {Required, HasValue} of
@@ -229,18 +227,11 @@ validate_fields(Map, Fields, TableType, Opts) ->
         Fields
     ).
 
+get_field_attrs(#{name := Name, required := Required, deprecated := Deprecated}) ->
+    {Name, Required, Deprecated}.
+
 has_field_value(Map, Name) when is_atom(Name) ->
     maps:is_key(Name, Map) orelse maps:is_key(atom_to_binary(Name), Map).
-
-parse_field_def_full({Name, Type, Attrs}) ->
-    FieldId = maps:get(id, Attrs, 0),
-    Required = maps:get(required, Attrs, false),
-    Deprecated = maps:get(deprecated, Attrs, false),
-    Default = extract_default(Type),
-    {Name, FieldId, normalize_type(Type), Default, Required, Deprecated};
-parse_field_def_full({Name, Type}) ->
-    Default = extract_default(Type),
-    {Name, 0, normalize_type(Type), Default, false, false}.
 
 %% =============================================================================
 %% Field Collection
@@ -249,14 +240,14 @@ parse_field_def_full({Name, Type}) ->
 collect_fields(Map, Fields, Defs, Opts) ->
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
     lists:flatmap(
-        fun(FieldDef) ->
-            {Name, FieldId, Type, Default, _Required, Deprecated} = parse_field_def_full(FieldDef),
+        fun(#{name := Name, id := FieldId, type := Type, default := Default,
+              deprecated := Deprecated, inline_size := InlineSize}) ->
             %% Skip deprecated fields if option says to
             case {Deprecated, DeprecatedOpt} of
                 {true, skip} ->
                     [];
                 _ ->
-                    collect_field(Map, Name, FieldId, Type, Default, Defs)
+                    collect_field(Map, Name, FieldId, Type, Default, InlineSize, Defs)
             end
         end,
         Fields
@@ -265,7 +256,7 @@ collect_fields(Map, Fields, Defs, Opts) ->
 collect_fields(Map, Fields, Defs) ->
     collect_fields(Map, Fields, Defs, #{}).
 
-collect_field(Map, Name, FieldId, Type, Default, Defs) ->
+collect_field(Map, Name, FieldId, Type, Default, InlineSize, Defs) ->
     case Type of
         {union_type, UnionName} ->
             %% Union type field - look for <field>_type key directly
@@ -276,11 +267,11 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                 MemberType when is_atom(MemberType) ->
                     {union, Members} = maps:get(UnionName, Defs),
                     TypeIndex = find_union_index(MemberType, Members, 1),
-                    [{FieldId, {union_type, UnionName}, TypeIndex}];
+                    [{FieldId, {union_type, UnionName}, TypeIndex, InlineSize}];
                 MemberType when is_binary(MemberType) ->
                     {union, Members} = maps:get(UnionName, Defs),
                     TypeIndex = find_union_index(binary_to_atom(MemberType), Members, 1),
-                    [{FieldId, {union_type, UnionName}, TypeIndex}];
+                    [{FieldId, {union_type, UnionName}, TypeIndex, InlineSize}];
                 _ ->
                     []
             end;
@@ -301,7 +292,7 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                     [
                         {FieldId, {union_value, UnionName}, #{
                             type => MemberType, value => TableValue
-                        }}
+                        }, InlineSize}
                     ];
                 _ ->
                     []
@@ -324,7 +315,7 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                         end
                      || MT <- TypeList
                     ],
-                    [{FieldId, {vector, ubyte}, TypeIndices}];
+                    [{FieldId, {vector, ubyte}, TypeIndices, InlineSize}];
                 _ ->
                     []
             end;
@@ -358,7 +349,7 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
                         TypeList,
                         ValueList
                     ),
-                    [{FieldId, {vector, {union_value, UnionName}}, TaggedValues}];
+                    [{FieldId, {vector, {union_value, UnionName}}, TaggedValues, InlineSize}];
                 _ ->
                     []
             end;
@@ -366,7 +357,7 @@ collect_field(Map, Name, FieldId, Type, Default, Defs) ->
             case get_field_value(Map, Name) of
                 undefined -> [];
                 Value when Value == Default -> [];
-                Value -> [{FieldId, resolve_type(Type, Defs), Value}]
+                Value -> [{FieldId, resolve_type(Type, Defs), Value, InlineSize}]
             end
     end.
 
@@ -478,7 +469,7 @@ build_vtable(Scalars, Refs, MaxAlign) ->
         [] ->
             [uint16_bytes(4), uint16_bytes(4)];
         _ ->
-            MaxId = lists:max([Id || {Id, _, _} <- AllFields]),
+            MaxId = lists:max([Id || {Id, _, _, _} <- AllFields]),
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
 
@@ -497,7 +488,7 @@ build_vtable_with_size(Scalars, Refs, MaxAlign, TableSize) ->
         [] ->
             [uint16_bytes(4), uint16_bytes(4)];
         _ ->
-            MaxId = lists:max([Id || {Id, _, _} <- AllFields]),
+            MaxId = lists:max([Id || {Id, _, _, _} <- AllFields]),
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
             Slots = build_slots_list(Scalars, Refs, NumSlots, MaxAlign),
@@ -516,14 +507,14 @@ calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs) ->
     NumSlots =
         case AllFields of
             [] -> 0;
-            _ -> lists:max([Id || {Id, _, _} <- AllFields]) + 1
+            _ -> lists:max([Id || {Id, _, _, _} <- AllFields]) + 1
         end,
     VTableSize = 4 + (NumSlots * 2),
     TablePosUnaligned = HeaderSize + VTableSize,
     TablePos = align_offset(TablePosUnaligned, 4),
 
     %% Extract refs in flatc order: IDs 1, 2, 3, ..., N, then 0
-    RefFields = [{Id, Type, Value} || {Id, Type, Value} <- AllFields, not is_scalar_type(Type)],
+    RefFields = [{Id, Type, Value, Size} || {Id, Type, Value, Size} <- AllFields, not is_scalar_type(Type)],
     RefFieldsOrdered = sort_refs_flatc_order(RefFields),
 
     %% Calculate ref padding
@@ -534,15 +525,15 @@ calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs) ->
 %% - If there's an id=0 ref: ascending order (1, 2, ..., N, 0)
 %% - If NO id=0 ref: descending order (N, N-1, ..., 1)
 sort_refs_flatc_order(Refs) ->
-    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _}) -> Id == 0 end, Refs),
+    {ZeroRefs, NonZeroRefs} = lists:partition(fun({Id, _, _, _}) -> Id == 0 end, Refs),
     case ZeroRefs of
         [] ->
             %% No id=0 ref: descending order
-            lists:sort(fun({IdA, _, _}, {IdB, _, _}) -> IdA >= IdB end, NonZeroRefs);
+            lists:sort(fun({IdA, _, _, _}, {IdB, _, _, _}) -> IdA >= IdB end, NonZeroRefs);
         _ ->
             %% Has id=0 ref: ascending with 0 at end
             SortedNonZero = lists:sort(
-                fun({IdA, _, _}, {IdB, _, _}) -> IdA =< IdB end, NonZeroRefs
+                fun({IdA, _, _, _}, {IdB, _, _, _}) -> IdA =< IdB end, NonZeroRefs
             ),
             SortedNonZero ++ ZeroRefs
     end.
@@ -567,7 +558,7 @@ find_first_8byte_field_offset(Fields, TableSize) ->
     AllFields = lists:sort(fun field_layout_order/2, Fields),
     Slots = place_fields_backward(AllFields, TableSize),
     %% Find 8-byte fields and get their offsets
-    EightByteFields = [{Id, Type} || {Id, Type, _} <- AllFields, type_size(Type) == 8],
+    EightByteFields = [{Id, Size} || {Id, _Type, _Val, Size} <- AllFields, Size == 8],
     case EightByteFields of
         [] ->
             none;
@@ -588,7 +579,7 @@ calc_ref_padding_for_refs([{_, Type, Value} | _], Pos, Defs) when is_atom(Type),
             %% Calculate nested vtable size
             FieldValues = collect_fields(Value, Fields, Defs),
             {Scalars, Refs} = lists:partition(
-                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                fun({_Id, T, _Val, _Sz}) -> is_scalar_type(T) end,
                 FieldValues
             ),
             VTableSize = calc_vtable_size(Scalars, Refs),
@@ -624,24 +615,22 @@ build_slots_list(Scalars, Refs, NumSlots, _MaxAlign) ->
     [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)].
 
 %% Sort by size descending, then by field ID descending
-field_layout_order({IdA, TypeA, _}, {IdB, TypeB, _}) ->
-    SizeA = field_inline_size(TypeA),
-    SizeB = field_inline_size(TypeB),
-    field_layout_order(SizeA, SizeB, IdA, IdB).
+%% Uses precomputed InlineSize from 4-tuple
+field_layout_order({IdA, _TypeA, _ValA, SizeA}, {IdB, _TypeB, _ValB, SizeB}) ->
+    field_layout_order_by_size(SizeA, SizeB, IdA, IdB).
 
-field_layout_order(SizeA, SizeB, _IdA, _IdB) when SizeA > SizeB -> true;
-field_layout_order(SizeA, SizeB, _IdA, _IdB) when SizeA < SizeB -> false;
-field_layout_order(_SizeA, _SizeB, IdA, IdB) -> IdA >= IdB.
+field_layout_order_by_size(SizeA, SizeB, _IdA, _IdB) when SizeA > SizeB -> true;
+field_layout_order_by_size(SizeA, SizeB, _IdA, _IdB) when SizeA < SizeB -> false;
+field_layout_order_by_size(_SizeA, _SizeB, IdA, IdB) -> IdA >= IdB.
 
-%% Calculate raw data size for all fields
+%% Calculate raw data size for all fields using precomputed sizes
 calc_backward_table_size(Fields) ->
-    lists:sum([field_inline_size(Type) || {_, Type, _} <- Fields]).
+    lists:sum([Size || {_, _, _, Size} <- Fields]).
 
-%% Place fields backward from end of table
+%% Place fields backward from end of table using precomputed sizes
 place_fields_backward(Fields, TableSize) ->
     {Slots, _} = lists:foldl(
-        fun({Id, Type, _}, {Acc, EndPos}) ->
-            Size = field_inline_size(Type),
+        fun({Id, _Type, _Val, Size}, {Acc, EndPos}) ->
             Align = min(Size, 4),
             %% Work backward: EndPos is where current field ends
             %% Field starts at EndPos - Size, but must be aligned
@@ -657,19 +646,6 @@ place_fields_backward(Fields, TableSize) ->
 %% Align offset DOWN to alignment boundary
 align_down(Off, Align) ->
     Off - (Off rem Align).
-
-%% Size of field as stored inline in table (refs are 4-byte uoffsets)
-field_inline_size(string) -> 4;
-field_inline_size({vector, _}) -> 4;
-field_inline_size({union_value, _}) -> 4;
-field_inline_size(Type) when is_atom(Type) -> type_size(Type);
-field_inline_size({struct, _} = T) -> type_size(T);
-field_inline_size({array, _, _} = T) -> type_size(T);
-field_inline_size({enum, _, _} = T) -> type_size(T);
-field_inline_size({enum, _} = T) -> type_size(T);
-field_inline_size({union_type, _}) -> 1;
-%% Default for unknown refs
-field_inline_size(_) -> 4.
 
 %% Calculate total table data size (aligned to 4 bytes for soffset)
 calc_table_data_size(Scalars, Refs) ->
@@ -693,7 +669,7 @@ build_table_data(Scalars, Refs, TablePos, Defs) ->
 
     %% Build field layout with positions (using base table size for slot calculation)
     Slots = place_fields_backward(AllFields, BaseTableSize),
-    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
+    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value, _Size} <- AllFields],
     SortedLayout = lists:sort(fun({_, _, _, A}, {_, _, _, B}) -> A =< B end, FieldLayout),
 
     %% Extract refs in flatc order: IDs 1, 2, ..., N, then 0
@@ -730,7 +706,7 @@ calc_ref_padding([{_, Type, Value, _} | _], Pos, Defs) when is_atom(Type), is_ma
             %% Calculate nested vtable size
             FieldValues = collect_fields(Value, Fields, Defs),
             {Scalars, Refs} = lists:partition(
-                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                fun({_Id, T, _Val, _Sz}) -> is_scalar_type(T) end,
                 FieldValues
             ),
             VTableSize = calc_vtable_size(Scalars, Refs),
@@ -751,7 +727,7 @@ calc_ref_padding(_, _Pos, _Defs) ->
 %% Collect all vtables that will be used in ref data (for vtable sharing detection)
 collect_ref_vtables(Refs, Defs) ->
     lists:foldl(
-        fun({_Id, Type, Value}, {VTAcc, Seen}) ->
+        fun({_Id, Type, Value, _Size}, {VTAcc, Seen}) ->
             collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen)
         end,
         {[], #{}},
@@ -766,7 +742,7 @@ collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen) when is_
                 fun(Value, {Acc, S}) ->
                     FieldValues = collect_fields(Value, Fields, Defs),
                     {Scalars, Refs} = lists:partition(
-                        fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                        fun({_Id, T, _Val, _Sz}) -> is_scalar_type(T) end,
                         FieldValues
                     ),
                     VT = build_vtable(Scalars, Refs, 4),
@@ -787,7 +763,7 @@ collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen) when is_atom(Type), is_
         {table, Fields} ->
             FieldValues = collect_fields(Value, Fields, Defs),
             {Scalars, Refs} = lists:partition(
-                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                fun({_Id, T, _Val, _Sz}) -> is_scalar_type(T) end,
                 FieldValues
             ),
             VT = build_vtable(Scalars, Refs, 4),
@@ -917,7 +893,7 @@ is_nested_table_type(Type, Value, Defs) when is_atom(Type), is_map(Value) ->
             %% Calculate vtable size for this nested table
             FieldValues = collect_fields(Value, Fields, Defs),
             {Scalars, Refs} = lists:partition(
-                fun({_Id, T, _Val}) -> is_scalar_type(T) end,
+                fun({_Id, T, _Val, _Sz}) -> is_scalar_type(T) end,
                 FieldValues
             ),
             VTableSize = calc_vtable_size(Scalars, Refs),
@@ -939,7 +915,7 @@ calc_vtable_size(Scalars, Refs) ->
         [] ->
             4;
         _ ->
-            MaxId = lists:max([Id || {Id, _, _} <- AllFields]),
+            MaxId = lists:max([Id || {Id, _, _, _} <- AllFields]),
             NumSlots = MaxId + 1,
             4 + (NumSlots * 2)
     end.
@@ -1153,7 +1129,7 @@ encode_table_vector_with_sharing(TableType, Values, Defs) ->
             {table, Fields} = maps:get(TableType, Defs),
             FieldValues = collect_fields(Value, Fields, Defs),
             {Scalars, Refs} = lists:partition(
-                fun({_Id, Type, _Val}) -> is_scalar_type(Type) end,
+                fun({_Id, Type, _Val, _Sz}) -> is_scalar_type(Type) end,
                 FieldValues
             ),
             VTable = build_vtable(Scalars, Refs, 4),
@@ -1359,7 +1335,7 @@ build_table_data_minimal_padding(Scalars, Refs, TablePos, Defs) ->
     TableDataSize = align_offset(RawSize, 4),
     BaseTableSize = 4 + TableDataSize,
     Slots = place_fields_backward(AllFields, BaseTableSize),
-    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value} <- AllFields],
+    FieldLayout = [{Id, Type, Value, maps:get(Id, Slots)} || {Id, Type, Value, _Size} <- AllFields],
     SortedLayout = lists:sort(fun({_, _, _, A}, {_, _, _, B}) -> A =< B end, FieldLayout),
     RefFields = [
         {Id, Type, Value, Off}
@@ -1417,7 +1393,7 @@ encode_nested_table(TableType, Map, Defs) ->
     {table, Fields} = maps:get(TableType, Defs),
     FieldValues = collect_fields(Map, Fields, Defs),
     {Scalars, Refs} = lists:partition(
-        fun({_Id, Type, _Val}) -> is_scalar_type(Type) end,
+        fun({_Id, Type, _Val, _Sz}) -> is_scalar_type(Type) end,
         FieldValues
     ),
 
@@ -1586,9 +1562,6 @@ align_offset(Off, Align) ->
         R -> Off + (Align - R)
     end.
 
-extract_default({_, D}) when is_number(D); is_boolean(D) -> D;
-extract_default(_) -> undefined.
-
 %% Find enum value index (0-based)
 find_enum_index(_Value, [], _Index) ->
     error;
@@ -1596,12 +1569,6 @@ find_enum_index(Value, [Value | _], Index) ->
     {ok, Index};
 find_enum_index(Value, [_ | Rest], Index) ->
     find_enum_index(Value, Rest, Index + 1).
-
-normalize_type({T, D}) when is_atom(T), is_number(D) -> T;
-normalize_type({T, D}) when is_atom(T), is_boolean(D) -> T;
-%% optional scalar
-normalize_type({T, undefined}) when is_atom(T) -> T;
-normalize_type(T) -> T.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -1666,7 +1633,7 @@ zero_copy_reencode_test() ->
 
 get_refc_binary_ids() ->
     {binary, Bins} = erlang:process_info(self(), binary),
-    lists:usort([Id || {Id, _, _} <- Bins]).
+    lists:usort([Id || {Id, _, _, _} <- Bins]).
 
 run_in_isolated_process(Fun) ->
     Parent = self(),
