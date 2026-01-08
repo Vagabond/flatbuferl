@@ -1,6 +1,20 @@
 -module(builder_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+%% Helper to create properly partitioned table definition
+table(Fields) ->
+    SortedFields = lists:sort(
+        fun(#{layout_key := A}, #{layout_key := B}) -> A > B end,
+        Fields
+    ),
+    {Scalars, Refs} = lists:partition(fun(#{is_scalar := S}) -> S end, SortedFields),
+    AllFields = Scalars ++ Refs,
+    MaxId = case AllFields of
+        [] -> -1;
+        _ -> lists:max([maps:get(id, F) || F <- AllFields])
+    end,
+    {table, Scalars, Refs, AllFields, MaxId}.
+
 %% Helper to create field maps in new format
 field(Name, Type) -> field(Name, Type, #{}).
 field(Name, Type, Attrs) ->
@@ -28,12 +42,12 @@ is_scalar_type({vector, _}, _) ->
     false;
 is_scalar_type({union_value, _}, _) ->
     false;
-is_scalar_type({table, _}, _) ->
+is_scalar_type({table, _, _, _, _}, _) ->
     false;
 is_scalar_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         % Table reference is not scalar
-        {table, _} -> false;
+        {table, _, _, _, _} -> false;
         _ -> true
     end;
 is_scalar_type(_, _) ->
@@ -43,7 +57,7 @@ resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {struct, Fields} -> {struct, Fields};
         % Keep table types as atoms
-        {table, _} -> Type;
+        {table, _, _, _, _} -> Type;
         {{enum, Base}, Values} -> {enum, Base, Values};
         _ -> Type
     end;
@@ -104,7 +118,7 @@ type_size(_TableOrStruct) -> 4.
 %% =============================================================================
 
 simple_int_test() ->
-    Schema = {#{test => {table, [field(a, int)]}}, #{
+    Schema = {#{test => table([field(a, int)])}, #{
         root_type => test, file_identifier => <<"TEST">>
     }},
     Map = #{a => 42},
@@ -114,7 +128,7 @@ simple_int_test() ->
     ?assertEqual({ok, 42}, flatbuferl_reader:get_field(Root, 0, int, Buffer)).
 
 two_ints_test() ->
-    Schema = {#{test => {table, [field(a, int), field(b, int, #{id => 1})]}}, #{
+    Schema = {#{test => table([field(a, int), field(b, int, #{id => 1})])}, #{
         root_type => test, file_identifier => <<"TEST">>
     }},
     Map = #{a => 10, b => 20},
@@ -124,7 +138,7 @@ two_ints_test() ->
     ?assertEqual({ok, 20}, flatbuferl_reader:get_field(Root, 1, int, Buffer)).
 
 skip_default_value_test() ->
-    Schema = {#{test => {table, [field(a, {int, 100}), field(b, int, #{id => 1})]}}, #{
+    Schema = {#{test => table([field(a, {int, 100}), field(b, int, #{id => 1})])}, #{
         root_type => test
     }},
     %% a has default value, should be skipped
@@ -137,7 +151,7 @@ skip_default_value_test() ->
 
 non_contiguous_field_ids_test() ->
     %% Field IDs 0 and 2 (gap at 1)
-    Schema = {#{test => {table, [field(a, int), field(c, int, #{id => 2})]}}, #{root_type => test}},
+    Schema = {#{test => table([field(a, int), field(c, int, #{id => 2})])}, #{root_type => test}},
     Map = #{a => 10, c => 30},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -151,35 +165,35 @@ non_contiguous_field_ids_test() ->
 %% =============================================================================
 
 bool_test() ->
-    Schema = {#{test => {table, [field(flag, bool)]}}, #{root_type => test}},
+    Schema = {#{test => table([field(flag, bool)])}, #{root_type => test}},
     Map = #{flag => true},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
     ?assertEqual({ok, true}, flatbuferl_reader:get_field(Root, 0, bool, Buffer)).
 
 byte_test() ->
-    Schema = {#{test => {table, [field(val, byte)]}}, #{root_type => test}},
+    Schema = {#{test => table([field(val, byte)])}, #{root_type => test}},
     Map = #{val => -42},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
     ?assertEqual({ok, -42}, flatbuferl_reader:get_field(Root, 0, byte, Buffer)).
 
 short_test() ->
-    Schema = {#{test => {table, [field(val, short)]}}, #{root_type => test}},
+    Schema = {#{test => table([field(val, short)])}, #{root_type => test}},
     Map = #{val => -1000},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
     ?assertEqual({ok, -1000}, flatbuferl_reader:get_field(Root, 0, short, Buffer)).
 
 long_test() ->
-    Schema = {#{test => {table, [field(val, long)]}}, #{root_type => test}},
+    Schema = {#{test => table([field(val, long)])}, #{root_type => test}},
     Map = #{val => 9000000000000},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
     ?assertEqual({ok, 9000000000000}, flatbuferl_reader:get_field(Root, 0, long, Buffer)).
 
 float_test() ->
-    Schema = {#{test => {table, [field(val, float)]}}, #{root_type => test}},
+    Schema = {#{test => table([field(val, float)])}, #{root_type => test}},
     Map = #{val => 3.14},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -187,7 +201,7 @@ float_test() ->
     ?assert(abs(V - 3.14) < 0.001).
 
 double_test() ->
-    Schema = {#{test => {table, [field(val, double)]}}, #{root_type => test}},
+    Schema = {#{test => table([field(val, double)])}, #{root_type => test}},
     Map = #{val => 2.718281828},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -199,7 +213,7 @@ double_test() ->
 %% =============================================================================
 
 simple_string_test() ->
-    Schema = {#{test => {table, [field(name, string)]}}, #{
+    Schema = {#{test => table([field(name, string)])}, #{
         root_type => test, file_identifier => <<"TEST">>
     }},
     Map = #{name => <<"hello">>},
@@ -209,7 +223,7 @@ simple_string_test() ->
     ?assertEqual({ok, <<"hello">>}, flatbuferl_reader:get_field(Root, 0, string, Buffer)).
 
 string_and_int_test() ->
-    Schema = {#{test => {table, [field(name, string), field(val, int, #{id => 1})]}}, #{
+    Schema = {#{test => table([field(name, string), field(val, int, #{id => 1})])}, #{
         root_type => test
     }},
     Map = #{name => <<"world">>, val => 42},
@@ -223,14 +237,14 @@ string_and_int_test() ->
 %% =============================================================================
 
 int_vector_test() ->
-    Schema = {#{test => {table, [field(nums, {vector, int})]}}, #{root_type => test}},
+    Schema = {#{test => table([field(nums, {vector, int})])}, #{root_type => test}},
     Map = #{nums => [1, 2, 3]},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
     ?assertEqual({ok, [1, 2, 3]}, flatbuferl_reader:get_field(Root, 0, {vector, int}, Buffer)).
 
 string_vector_test() ->
-    Schema = {#{test => {table, [field(items, {vector, string})]}}, #{root_type => test}},
+    Schema = {#{test => table([field(items, {vector, string})])}, #{root_type => test}},
     Map = #{items => [<<"a">>, <<"bb">>, <<"ccc">>]},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
@@ -241,7 +255,7 @@ string_vector_test() ->
 
 mixed_with_vector_test() ->
     Schema = {
-        #{test => {table, [field(name, string), field(scores, {vector, int}, #{id => 1})]}}, #{
+        #{test => table([field(name, string), field(scores, {vector, int}, #{id => 1})])}, #{
             root_type => test
         }
     },
@@ -257,12 +271,12 @@ mixed_with_vector_test() ->
 
 nested_table_test() ->
     Defs = #{
-        'Inner' => {table, [field(value, int)]}
+        'Inner' => table([field(value, int)])
     },
     Schema = {
         Defs#{
             'Outer' =>
-                {table, [field(name, string), field(inner, 'Inner', #{id => 1, defs => Defs})]}
+                table([field(name, string), field(inner, 'Inner', #{id => 1, defs => Defs})])
         },
         #{root_type => 'Outer'}
     },
@@ -275,11 +289,11 @@ nested_table_test() ->
 
 nested_with_string_test() ->
     Defs = #{
-        'Child' => {table, [field(name, string), field(age, int, #{id => 1})]}
+        'Child' => table([field(name, string), field(age, int, #{id => 1})])
     },
     Schema = {
         Defs#{
-            'Parent' => {table, [field(child, 'Child', #{defs => Defs})]}
+            'Parent' => table([field(child, 'Child', #{defs => Defs})])
         },
         #{root_type => 'Parent'}
     },
@@ -298,7 +312,7 @@ simple_struct_test() ->
     %% Struct Vec2 with two floats (8 bytes inline)
     Defs = #{'Vec2' => {struct, [{x, float}, {y, float}]}},
     Schema = {
-        Defs#{test => {table, [field(pos, 'Vec2', #{inline_size => 8, defs => Defs})]}},
+        Defs#{test => table([field(pos, 'Vec2', #{inline_size => 8, defs => Defs})])},
         #{root_type => test}
     },
     Map = #{pos => #{x => 1.0, y => 2.0}},
@@ -312,7 +326,7 @@ struct_with_int_and_float_test() ->
     %% Struct with mixed types to test alignment (12 bytes with alignment)
     Defs = #{'Mixed' => {struct, [{a, byte}, {b, float}, {c, short}]}},
     Schema = {
-        Defs#{test => {table, [field(data, 'Mixed', #{inline_size => 12, defs => Defs})]}},
+        Defs#{test => table([field(data, 'Mixed', #{inline_size => 12, defs => Defs})])},
         #{root_type => test}
     },
     Map = #{data => #{a => 10, b => 3.14, c => 1000}},
@@ -332,10 +346,10 @@ struct_and_scalar_test() ->
     Schema = {
         Defs#{
             test =>
-                {table, [
+                table([
                     field(pos, 'Vec2', #{inline_size => 8, defs => Defs}),
                     field(name, string, #{id => 1})
-                ]}
+                ])
         },
         #{root_type => test}
     },
@@ -564,7 +578,7 @@ flatc_roundtrip_vectors_test() ->
 
 string_dedup_vector_test() ->
     %% Vector with duplicate strings should be smaller than with unique strings
-    Schema = {#{test => {table, [field(items, {vector, string})]}}, #{root_type => test}},
+    Schema = {#{test => table([field(items, {vector, string})])}, #{root_type => test}},
 
     %% 3 duplicate strings
     MapDup = #{items => [<<"same">>, <<"same">>, <<"same">>]},
@@ -584,7 +598,7 @@ string_dedup_vector_test() ->
 
 string_dedup_preserves_order_test() ->
     %% Test that dedup preserves order with mixed duplicates
-    Schema = {#{test => {table, [field(items, {vector, string})]}}, #{root_type => test}},
+    Schema = {#{test => table([field(items, {vector, string})])}, #{root_type => test}},
     Map = #{items => [<<"a">>, <<"b">>, <<"a">>, <<"c">>, <<"b">>, <<"a">>]},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
 
@@ -593,7 +607,7 @@ string_dedup_preserves_order_test() ->
     ?assertEqual([<<"a">>, <<"b">>, <<"a">>, <<"c">>, <<"b">>, <<"a">>], Items).
 
 string_dedup_empty_vector_test() ->
-    Schema = {#{test => {table, [field(items, {vector, string})]}}, #{root_type => test}},
+    Schema = {#{test => table([field(items, {vector, string})])}, #{root_type => test}},
     Map = #{items => []},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
 
@@ -602,7 +616,7 @@ string_dedup_empty_vector_test() ->
     ?assertEqual([], Items).
 
 string_dedup_single_test() ->
-    Schema = {#{test => {table, [field(items, {vector, string})]}}, #{root_type => test}},
+    Schema = {#{test => table([field(items, {vector, string})])}, #{root_type => test}},
     Map = #{items => [<<"only">>]},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
 
@@ -612,7 +626,7 @@ string_dedup_single_test() ->
 
 string_dedup_flatc_compat_test() ->
     %% Test that deduplicated buffers are valid per flatc
-    Schema = {#{test => {table, [field(items, {vector, string})]}}, #{
+    Schema = {#{test => table([field(items, {vector, string})])}, #{
         root_type => test, file_identifier => <<"TEST">>
     }},
     Map = #{items => [<<"hello">>, <<"world">>, <<"hello">>]},

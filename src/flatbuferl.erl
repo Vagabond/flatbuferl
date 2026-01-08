@@ -149,7 +149,7 @@ update(Ctx, Changes) ->
     flatbuferl_update:update(Ctx, Changes).
 
 table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
     lists:foldl(
         fun(
@@ -207,7 +207,7 @@ decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Bu
                     %% NONE type - skip
                     Acc;
                 {ok, TypeIndex} ->
-                    {union, Members} = maps:get(UnionName, Defs),
+                    {union, Members, _} = maps:get(UnionName, Defs),
                     MemberType = lists:nth(TypeIndex, Members),
                     Acc#{FieldName => MemberType};
                 missing ->
@@ -225,7 +225,7 @@ decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Bu
                 {ok, TypeIndex} ->
                     case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                         {ok, TableValueRef} ->
-                            {union, Members} = maps:get(UnionName, Defs),
+                            {union, Members, _} = maps:get(UnionName, Defs),
                             MemberType = lists:nth(TypeIndex, Members),
                             ConvertedValue = table_to_map(
                                 TableValueRef, Defs, MemberType, Buffer, Opts
@@ -241,7 +241,7 @@ decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Bu
             %% Vector of union types - output as list of type names
             case flatbuferl_reader:get_field(TableRef, FieldId, {vector, ubyte}, Buffer) of
                 {ok, TypeIndices} ->
-                    {union, Members} = maps:get(UnionName, Defs),
+                    {union, Members, _} = maps:get(UnionName, Defs),
                     TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
                     Acc#{FieldName => TypeNames};
                 missing ->
@@ -254,7 +254,7 @@ decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Bu
                 {ok, TypeIndices} ->
                     case flatbuferl_reader:get_field(TableRef, FieldId, {vector, table}, Buffer) of
                         {ok, TableRefs} ->
-                            {union, Members} = maps:get(UnionName, Defs),
+                            {union, Members, _} = maps:get(UnionName, Defs),
                             DecodedValues = lists:zipwith(
                                 fun(TypeIdx, TableValueRef) ->
                                     MemberType = lists:nth(TypeIdx, Members),
@@ -298,7 +298,7 @@ convert_value(Values, {vector, ElemType}, Defs, Buffer, Opts) when
 ->
     %% Vector of tables - convert each element
     case maps:get(ElemType, Defs, undefined) of
-        {table, _} ->
+        {table, _, _, _, _} ->
             [table_to_map(V, Defs, ElemType, Buffer, Opts) || V <- Values];
         _ ->
             Values
@@ -319,7 +319,7 @@ get_bytes(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root},
     end.
 
 get_bytes_internal(TableRef, Defs, TableType, [FieldName], Buffer) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, _Type, _Default} ->
             get_field_bytes(TableRef, FieldId, Buffer);
@@ -327,7 +327,7 @@ get_bytes_internal(TableRef, Defs, TableType, [FieldName], Buffer) ->
             error({unknown_field, FieldName})
     end;
 get_bytes_internal(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
@@ -409,7 +409,7 @@ get_internal(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Roo
     get_path(Root, Defs, RootType, Path, Buffer).
 
 get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, Type, Default} ->
             ReaderType = resolve_for_reader(Type, Defs),
@@ -425,7 +425,7 @@ get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
             error({unknown_field, FieldName})
     end;
 get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
@@ -442,8 +442,8 @@ get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
 
 find_field([], _Name) ->
     error;
-find_field([#{name := Name, id := FieldId, type := Type, default := Default} | _], Name) ->
-    {ok, FieldId, Type, Default};
+find_field([#{name := Name, id := FieldId, resolved_type := ResolvedType, default := Default} | _], Name) ->
+    {ok, FieldId, ResolvedType, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
 
@@ -466,7 +466,7 @@ resolve_for_reader({TypeName, Default}, Defs) when is_atom(TypeName), is_boolean
     resolve_for_reader(TypeName, Defs);
 resolve_for_reader(TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, Base}, _Values} -> {enum, Base};
+        {{enum, Base}, _, _} -> {enum, Base};
         _ -> TypeName
     end;
 resolve_for_reader(Type, _Defs) ->
@@ -489,9 +489,16 @@ convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_
     convert_enum_value(Value, TypeName, Defs);
 convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_boolean(Default) ->
     convert_enum_value(Value, TypeName, Defs);
+%% Handle resolved enum type {enum, Base, IndexMap} from resolved_type
+convert_enum_value(Value, {enum, _Base, IndexMap}, _Defs) when is_integer(Value), is_map(IndexMap) ->
+    %% Reverse lookup: find atom name for this integer value
+    case [Name || {Name, V} <- maps:to_list(IndexMap), V == Value] of
+        [Name] -> Name;
+        [] -> Value  %% Unknown value, return as-is
+    end;
 convert_enum_value(Value, TypeName, Defs) when is_atom(TypeName), is_integer(Value) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _Base}, Values} ->
+        {{enum, _Base}, Values, _} ->
             %% Enum values are 0-indexed
             lists:nth(Value + 1, Values);
         _ ->

@@ -251,7 +251,7 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
             traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer);
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case maps:get(NestedType, Defs, undefined) of
-                {table, _} ->
+                {table, _, _, _, _} ->
                     case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                         {ok, NestedTableRef} ->
                             do_fetch(NestedTableRef, Defs, NestedType, Rest, Buffer);
@@ -292,7 +292,7 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
             %% NONE type
             missing;
         {ok, TypeIndex} ->
-            {union, Members} = maps:get(UnionName, Defs),
+            {union, Members, _} = maps:get(UnionName, Defs),
             MemberType = lists:nth(TypeIndex, Members),
             case Rest of
                 ['_type'] ->
@@ -461,7 +461,7 @@ traverse_union_vector(
             {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
                 ValVecInfo, ActualIndex, Buffer
             ),
-            {union, Members} = maps:get(UnionName, Defs),
+            {union, Members, _} = maps:get(UnionName, Defs),
             MemberType = lists:nth(TypeIndex, Members),
             continue_from_union_element(ValueRef, MemberType, Defs, Rest, Buffer);
         false ->
@@ -486,7 +486,7 @@ wildcard_over_union_vector(
 ) ->
     {ok, TypeIndex} = flatbuferl_reader:get_vector_element_at(TypeVecInfo, Idx, Buffer),
     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(ValVecInfo, Idx, Buffer),
-    {union, Members} = maps:get(UnionName, Defs),
+    {union, Members, _} = maps:get(UnionName, Defs),
     MemberType = lists:nth(TypeIndex, Members),
     %% Catch unknown_field errors - different union members have different fields
     Result =
@@ -577,7 +577,7 @@ wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx, Acc) ->
 continue_from_element(Elem, ElemType, Defs, [], Buffer) when is_atom(ElemType) ->
     %% Check if it's a table type
     case maps:get(ElemType, Defs, undefined) of
-        {table, _} ->
+        {table, _, _, _, _} ->
             to_map(Elem, Defs, ElemType, Buffer);
         _ ->
             %% Scalar type (string, int, etc.)
@@ -589,7 +589,7 @@ continue_from_element(Elem, _ElemType, _Defs, [], _Buffer) ->
 continue_from_element(Elem, ElemType, Defs, Rest, Buffer) when is_atom(ElemType) ->
     %% Check if it's a table type
     case maps:get(ElemType, Defs, undefined) of
-        {table, _} ->
+        {table, _, _, _, _} ->
             do_fetch(Elem, Defs, ElemType, Rest, Buffer);
         _ ->
             %% Scalar can't be traversed
@@ -757,7 +757,7 @@ extract_one(SubPath, TableRef, Defs, TableType, Buffer, _Context) when is_list(S
 
 %% Field lookup helper
 lookup_field(Defs, TableType, FieldName) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     find_field(Fields, FieldName).
 
 find_field([], _Name) ->
@@ -770,7 +770,7 @@ find_field([_ | Rest], Name) ->
 %% Check if a type has a given field
 type_has_field(TypeName, FieldName, Defs) ->
     case maps:get(TypeName, Defs, undefined) of
-        {table, Fields} -> field_exists(Fields, FieldName);
+        {table, _, _, Fields, _} -> field_exists(Fields, FieldName);
         _ -> false
     end.
 
@@ -796,7 +796,7 @@ resolve_type(Type, _Defs) ->
 
 %% Convert table refs to maps
 to_map(TableRef, Defs, TableType, Buffer) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     Map = lists:foldl(
         fun(#{name := FieldName, id := FieldId, type := Type, default := Default}, Acc) ->
             ResolvedType = resolve_type(Type, Defs),
@@ -821,7 +821,7 @@ convert_value({table, _, _} = TableRef, Type, Defs, Buffer) when is_atom(Type) -
     end;
 convert_value(Values, {vector, ElemType}, Defs, Buffer) when is_list(Values), is_atom(ElemType) ->
     case maps:get(ElemType, Defs, undefined) of
-        {table, _} ->
+        {table, _, _, _, _} ->
             [
                 case to_map(V, Defs, ElemType, Buffer) of
                     {ok, M} -> M

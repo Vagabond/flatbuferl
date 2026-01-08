@@ -122,11 +122,11 @@ encode_scalar(Value, Type, Size) when is_atom(Type) ->
 
 %% Convert enum atom to integer using the type definition
 enum_to_integer(Value, {enum, _Base, EnumName}, Defs) when is_atom(Value) ->
-    {{enum, _}, Values} = maps:get(EnumName, Defs),
+    {{enum, _}, Values, _} = maps:get(EnumName, Defs),
     enum_index(Value, Values, 0);
 enum_to_integer(Value, TypeName, Defs) when is_atom(TypeName), is_atom(Value) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _Base}, Values} ->
+        {{enum, _Base}, Values, _} ->
             enum_index(Value, Values, 0);
         _ ->
             Value
@@ -310,7 +310,7 @@ traverse_for_update([FieldName | Rest], Buffer, Defs, TableType, TableRef) ->
                     %% NONE type
                     missing;
                 {ok, TypeIndex} ->
-                    {union, Members} = maps:get(UnionName, Defs),
+                    {union, Members, _} = maps:get(UnionName, Defs),
                     MemberType = lists:nth(TypeIndex, Members),
                     case
                         flatbuferl_reader:get_field(
@@ -327,7 +327,7 @@ traverse_for_update([FieldName | Rest], Buffer, Defs, TableType, TableRef) ->
             end;
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case maps:get(NestedType, Defs, undefined) of
-                {table, _} ->
+                {table, _, _, _, _} ->
                     case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                         {ok, NestedRef} ->
                             traverse_for_update(Rest, Buffer, Defs, NestedType, NestedRef);
@@ -371,7 +371,7 @@ traverse_vector_for_update(TableRef, FieldId, ElemType, [Index | Rest], Buffer, 
                     case ElemType of
                         Type when is_atom(Type) ->
                             case maps:get(Type, Defs, undefined) of
-                                {table, _} ->
+                                {table, _, _, _, _} ->
                                     %% Vector of tables - read table ref and continue
                                     ElemOffset = Start + (ActualIndex * 4),
                                     <<_:ElemOffset/binary, RelOffset:32/little-unsigned, _/binary>> =
@@ -427,7 +427,7 @@ traverse_union_vector_for_update(TableRef, FieldId, UnionName, [Index | Rest], B
                                     %% NONE
                                     missing;
                                 _ ->
-                                    {union, Members} = maps:get(UnionName, Defs),
+                                    {union, Members, _} = maps:get(UnionName, Defs),
                                     MemberType = lists:nth(TypeIndex, Members),
                                     %% Get value ref
                                     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
@@ -526,16 +526,27 @@ traverse_nested_struct(BaseOffset, Fields, [FieldName | Rest], Buffer, Defs) ->
 
 find_struct_field([], _Name, _Offset) ->
     error;
-find_struct_field([{Name, Type} | _], Name, Offset) ->
-    {ok, Offset, Type};
-find_struct_field([{Name, Type, _Attrs} | _], Name, Offset) ->
-    {ok, Offset, Type};
-find_struct_field([{_, Type} | Rest], Name, Offset) ->
-    Size = type_size(Type),
-    find_struct_field(Rest, Name, Offset + Size);
-find_struct_field([{_, Type, _} | Rest], Name, Offset) ->
-    Size = type_size(Type),
-    find_struct_field(Rest, Name, Offset + Size).
+%% Enriched format - use precomputed offset
+find_struct_field([#{name := FieldName, type := Type, offset := FieldOffset} | Rest], Name, Offset) ->
+    case FieldName of
+        Name -> {ok, FieldOffset, Type};
+        _ -> find_struct_field(Rest, Name, Offset)
+    end;
+%% Raw tuple format
+find_struct_field([{FieldName, Type} | Rest], Name, Offset) ->
+    case FieldName of
+        Name -> {ok, Offset, Type};
+        _ ->
+            Size = type_size(Type),
+            find_struct_field(Rest, Name, Offset + Size)
+    end;
+find_struct_field([{FieldName, Type, _Attrs} | Rest], Name, Offset) ->
+    case FieldName of
+        Name -> {ok, Offset, Type};
+        _ ->
+            Size = type_size(Type),
+            find_struct_field(Rest, Name, Offset + Size)
+    end.
 
 %% Get field offset in buffer (for final field in path)
 lookup_field_offset(TableRef, Buffer, Defs, TableType, FieldName) ->
@@ -553,7 +564,7 @@ lookup_field_offset(TableRef, Buffer, Defs, TableType, FieldName) ->
     end.
 
 lookup_field_info(Defs, TableType, FieldName) ->
-    {table, Fields} = maps:get(TableType, Defs),
+    {table, _, _, Fields, _} = maps:get(TableType, Defs),
     find_field(Fields, FieldName).
 
 find_field([], _Name) ->
@@ -565,7 +576,7 @@ find_field([_ | Rest], Name) ->
 
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
-        {{enum, Base}, _Values} -> {enum, Base, Type};
+        {{enum, Base}, _, _} -> {enum, Base, Type};
         _ -> Type
     end;
 resolve_type(Type, _Defs) ->
@@ -620,7 +631,7 @@ is_fixed_size_type({struct, Fields}, Defs) ->
     {true, struct_size(Fields, Defs)};
 is_fixed_size_type(TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, Base}, _Values} -> is_fixed_size_type(Base, Defs);
+        {{enum, Base}, _, _} -> is_fixed_size_type(Base, Defs);
         {struct, Fields} -> {true, struct_size(Fields, Defs)};
         _ -> false
     end;
@@ -689,7 +700,7 @@ validate_value(Value, Type, _Defs) when
         true -> {error, {type_mismatch, Type, Value}}
     end;
 validate_value(Value, {enum, _Base, EnumName}, Defs) ->
-    {{enum, _}, Values} = maps:get(EnumName, Defs),
+    {{enum, _}, Values, _} = maps:get(EnumName, Defs),
     case lists:member(Value, Values) of
         true -> ok;
         false -> {error, {invalid_enum_value, EnumName, Value}}
@@ -698,7 +709,7 @@ validate_value(Value, {struct, Fields}, Defs) when is_map(Value) ->
     validate_struct_value(Value, Fields, Defs);
 validate_value(Value, TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _Base}, Values} ->
+        {{enum, _Base}, Values, _} ->
             case lists:member(Value, Values) of
                 true -> ok;
                 false -> {error, {invalid_enum_value, TypeName, Value}}

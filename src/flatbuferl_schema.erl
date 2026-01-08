@@ -4,9 +4,9 @@
 
 -type type_name() :: atom().
 -type field_def() :: {atom(), atom() | tuple()} | {atom(), atom() | tuple(), map()}.
--type table_def() :: {table, [field_def()]}.
--type enum_def() :: {{enum, atom()}, [atom()]}.
--type union_def() :: {union, [atom()]}.
+-type table_def() :: {table, Scalars :: [map()], Refs :: [map()], AllFields :: [map()], MaxId :: integer()}.
+-type enum_def() :: {{enum, atom()}, [atom()], #{atom() => non_neg_integer()}}.
+-type union_def() :: {union, [atom()], #{atom() => pos_integer()}}.
 -type definitions() :: #{type_name() => table_def() | enum_def() | union_def()}.
 -type options() :: #{
     namespace => atom(),
@@ -131,11 +131,71 @@ merge_definitions(Defs1, Defs2) ->
     end.
 
 %% Post-process parsed flatbuferl_schema: assign field IDs, validate
+%% Two-phase processing:
+%%   1. Process enums/unions to add index maps
+%%   2. Process tables using enriched defs so resolve_type sees index maps
 -spec process({map(), map()}) -> {map(), map()}.
 process({Defs, Opts}) ->
-    ProcessedDefs = maps:map(fun(_Name, Def) -> process_def(Def, Defs) end, Defs),
+    %% Phase 1: enrich enums and unions with precomputed index maps
+    EnrichedDefs = maps:map(fun(_Name, Def) -> enrich_def(Def) end, Defs),
+    %% Phase 2: process tables using enriched definitions
+    ProcessedDefs = maps:map(fun(_Name, Def) -> process_def(Def, EnrichedDefs) end, EnrichedDefs),
     {ProcessedDefs, Opts}.
 
+%% Phase 1: add index maps to enums/unions, precompute struct field offsets
+enrich_def({union, Members}) ->
+    IndexMap = maps:from_list(lists:zip(Members, lists:seq(1, length(Members)))),
+    {union, Members, IndexMap};
+enrich_def({{enum, BaseType}, Values}) ->
+    IndexMap = maps:from_list(lists:zip(Values, lists:seq(0, length(Values) - 1))),
+    {{enum, BaseType}, Values, IndexMap};
+enrich_def({struct, Fields}) ->
+    %% Precompute field offsets and sizes for efficient struct encoding
+    {EnrichedFields, _, _} = lists:foldl(
+        fun({Name, Type}, {Acc, Off, MaxAlign}) ->
+            Size = primitive_type_size(Type),
+            AlignedOff = align_to(Off, Size),
+            Field = #{name => Name, type => Type, offset => AlignedOff, size => Size},
+            {[Field | Acc], AlignedOff + Size, max(MaxAlign, Size)}
+        end,
+        {[], 0, 1},
+        Fields
+    ),
+    {struct, lists:reverse(EnrichedFields)};
+enrich_def(Other) ->
+    Other.
+
+%% Type size for struct field alignment (primitive types only)
+primitive_type_size(bool) -> 1;
+primitive_type_size(byte) -> 1;
+primitive_type_size(ubyte) -> 1;
+primitive_type_size(int8) -> 1;
+primitive_type_size(uint8) -> 1;
+primitive_type_size(short) -> 2;
+primitive_type_size(ushort) -> 2;
+primitive_type_size(int16) -> 2;
+primitive_type_size(uint16) -> 2;
+primitive_type_size(int) -> 4;
+primitive_type_size(uint) -> 4;
+primitive_type_size(int32) -> 4;
+primitive_type_size(uint32) -> 4;
+primitive_type_size(long) -> 8;
+primitive_type_size(ulong) -> 8;
+primitive_type_size(int64) -> 8;
+primitive_type_size(uint64) -> 8;
+primitive_type_size(float) -> 4;
+primitive_type_size(float32) -> 4;
+primitive_type_size(double) -> 8;
+primitive_type_size(float64) -> 8;
+primitive_type_size(_) -> 4.
+
+align_to(Off, Align) ->
+    case Off rem Align of
+        0 -> Off;
+        R -> Off + (Align - R)
+    end.
+
+%% Phase 2: process tables (enums/unions already enriched, pass through)
 process_def({table, Fields}, Defs) ->
     %% Expand union fields into type + value pairs before assigning IDs
     ExpandedFields = expand_union_fields(Fields, Defs),
@@ -150,8 +210,18 @@ process_def({table, Fields}, Defs) ->
         fun(#{layout_key := A}, #{layout_key := B}) -> A > B end,
         OptimizedFields
     ),
-    {table, SortedFields};
+    %% Pre-partition into scalars and refs (eliminates runtime partitioning)
+    %% Also precompute AllFields to avoid ++ at decode time
+    {Scalars, Refs} = lists:partition(fun(#{is_scalar := S}) -> S end, SortedFields),
+    AllFields = Scalars ++ Refs,
+    %% Precompute max field id to avoid lists:max at encode time
+    MaxId = case AllFields of
+        [] -> -1;
+        _ -> lists:max([maps:get(id, F) || F <- AllFields])
+    end,
+    {table, Scalars, Refs, AllFields, MaxId};
 process_def(Other, _Defs) ->
+    %% Enums, unions, structs already processed in phase 1
     Other.
 
 %% Convert field tuple to optimized map with precomputed values
@@ -213,8 +283,10 @@ is_scalar_type({enum, _, _}, _Defs) ->
 is_scalar_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {struct, _} -> true;
-        {{enum, _}, _} -> true;
-        {union, _} -> false;
+        {{enum, _}, _, _} -> true;
+        {union, _, _} -> false;
+        {table, _, _, _, _} -> false;
+        %% Unprocessed table format (during phase 2 processing)
         {table, _} -> false;
         % primitive types
         undefined -> true
@@ -242,11 +314,12 @@ normalize_type(Type) ->
 %% Only structs are resolved because struct data is encoded inline
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
-        {{enum, Base}, Values} -> {enum, Base, Values};
+        {{enum, Base}, _Values, IndexMap} -> {enum, normalize_scalar_type(Base), IndexMap};
         {struct, Fields} -> {struct, Fields};
-        % Keep table types as atoms for Defs lookup
+        % Keep table types as atoms for Defs lookup (both processed and unprocessed)
+        {table, _, _, _, _} -> Type;
         {table, _} -> Type;
-        _ -> Type
+        _ -> normalize_scalar_type(Type)
     end;
 resolve_type({vector, ElemType}, Defs) ->
     {vector, resolve_type(ElemType, Defs)};
@@ -254,6 +327,20 @@ resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
 resolve_type(Type, _Defs) ->
     Type.
+
+%% Normalize scalar type aliases to canonical forms for faster pattern matching
+%% This eliminates guard conditions like `when Type == int; Type == int32`
+normalize_scalar_type(byte) -> int8;
+normalize_scalar_type(ubyte) -> uint8;
+normalize_scalar_type(short) -> int16;
+normalize_scalar_type(ushort) -> uint16;
+normalize_scalar_type(int) -> int32;
+normalize_scalar_type(uint) -> uint32;
+normalize_scalar_type(long) -> int64;
+normalize_scalar_type(ulong) -> uint64;
+normalize_scalar_type(float) -> float32;
+normalize_scalar_type(double) -> float64;
+normalize_scalar_type(Type) -> Type.
 
 %% Extract default value from type, but not from type constructors
 extract_default({Type, D}) when
@@ -291,7 +378,7 @@ field_inline_size(Type, Defs) when is_atom(Type) ->
     %% Check if it's a user-defined type
     case maps:get(Type, Defs, undefined) of
         {struct, Fields} -> calc_struct_size(Fields, Defs);
-        {{enum, Base}, _Members} -> type_size(Base, Defs);
+        {{enum, Base}, _, _} -> type_size(Base, Defs);
         _ -> type_size(Type, Defs)
     end;
 field_inline_size(_, _Defs) ->
@@ -327,13 +414,19 @@ type_size({union_type, _}, _) -> 1;
 type_size(_, _) -> 4.
 
 %% Calculate struct size with proper alignment
+%% Handles both raw tuple format {Name, Type} and enriched map format
 calc_struct_size(Fields, Defs) ->
     {_, EndOffset, MaxAlign} = lists:foldl(
-        fun({_Name, Type}, {_, CurOffset, MaxAlignAcc}) ->
-            Size = type_size(Type, Defs),
-            Align = Size,
-            AlignedOffset = align_offset(CurOffset, Align),
-            {ok, AlignedOffset + Size, max(MaxAlignAcc, Align)}
+        fun
+            (#{type := Type, offset := Offset, size := Size}, {_, _, MaxAlignAcc}) ->
+                %% Enriched field - use precomputed offset and size
+                {ok, Offset + Size, max(MaxAlignAcc, Size)};
+            ({_Name, Type}, {_, CurOffset, MaxAlignAcc}) ->
+                %% Raw tuple format
+                Size = type_size(Type, Defs),
+                Align = Size,
+                AlignedOffset = align_offset(CurOffset, Align),
+                {ok, AlignedOffset + Size, max(MaxAlignAcc, Align)}
         end,
         {ok, 0, 1},
         Fields
@@ -355,7 +448,7 @@ expand_union_fields(Fields, Defs) ->
                 {vector, ElemType} ->
                     %% Check if element type is a union
                     case maps:get(ElemType, Defs, undefined) of
-                        {union, _Members} ->
+                        {union, _, _} ->
                             %% Vector of union becomes two vector fields
                             TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
                             [
@@ -367,7 +460,7 @@ expand_union_fields(Fields, Defs) ->
                     end;
                 _ ->
                     case maps:get(Type, Defs, undefined) of
-                        {union, _Members} ->
+                        {union, _, _} ->
                             %% Union field becomes two fields: name_type and name
                             TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
                             [
@@ -395,7 +488,7 @@ normalize_enum_default({Name, {TypeName, Default}, Attrs}, Defs) when
 ->
     %% 3-tuple with attrs: check if TypeName refers to an enum
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _BaseType}, _Members} ->
+        {{enum, _BaseType}, _, _} ->
             %% Convert binary default to atom
             {Name, {TypeName, binary_to_atom(Default, utf8)}, Attrs};
         _ ->
@@ -407,7 +500,7 @@ normalize_enum_default({Name, {TypeName, Default}}, Defs) when
 ->
     %% 2-tuple (no attrs): check if TypeName refers to an enum
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _BaseType}, _Members} ->
+        {{enum, _BaseType}, _, _} ->
             %% Convert binary default to atom
             {Name, {TypeName, binary_to_atom(Default, utf8)}};
         _ ->
@@ -481,7 +574,7 @@ validate(Map, {Defs, SchemaOpts}, Opts) ->
 
 validate_table(Map, TableType, Defs, Opts) when is_map(Map) ->
     case maps:get(TableType, Defs, undefined) of
-        {table, Fields} ->
+        {table, _, _, Fields, _} ->
             validate_table_fields(Map, Fields, Defs, Opts);
         undefined ->
             [{unknown_type, TableType}]
@@ -583,16 +676,16 @@ validate_value(Name, Value, {Type, _Default}, Defs, Opts) when is_atom(Type) ->
     validate_value(Name, Value, Type, Defs, Opts);
 validate_value(Name, Value, Type, Defs, Opts) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
-        {{enum, _BaseType}, Members} ->
+        {{enum, _BaseType}, Members, _IndexMap} ->
             validate_enum(Name, Value, Members);
-        {table, _Fields} ->
+        {table, _, _, _, _} ->
             case validate_table(Value, Type, Defs, Opts) of
                 [] -> [];
                 Errors -> [{nested_errors, Name, Errors}]
             end;
         {struct, Fields} ->
             validate_struct(Name, Value, Fields);
-        {union, _Members} ->
+        {union, _, _} ->
             [{type_mismatch, Name, {union, Type}, Value}];
         undefined ->
             validate_scalar(Name, Value, Type)
@@ -683,7 +776,7 @@ validate_array(Name, Value, ElemType, Count, _Defs, _Opts) ->
     [{type_mismatch, Name, {array, ElemType, Count}, Value}].
 
 validate_union_type(Name, Value, UnionName, Defs) ->
-    {union, Members} = maps:get(UnionName, Defs),
+    {union, Members, _} = maps:get(UnionName, Defs),
     MemberAtom =
         case Value of
             A when is_atom(A) -> A;

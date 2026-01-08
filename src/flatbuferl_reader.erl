@@ -35,7 +35,7 @@ get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
     VTableOffset = TableOffset - VTableSOffset,
 
     %% Read vtable header
-    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _TableSize:16/little-unsigned,
+    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _:16/little-unsigned,
         VTableRest/binary>> = Buffer,
 
     %% Calculate field offset position in vtable
@@ -137,42 +137,75 @@ get_vector_element_at({Length, ElementsStart, ElementType}, Index, Buffer) ->
     end.
 
 %% Read a value of given type at position
-%% 8-bit integers
+%% Types are normalized to canonical forms at schema parse time for fast matching
+%% Aliases are kept for backward compatibility with direct API usage
+%% Boolean
 read_value(Buffer, Pos, bool) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value =/= 0};
-read_value(Buffer, Pos, Type) when Type == byte; Type == int8 ->
+%% 8-bit integers
+read_value(Buffer, Pos, int8) ->
     <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, Type) when Type == ubyte; Type == uint8 ->
+read_value(Buffer, Pos, byte) ->  %% alias
+    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, uint8) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, ubyte) ->  %% alias
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% 16-bit integers
-read_value(Buffer, Pos, Type) when Type == short; Type == int16 ->
+read_value(Buffer, Pos, int16) ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, Type) when Type == ushort; Type == uint16 ->
+read_value(Buffer, Pos, short) ->  %% alias
+    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, uint16) ->
+    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, ushort) ->  %% alias
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% 32-bit integers
-read_value(Buffer, Pos, Type) when Type == int; Type == int32 ->
+read_value(Buffer, Pos, int32) ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, Type) when Type == uint; Type == uint32 ->
+read_value(Buffer, Pos, int) ->  %% alias
+    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, uint32) ->
+    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, uint) ->  %% alias
     <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% 64-bit integers
-read_value(Buffer, Pos, Type) when Type == long; Type == int64 ->
+read_value(Buffer, Pos, int64) ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, Type) when Type == ulong; Type == uint64 ->
+read_value(Buffer, Pos, long) ->  %% alias
+    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, uint64) ->
+    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, ulong) ->  %% alias
     <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% Floating point
-read_value(Buffer, Pos, Type) when Type == float; Type == float32 ->
+read_value(Buffer, Pos, float32) ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, Type) when Type == double; Type == float64 ->
+read_value(Buffer, Pos, float) ->  %% alias
+    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, float64) ->
+    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, double) ->  %% alias
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
 %% String (offset to length-prefixed UTF-8)
@@ -325,6 +358,7 @@ read_vector_element(Buffer, Pos, TableName) when is_atom(TableName) ->
 %% =============================================================================
 
 %% Read struct fields inline - structs are fixed-size, no vtable
+%% Handles both enriched format (maps) and raw tuple format
 read_struct_fields(_Buffer, _Pos, [], Acc) ->
     {Acc, 0};
 read_struct_fields(Buffer, Pos, Fields, Acc) ->
@@ -332,9 +366,15 @@ read_struct_fields(Buffer, Pos, Fields, Acc) ->
     {FieldOffsets, TotalSize} = calc_struct_layout(Fields),
     %% Read each field
     FinalAcc = lists:foldl(
-        fun({{Name, Type}, Offset}, AccIn) ->
-            {ok, Value} = read_struct_value(Buffer, Pos + Offset, Type),
-            AccIn#{Name => Value}
+        fun
+            ({#{name := Name, type := Type}, Offset}, AccIn) ->
+                %% Enriched format
+                {ok, Value} = read_struct_value(Buffer, Pos + Offset, Type),
+                AccIn#{Name => Value};
+            ({{Name, Type}, Offset}, AccIn) ->
+                %% Raw tuple format
+                {ok, Value} = read_struct_value(Buffer, Pos + Offset, Type),
+                AccIn#{Name => Value}
         end,
         Acc,
         lists:zip(Fields, FieldOffsets)
@@ -342,25 +382,38 @@ read_struct_fields(Buffer, Pos, Fields, Acc) ->
     {FinalAcc, TotalSize}.
 
 %% Calculate field offsets in struct with proper alignment
+%% Handles both enriched format (maps with precomputed offsets) and raw tuple format
 calc_struct_layout(Fields) ->
-    {Offsets, _, MaxAlign} = lists:foldl(
-        fun({_Name, Type}, {Acc, CurOffset, MaxAlignAcc}) ->
-            Size = element_size(Type),
-            %% In FlatBuffers, alignment equals size for scalars
-            Align = Size,
-            AlignedOffset = align_offset(CurOffset, Align),
-            {[AlignedOffset | Acc], AlignedOffset + Size, max(MaxAlignAcc, Align)}
-        end,
-        {[], 0, 1},
-        Fields
-    ),
-    ReversedOffsets = lists:reverse(Offsets),
-    %% Total size aligned to max alignment
-    LastOffset = lists:last(ReversedOffsets),
-    {_Name, LastType} = lists:last(Fields),
-    RawSize = LastOffset + element_size(LastType),
-    TotalSize = align_offset(RawSize, MaxAlign),
-    {ReversedOffsets, TotalSize}.
+    %% Check if fields are enriched (first field is a map)
+    case Fields of
+        [#{offset := _} | _] ->
+            %% Enriched format - use precomputed offsets
+            Offsets = [Offset || #{offset := Offset} <- Fields],
+            LastField = lists:last(Fields),
+            #{offset := LastOffset, size := LastSize} = LastField,
+            MaxAlign = lists:max([Size || #{size := Size} <- Fields]),
+            RawSize = LastOffset + LastSize,
+            TotalSize = align_offset(RawSize, MaxAlign),
+            {Offsets, TotalSize};
+        _ ->
+            %% Raw tuple format
+            {OffsetsRev, _, MaxAlign} = lists:foldl(
+                fun({_Name, Type}, {Acc, CurOffset, MaxAlignAcc}) ->
+                    Size = element_size(Type),
+                    Align = Size,
+                    AlignedOffset = align_offset(CurOffset, Align),
+                    {[AlignedOffset | Acc], AlignedOffset + Size, max(MaxAlignAcc, Align)}
+                end,
+                {[], 0, 1},
+                Fields
+            ),
+            ReversedOffsets = lists:reverse(OffsetsRev),
+            LastOffset = lists:last(ReversedOffsets),
+            {_Name, LastType} = lists:last(Fields),
+            RawSize = LastOffset + element_size(LastType),
+            TotalSize = align_offset(RawSize, MaxAlign),
+            {ReversedOffsets, TotalSize}
+    end.
 
 align_offset(Offset, Align) ->
     case Offset rem Align of

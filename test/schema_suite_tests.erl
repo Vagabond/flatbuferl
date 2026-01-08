@@ -1,6 +1,20 @@
 -module(schema_suite_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+%% Helper to create properly partitioned table definition
+table(Fields) ->
+    SortedFields = lists:sort(
+        fun(#{layout_key := A}, #{layout_key := B}) -> A > B end,
+        Fields
+    ),
+    {Scalars, Refs} = lists:partition(fun(#{is_scalar := S}) -> S end, SortedFields),
+    AllFields = Scalars ++ Refs,
+    MaxId = case AllFields of
+        [] -> -1;
+        _ -> lists:max([maps:get(id, F) || F <- AllFields])
+    end,
+    {table, Scalars, Refs, AllFields, MaxId}.
+
 %% Helper to create field maps in new format
 field(Name, Type) -> field(Name, Type, #{}).
 field(Name, Type, Attrs) ->
@@ -28,12 +42,12 @@ is_scalar_type({vector, _}, _) ->
     false;
 is_scalar_type({union_value, _}, _) ->
     false;
-is_scalar_type({table, _}, _) ->
+is_scalar_type({table, _, _, _, _}, _) ->
     false;
 is_scalar_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         % Table reference is not scalar
-        {table, _} -> false;
+        {table, _, _, _, _} -> false;
         _ -> true
     end;
 is_scalar_type(_, _) ->
@@ -43,7 +57,7 @@ resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {struct, Fields} -> {struct, Fields};
         % Keep table types as atoms
-        {table, _} -> Type;
+        {table, _, _, _, _} -> Type;
         {{enum, Base}, Values} -> {enum, Base, Values};
         _ -> Type
     end;
@@ -529,10 +543,10 @@ required_field_test_() ->
     Schema = {
         #{
             'TestTable' =>
-                {table, [
+                table([
                     field(name, string, #{required => true}),
                     field(value, int, #{id => 1})
-                ]}
+                ])
         },
         #{root_type => 'TestTable'}
     },
@@ -564,11 +578,11 @@ deprecated_encode_test_() ->
     Schema = {
         #{
             'TestTable' =>
-                {table, [
+                table([
                     field(name, string),
                     field(old_field, int, #{id => 1, deprecated => true}),
                     field(new_field, int, #{id => 2})
-                ]}
+                ])
         },
         #{root_type => 'TestTable'}
     },
@@ -609,11 +623,11 @@ deprecated_decode_test_() ->
     Schema = {
         #{
             'TestTable' =>
-                {table, [
+                table([
                     field(name, string),
                     field(old_field, int, #{id => 1, deprecated => true}),
                     field(new_field, int, #{id => 2})
-                ]}
+                ])
         },
         #{root_type => 'TestTable'}
     },
@@ -663,19 +677,19 @@ deprecated_decode_test_() ->
 %% =============================================================================
 
 union_vector_test_() ->
-    Schema = {
+    Schema = flatbuferl_schema:process({
         #{
             'Event' => {union, ['Login', 'Logout']},
-            'Login' => {table, [field(user, string)]},
-            'Logout' => {table, [field(user, string)]},
+            'Login' => table([field(user, string)]),
+            'Logout' => table([field(user, string)]),
             'EventLog' =>
-                {table, [
+                table([
                     field(events_type, {vector, {union_type, 'Event'}}),
                     field(events, {vector, {union_value, 'Event'}}, #{id => 1})
-                ]}
+                ])
         },
         #{root_type => 'EventLog'}
-    },
+    }),
     [
         {"union vector encode/decode roundtrip", fun() ->
             Map = #{
@@ -747,12 +761,12 @@ optional_scalar_test_() ->
     Schema = {
         #{
             'TestTable' =>
-                {table, [
+                table([
                     field(opt_int, {int, undefined}),
                     field(opt_bool, {bool, undefined}, #{id => 1}),
                     field(reg_int, {int, 0}, #{id => 2}),
                     field(reg_int_default, {int, 100}, #{id => 3})
-                ]}
+                ])
         },
         #{root_type => 'TestTable'}
     },
@@ -864,13 +878,13 @@ fixed_array_test_() ->
         {"array schema parses", fun() ->
             {ok, {Defs, _Opts}} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             ?assert(maps:is_key('ArrayTable', Defs)),
-            {table, Fields} = maps:get('ArrayTable', Defs),
+            {table, Scalars, [], _, _} = maps:get('ArrayTable', Defs),
             %% Fields are pre-sorted by layout_key (size desc, id desc)
             [
                 #{name := ints, type := {array, int, 4}},
                 #{name := floats, type := {array, float, 3}},
                 #{name := bytes, type := {array, byte, 2}}
-            ] = Fields
+            ] = Scalars
         end},
         {"array encode/decode roundtrip", fun() ->
             {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
@@ -924,10 +938,10 @@ fixed_array_test_() ->
             Schema = {
                 #{
                     'Test' =>
-                        {table, [
+                        table([
                             field(vec3, {array, float, 3}),
                             field(matrix, {array, int, 9}, #{id => 1})
-                        ]}
+                        ])
                 },
                 #{root_type => 'Test'}
             },

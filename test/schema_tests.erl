@@ -7,17 +7,18 @@
 
 simple_table_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("table Monster { name: string; hp: int; }"),
-    ?assertMatch(#{'Monster' := {table, _}}, Defs),
-    {table, Fields} = maps:get('Monster', Defs),
-    ?assertEqual(2, length(Fields)).
+    ?assertMatch(#{'Monster' := {table, _, _, _, _}}, Defs),
+    {table, _Scalars, _Refs, AllFields, _MaxId} = maps:get('Monster', Defs),
+    ?assertEqual(2, length(AllFields)).
 
 table_with_defaults_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("table Monster { hp: int = 100; }"),
-    {table, [#{name := hp, type := int, default := 100, id := 0}]} = maps:get('Monster', Defs).
+    {table, [#{name := hp, type := int, default := 100, id := 0}], [], _, _} = maps:get('Monster', Defs).
 
 enum_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("enum Color : byte { Red, Green, Blue }"),
-    ?assertEqual({{enum, byte}, ['Red', 'Green', 'Blue']}, maps:get('Color', Defs)).
+    {{enum, byte}, ['Red', 'Green', 'Blue'], IndexMap} = maps:get('Color', Defs),
+    ?assertEqual(#{'Red' => 0, 'Green' => 1, 'Blue' => 2}, IndexMap).
 
 enum_default_test() ->
     %% Enum field with default value - default should be atom, not binary
@@ -26,9 +27,9 @@ enum_default_test() ->
         "table Pixel { color: Color = Blue; }\n"
         "root_type Pixel;\n",
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema(Schema),
-    {table, Fields} = maps:get('Pixel', Defs),
+    {table, Scalars, [], _, _} = maps:get('Pixel', Defs),
     %% Default should be atom 'Blue', not binary <<"Blue">>
-    ?assertMatch([#{name := color, type := 'Color', default := 'Blue', id := 0}], Fields).
+    ?assertMatch([#{name := color, type := 'Color', default := 'Blue', id := 0}], Scalars).
 
 enum_default_roundtrip_test() ->
     %% Full encode/decode roundtrip with enum default
@@ -50,11 +51,12 @@ enum_default_roundtrip_test() ->
 
 union_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("union Animal { Dog, Cat }"),
-    ?assertEqual({union, ['Dog', 'Cat']}, maps:get('Animal', Defs)).
+    {union, ['Dog', 'Cat'], IndexMap} = maps:get('Animal', Defs),
+    ?assertEqual(#{'Dog' => 1, 'Cat' => 2}, IndexMap).
 
 vector_field_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("table Inventory { items: [string]; }"),
-    {table, [#{name := items, type := {vector, string}, id := 0}]} = maps:get('Inventory', Defs).
+    {table, [], [#{name := items, type := {vector, string}, id := 0}], _, _} = maps:get('Inventory', Defs).
 
 %% =============================================================================
 %% Options Tests
@@ -78,30 +80,30 @@ file_identifier_test() ->
 
 sequential_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { a: int; b: int; c: int; }"),
-    {table, Fields} = maps:get('T', Defs),
+    {table, Scalars, [], _, _} = maps:get('T', Defs),
     %% Pre-sorted by layout order (size desc, id desc). Same size = higher ID first
-    [#{name := c, id := 2}, #{name := b, id := 1}, #{name := a, id := 0}] = Fields.
+    [#{name := c, id := 2}, #{name := b, id := 1}, #{name := a, id := 0}] = Scalars.
 
 explicit_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema(
         "table T { a: int (id: 2); b: int (id: 0); c: int (id: 1); }"
     ),
-    {table, Fields} = maps:get('T', Defs),
+    {table, Scalars, [], _, _} = maps:get('T', Defs),
     %% Pre-sorted by layout order (size desc, id desc)
-    [#{name := a, id := 2}, #{name := c, id := 1}, #{name := b, id := 0}] = Fields.
+    [#{name := a, id := 2}, #{name := c, id := 1}, #{name := b, id := 0}] = Scalars.
 
 mixed_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema(
         "table T { a: int (id: 0); b: int (id: 2); c: int; d: int; }"
     ),
-    {table, Fields} = maps:get('T', Defs),
+    {table, Scalars, [], _, _} = maps:get('T', Defs),
     %% Pre-sorted by layout order (size desc, id desc)
     [
         #{name := d, id := 3},
         #{name := b, id := 2},
         #{name := c, id := 1},
         #{name := a, id := 0}
-    ] = Fields.
+    ] = Scalars.
 
 %% =============================================================================
 %% Attribute Tests
@@ -109,13 +111,13 @@ mixed_ids_test() ->
 
 deprecated_attr_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { old: int (deprecated); new: int; }"),
-    {table, Fields} = maps:get('T', Defs),
+    {table, Scalars, [], _, _} = maps:get('T', Defs),
     %% Pre-sorted by layout_key (size desc, id desc). Same size = higher ID first
-    [#{name := new, deprecated := false}, #{name := old, deprecated := true}] = Fields.
+    [#{name := new, deprecated := false}, #{name := old, deprecated := true}] = Scalars.
 
 multiple_attrs_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { f: int (id: 5, deprecated); }"),
-    {table, [#{name := f, id := 5, deprecated := true}]} = maps:get('T', Defs).
+    {table, [#{name := f, id := 5, deprecated := true}], [], _, _} = maps:get('T', Defs).
 
 %% =============================================================================
 %% Complex Schema File Tests
