@@ -152,8 +152,16 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     {table, Fields} = maps:get(TableType, Defs),
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
     lists:foldl(
-        fun(#{name := FieldName, id := FieldId, type := Type, default := Default,
-              deprecated := Deprecated}, Acc) ->
+        fun(
+            #{
+                name := FieldName,
+                id := FieldId,
+                type := Type,
+                default := Default,
+                deprecated := Deprecated
+            },
+            Acc
+        ) ->
             %% Handle deprecated fields
             case {Deprecated, DeprecatedOpt} of
                 {true, skip} ->
@@ -451,9 +459,16 @@ find_field([_ | Rest], Name) ->
 
 %% Resolve type name to reader-compatible type
 %% Handle types with defaults (unwrap first, but not type constructors)
-resolve_for_reader({TypeName, Default}, Defs) when is_atom(TypeName), is_atom(Default),
-    TypeName /= vector, TypeName /= enum, TypeName /= struct,
-    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+resolve_for_reader({TypeName, Default}, Defs) when
+    is_atom(TypeName),
+    is_atom(Default),
+    TypeName /= vector,
+    TypeName /= enum,
+    TypeName /= struct,
+    TypeName /= array,
+    TypeName /= union_type,
+    TypeName /= union_value
+->
     resolve_for_reader(TypeName, Defs);
 resolve_for_reader({TypeName, Default}, Defs) when is_atom(TypeName), is_number(Default) ->
     resolve_for_reader(TypeName, Defs);
@@ -469,9 +484,16 @@ resolve_for_reader(Type, _Defs) ->
 
 %% Convert integer enum value back to atom
 %% Handle types with defaults (unwrap first, but not type constructors)
-convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_atom(Default),
-    TypeName /= vector, TypeName /= enum, TypeName /= struct,
-    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+convert_enum_value(Value, {TypeName, Default}, Defs) when
+    is_atom(TypeName),
+    is_atom(Default),
+    TypeName /= vector,
+    TypeName /= enum,
+    TypeName /= struct,
+    TypeName /= array,
+    TypeName /= union_type,
+    TypeName /= union_value
+->
     convert_enum_value(Value, TypeName, Defs);
 convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_number(Default) ->
     convert_enum_value(Value, TypeName, Defs);

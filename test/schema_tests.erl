@@ -21,9 +21,10 @@ enum_test() ->
 
 enum_default_test() ->
     %% Enum field with default value - default should be atom, not binary
-    Schema = "enum Color : ubyte { Red, Green, Blue }\n"
-             "table Pixel { color: Color = Blue; }\n"
-             "root_type Pixel;\n",
+    Schema =
+        "enum Color : ubyte { Red, Green, Blue }\n"
+        "table Pixel { color: Color = Blue; }\n"
+        "root_type Pixel;\n",
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema(Schema),
     {table, Fields} = maps:get('Pixel', Defs),
     %% Default should be atom 'Blue', not binary <<"Blue">>
@@ -31,9 +32,10 @@ enum_default_test() ->
 
 enum_default_roundtrip_test() ->
     %% Full encode/decode roundtrip with enum default
-    Schema = "enum Color : ubyte { Red, Green, Blue }\n"
-             "table Pixel { x: int; color: Color = Blue; }\n"
-             "root_type Pixel;\n",
+    Schema =
+        "enum Color : ubyte { Red, Green, Blue }\n"
+        "table Pixel { x: int; color: Color = Blue; }\n"
+        "root_type Pixel;\n",
     {ok, S} = flatbuferl:parse_schema(Schema),
     %% Encode with explicit enum value
     Data = #{x => 10, color => 'Green'},

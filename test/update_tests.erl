@@ -536,8 +536,8 @@ same_size_no_copy_test() ->
         %% Just check first byte changed
         <<FirstByte, _/binary>> = flatbuferl:get(NewCtx, [content]),
 
-        Parent ! {result, HeapBytes, LargeBinsBefore, LargeBinsAfter,
-                  byte_size(NewBuffer), FirstByte}
+        Parent !
+            {result, HeapBytes, LargeBinsBefore, LargeBinsAfter, byte_size(NewBuffer), FirstByte}
     end),
 
     receive
@@ -611,7 +611,8 @@ flatc_scalar_update_test() ->
     TmpBin = "/tmp/flatbuferl_update_test.bin",
     TmpJson = "/tmp/flatbuferl_update_test.json",
 
-    SchemaStr = "table Monster { name: string; hp: int = 100; level: ubyte = 1; }\nroot_type Monster;\n",
+    SchemaStr =
+        "table Monster { name: string; hp: int = 100; level: ubyte = 1; }\nroot_type Monster;\n",
     ok = file:write_file(TmpSchema, SchemaStr),
 
     {ok, Schema} = flatbuferl:parse_schema(SchemaStr),
@@ -624,8 +625,10 @@ flatc_scalar_update_test() ->
     ok = file:write_file(TmpBin, UpdatedBuffer),
 
     %% Use flatc to decode (--raw-binary for schemas without file_identifier)
-    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
-                        [TmpSchema, TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+        [TmpSchema, TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 
@@ -660,8 +663,10 @@ flatc_string_shrink_test() ->
     ok = file:write_file(TmpBin, UpdatedBuffer),
 
     %% Use flatc to decode (--raw-binary for schemas without file_identifier)
-    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
-                        [TmpSchema, TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+        [TmpSchema, TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 
@@ -695,8 +700,10 @@ flatc_vector_shrink_test() ->
     ok = file:write_file(TmpBin, UpdatedBuffer),
 
     %% Use flatc to decode (--raw-binary for schemas without file_identifier)
-    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
-                        [TmpSchema, TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+        [TmpSchema, TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 
@@ -730,8 +737,10 @@ flatc_same_size_string_test() ->
     ok = file:write_file(TmpBin, UpdatedBuffer),
 
     %% Use flatc to decode (--raw-binary for schemas without file_identifier)
-    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
-                        [TmpSchema, TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+        [TmpSchema, TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 
@@ -752,7 +761,8 @@ flatc_mixed_update_test() ->
     TmpBin = "/tmp/flatbuferl_mixed_test.bin",
     TmpJson = "/tmp/flatbuferl_mixed_test.json",
 
-    SchemaStr = "table Monster { name: string; hp: int = 100; level: ubyte; }\nroot_type Monster;\n",
+    SchemaStr =
+        "table Monster { name: string; hp: int = 100; level: ubyte; }\nroot_type Monster;\n",
     ok = file:write_file(TmpSchema, SchemaStr),
 
     {ok, Schema} = flatbuferl:parse_schema(SchemaStr),
@@ -765,8 +775,10 @@ flatc_mixed_update_test() ->
     ok = file:write_file(TmpBin, UpdatedBuffer),
 
     %% Use flatc to decode (--raw-binary for schemas without file_identifier)
-    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
-                        [TmpSchema, TmpBin]),
+    Cmd = io_lib:format(
+        "flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+        [TmpSchema, TmpBin]
+    ),
     Result = os:cmd(lists:flatten(Cmd)),
     ?assertEqual("", Result),
 

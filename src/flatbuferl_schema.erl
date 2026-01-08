@@ -162,7 +162,8 @@ optimize_field({Name, Type, Attrs}, Defs) ->
         default => extract_default(Type),
         required => maps:get(required, Attrs, false),
         deprecated => maps:get(deprecated, Attrs, false),
-        inline_size => field_inline_size(NormalizedType, Defs)
+        inline_size => field_inline_size(NormalizedType, Defs),
+        is_scalar => is_scalar_type(NormalizedType, Defs)
     };
 optimize_field({Name, Type}, Defs) ->
     NormalizedType = normalize_type(Type),
@@ -173,32 +174,87 @@ optimize_field({Name, Type}, Defs) ->
         default => extract_default(Type),
         required => false,
         deprecated => false,
-        inline_size => field_inline_size(NormalizedType, Defs)
+        inline_size => field_inline_size(NormalizedType, Defs),
+        is_scalar => is_scalar_type(NormalizedType, Defs)
     }.
 
+%% Determine if a type is scalar (stored inline) vs reference (stored via offset)
+%% Scalars: primitives, enums, structs, fixed arrays, union type discriminator
+%% References: strings, vectors, union values
+is_scalar_type(string, _Defs) ->
+    false;
+is_scalar_type({vector, _}, _Defs) ->
+    false;
+is_scalar_type({union_value, _}, _Defs) ->
+    false;
+is_scalar_type({union_type, _}, _Defs) ->
+    true;
+is_scalar_type({struct, _}, _Defs) ->
+    true;
+is_scalar_type({array, _, _}, _Defs) ->
+    true;
+is_scalar_type({enum, _}, _Defs) ->
+    true;
+is_scalar_type({enum, _, _}, _Defs) ->
+    true;
+is_scalar_type(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        {struct, _} -> true;
+        {{enum, _}, _} -> true;
+        {union, _} -> false;
+        {table, _} -> false;
+        % primitive types
+        undefined -> true
+    end;
+is_scalar_type(_, _Defs) ->
+    false.
+
 %% Normalize type: strip default value wrapper, but preserve type constructors
-normalize_type({Type, _Default}) when is_atom(Type),
-    Type /= vector, Type /= enum, Type /= struct,
-    Type /= array, Type /= union_type, Type /= union_value ->
+normalize_type({Type, _Default}) when
+    is_atom(Type),
+    Type /= vector,
+    Type /= enum,
+    Type /= struct,
+    Type /= array,
+    Type /= union_type,
+    Type /= union_value
+->
     Type;
-normalize_type(Type) -> Type.
+normalize_type(Type) ->
+    Type.
 
 %% Extract default value from type, but not from type constructors
-extract_default({Type, D}) when is_atom(Type), (is_number(D) orelse is_boolean(D) orelse is_atom(D)),
-    Type /= vector, Type /= enum, Type /= struct,
-    Type /= array, Type /= union_type, Type /= union_value ->
+extract_default({Type, D}) when
+    is_atom(Type),
+    (is_number(D) orelse is_boolean(D) orelse is_atom(D)),
+    Type /= vector,
+    Type /= enum,
+    Type /= struct,
+    Type /= array,
+    Type /= union_type,
+    Type /= union_value
+->
     D;
-extract_default(_) -> undefined.
+extract_default(_) ->
+    undefined.
 
 %% Size of field as stored inline in table (refs are 4-byte uoffsets)
-field_inline_size(string, _Defs) -> 4;
-field_inline_size({vector, _}, _Defs) -> 4;
-field_inline_size({union_value, _}, _Defs) -> 4;
-field_inline_size({union_type, _}, _Defs) -> 1;
-field_inline_size({struct, Fields}, Defs) -> calc_struct_size(Fields, Defs);
-field_inline_size({array, ElemType, Count}, Defs) -> type_size(ElemType, Defs) * Count;
-field_inline_size({enum, Base}, Defs) -> type_size(Base, Defs);
-field_inline_size({enum, Base, _Values}, Defs) -> type_size(Base, Defs);
+field_inline_size(string, _Defs) ->
+    4;
+field_inline_size({vector, _}, _Defs) ->
+    4;
+field_inline_size({union_value, _}, _Defs) ->
+    4;
+field_inline_size({union_type, _}, _Defs) ->
+    1;
+field_inline_size({struct, Fields}, Defs) ->
+    calc_struct_size(Fields, Defs);
+field_inline_size({array, ElemType, Count}, Defs) ->
+    type_size(ElemType, Defs) * Count;
+field_inline_size({enum, Base}, Defs) ->
+    type_size(Base, Defs);
+field_inline_size({enum, Base, _Values}, Defs) ->
+    type_size(Base, Defs);
 field_inline_size(Type, Defs) when is_atom(Type) ->
     %% Check if it's a user-defined type
     case maps:get(Type, Defs, undefined) of
@@ -206,7 +262,8 @@ field_inline_size(Type, Defs) when is_atom(Type) ->
         {{enum, Base}, _Members} -> type_size(Base, Defs);
         _ -> type_size(Type, Defs)
     end;
-field_inline_size(_, _Defs) -> 4.
+field_inline_size(_, _Defs) ->
+    4.
 
 %% Type sizes
 type_size(bool, _) -> 1;
@@ -301,7 +358,9 @@ normalize_field({Name, Type, Attrs}) -> {Name, Type, Attrs}.
 normalize_enum_defaults(Fields, Defs) ->
     lists:map(fun(Field) -> normalize_enum_default(Field, Defs) end, Fields).
 
-normalize_enum_default({Name, {TypeName, Default}, Attrs}, Defs) when is_binary(Default), is_atom(TypeName) ->
+normalize_enum_default({Name, {TypeName, Default}, Attrs}, Defs) when
+    is_binary(Default), is_atom(TypeName)
+->
     %% 3-tuple with attrs: check if TypeName refers to an enum
     case maps:get(TypeName, Defs, undefined) of
         {{enum, _BaseType}, _Members} ->
@@ -311,7 +370,9 @@ normalize_enum_default({Name, {TypeName, Default}, Attrs}, Defs) when is_binary(
             %% Not an enum, keep as-is (e.g. string default)
             {Name, {TypeName, Default}, Attrs}
     end;
-normalize_enum_default({Name, {TypeName, Default}}, Defs) when is_binary(Default), is_atom(TypeName) ->
+normalize_enum_default({Name, {TypeName, Default}}, Defs) when
+    is_binary(Default), is_atom(TypeName)
+->
     %% 2-tuple (no attrs): check if TypeName refers to an enum
     case maps:get(TypeName, Defs, undefined) of
         {{enum, _BaseType}, _Members} ->
@@ -356,17 +417,16 @@ assign_field_ids(Fields) ->
     ),
     Processed.
 
-get_explicit_id(#{id := Id}) -> Id;
+get_explicit_id(#{id := Id}) ->
+    Id;
 get_explicit_id({_Name, _Type, Attrs}) when is_map(Attrs) ->
     maps:get(id, Attrs, undefined);
 get_explicit_id({_Name, _Type}) ->
     undefined.
 
 set_field_id(#{} = Map, Id) -> Map#{id => Id};
-set_field_id({Name, Type, Attrs}, Id) ->
-    {Name, Type, Attrs#{id => Id}};
-set_field_id({Name, Type}, Id) ->
-    {Name, Type, #{id => Id}}.
+set_field_id({Name, Type, Attrs}, Id) -> {Name, Type, Attrs#{id => Id}};
+set_field_id({Name, Type}, Id) -> {Name, Type, #{id => Id}}.
 
 find_next_id(Candidate, ExplicitIds) ->
     case sets:is_element(Candidate, ExplicitIds) of

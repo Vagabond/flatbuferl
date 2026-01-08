@@ -15,10 +15,18 @@ field(Name, Type, Attrs) ->
         inline_size => maps:get(inline_size, Attrs, type_size(NormType))
     }.
 
-normalize_type({T, _Default}) when is_atom(T),
-    T /= vector, T /= enum, T /= struct, T /= array, T /= union_type, T /= union_value ->
+normalize_type({T, _Default}) when
+    is_atom(T),
+    T /= vector,
+    T /= enum,
+    T /= struct,
+    T /= array,
+    T /= union_type,
+    T /= union_value
+->
     T;
-normalize_type(T) -> T.
+normalize_type(T) ->
+    T.
 
 extract_default({_, Default}) when is_number(Default); is_boolean(Default) -> Default;
 extract_default(bool) -> false;
@@ -283,7 +291,8 @@ struct_and_scalar_test() ->
     Schema = {
         #{
             'Vec2' => {struct, [{x, float}, {y, float}]},
-            test => {table, [field(pos, 'Vec2', #{inline_size => 8}), field(name, string, #{id => 1})]}
+            test =>
+                {table, [field(pos, 'Vec2', #{inline_size => 8}), field(name, string, #{id => 1})]}
         },
         #{root_type => test}
     },

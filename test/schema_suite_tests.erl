@@ -15,10 +15,18 @@ field(Name, Type, Attrs) ->
         inline_size => maps:get(inline_size, Attrs, type_size(NormType))
     }.
 
-normalize_type({T, _Default}) when is_atom(T),
-    T /= vector, T /= enum, T /= struct, T /= array, T /= union_type, T /= union_value ->
+normalize_type({T, _Default}) when
+    is_atom(T),
+    T /= vector,
+    T /= enum,
+    T /= struct,
+    T /= array,
+    T /= union_type,
+    T /= union_value
+->
     T;
-normalize_type(T) -> T.
+normalize_type(T) ->
+    T.
 
 extract_default({_, Default}) when is_number(Default); is_boolean(Default) -> Default;
 extract_default(bool) -> false;
@@ -819,9 +827,11 @@ fixed_array_test_() ->
             ?assert(maps:is_key('ArrayTable', Defs)),
             {table, Fields} = maps:get('ArrayTable', Defs),
             %% Fields are now maps with precomputed values
-            [#{name := floats, type := {array, float, 3}},
-             #{name := ints, type := {array, int, 4}},
-             #{name := bytes, type := {array, byte, 2}}] = Fields
+            [
+                #{name := floats, type := {array, float, 3}},
+                #{name := ints, type := {array, int, 4}},
+                #{name := bytes, type := {array, byte, 2}}
+            ] = Fields
         end},
         {"array encode/decode roundtrip", fun() ->
             {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
