@@ -4,6 +4,8 @@
 %% falling back to full re-encoding when necessary.
 -module(flatbuferl_update).
 
+-include("flatbuferl_records.hrl").
+
 -export([preflight/2, update/2]).
 
 %% @doc Update fields in a FlatBuffer.
@@ -327,7 +329,7 @@ traverse_for_update([FieldName | Rest], Buffer, Defs, TableType, TableRef) ->
             end;
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case maps:get(NestedType, Defs, undefined) of
-                {table, _, _, _, _} ->
+                #table_def{} ->
                     case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                         {ok, NestedRef} ->
                             traverse_for_update(Rest, Buffer, Defs, NestedType, NestedRef);
@@ -371,7 +373,7 @@ traverse_vector_for_update(TableRef, FieldId, ElemType, [Index | Rest], Buffer, 
                     case ElemType of
                         Type when is_atom(Type) ->
                             case maps:get(Type, Defs, undefined) of
-                                {table, _, _, _, _} ->
+                                #table_def{} ->
                                     %% Vector of tables - read table ref and continue
                                     ElemOffset = Start + (ActualIndex * 4),
                                     <<_:ElemOffset/binary, RelOffset:32/little-unsigned, _/binary>> =
@@ -535,14 +537,16 @@ find_struct_field([#{name := FieldName, type := Type, offset := FieldOffset} | R
 %% Raw tuple format
 find_struct_field([{FieldName, Type} | Rest], Name, Offset) ->
     case FieldName of
-        Name -> {ok, Offset, Type};
+        Name ->
+            {ok, Offset, Type};
         _ ->
             Size = type_size(Type),
             find_struct_field(Rest, Name, Offset + Size)
     end;
 find_struct_field([{FieldName, Type, _Attrs} | Rest], Name, Offset) ->
     case FieldName of
-        Name -> {ok, Offset, Type};
+        Name ->
+            {ok, Offset, Type};
         _ ->
             Size = type_size(Type),
             find_struct_field(Rest, Name, Offset + Size)
@@ -564,12 +568,12 @@ lookup_field_offset(TableRef, Buffer, Defs, TableType, FieldName) ->
     end.
 
 lookup_field_info(Defs, TableType, FieldName) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     find_field(Fields, FieldName).
 
 find_field([], _Name) ->
     error;
-find_field([#{name := Name, id := FieldId, type := Type, default := Default} | _], Name) ->
+find_field([#field_def{name = Name, id = FieldId, type = Type, default = Default} | _], Name) ->
     {ok, FieldId, Type, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).

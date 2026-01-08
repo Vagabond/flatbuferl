@@ -147,65 +147,75 @@ read_value(Buffer, Pos, bool) ->
 read_value(Buffer, Pos, int8) ->
     <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, byte) ->  %% alias
+%% alias
+read_value(Buffer, Pos, byte) ->
     <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint8) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, ubyte) ->  %% alias
+%% alias
+read_value(Buffer, Pos, ubyte) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% 16-bit integers
 read_value(Buffer, Pos, int16) ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, short) ->  %% alias
+%% alias
+read_value(Buffer, Pos, short) ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint16) ->
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, ushort) ->  %% alias
+%% alias
+read_value(Buffer, Pos, ushort) ->
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% 32-bit integers
 read_value(Buffer, Pos, int32) ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, int) ->  %% alias
+%% alias
+read_value(Buffer, Pos, int) ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint32) ->
     <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, uint) ->  %% alias
+%% alias
+read_value(Buffer, Pos, uint) ->
     <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% 64-bit integers
 read_value(Buffer, Pos, int64) ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, long) ->  %% alias
+%% alias
+read_value(Buffer, Pos, long) ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint64) ->
     <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, ulong) ->  %% alias
+%% alias
+read_value(Buffer, Pos, ulong) ->
     <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
 %% Floating point
 read_value(Buffer, Pos, float32) ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, float) ->  %% alias
+%% alias
+read_value(Buffer, Pos, float) ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
-read_value(Buffer, Pos, double) ->  %% alias
+%% alias
+read_value(Buffer, Pos, double) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
 %% String (offset to length-prefixed UTF-8)

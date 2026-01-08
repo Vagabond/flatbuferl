@@ -1,21 +1,23 @@
 -module(builder_tests).
 -include_lib("eunit/include/eunit.hrl").
+-include("flatbuferl_records.hrl").
 
 %% Helper to create properly partitioned table definition
 table(Fields) ->
     SortedFields = lists:sort(
-        fun(#{layout_key := A}, #{layout_key := B}) -> A > B end,
+        fun(#field_def{layout_key = A}, #field_def{layout_key = B}) -> A > B end,
         Fields
     ),
-    {Scalars, Refs} = lists:partition(fun(#{is_scalar := S}) -> S end, SortedFields),
+    {Scalars, Refs} = lists:partition(fun(#field_def{is_scalar = S}) -> S end, SortedFields),
     AllFields = Scalars ++ Refs,
-    MaxId = case AllFields of
-        [] -> -1;
-        _ -> lists:max([maps:get(id, F) || F <- AllFields])
-    end,
-    {table, Scalars, Refs, AllFields, MaxId}.
+    MaxId =
+        case AllFields of
+            [] -> -1;
+            _ -> lists:max([F#field_def.id || F <- AllFields])
+        end,
+    #table_def{scalars = Scalars, refs = Refs, all_fields = AllFields, max_id = MaxId}.
 
-%% Helper to create field maps in new format
+%% Helper to create field records in new format
 field(Name, Type) -> field(Name, Type, #{}).
 field(Name, Type, Attrs) ->
     NormType = normalize_type(Type),
@@ -23,17 +25,17 @@ field(Name, Type, Attrs) ->
     ResolvedType = resolve_type(NormType, Defs),
     Id = maps:get(id, Attrs, 0),
     InlineSize = maps:get(inline_size, Attrs, type_size(NormType)),
-    #{
-        name => Name,
-        id => Id,
-        type => NormType,
-        default => extract_default(Type),
-        required => maps:get(required, Attrs, false),
-        deprecated => maps:get(deprecated, Attrs, false),
-        inline_size => InlineSize,
-        is_scalar => is_scalar_type(ResolvedType, Defs),
-        resolved_type => ResolvedType,
-        layout_key => InlineSize * 65536 + Id
+    #field_def{
+        name = Name,
+        id = Id,
+        type = NormType,
+        default = extract_default(Type),
+        required = maps:get(required, Attrs, false),
+        deprecated = maps:get(deprecated, Attrs, false),
+        inline_size = InlineSize,
+        is_scalar = is_scalar_type(ResolvedType, Defs),
+        resolved_type = ResolvedType,
+        layout_key = InlineSize * 65536 + Id
     }.
 
 is_scalar_type(string, _) ->
@@ -42,12 +44,12 @@ is_scalar_type({vector, _}, _) ->
     false;
 is_scalar_type({union_value, _}, _) ->
     false;
-is_scalar_type({table, _, _, _, _}, _) ->
+is_scalar_type(#table_def{}, _) ->
     false;
 is_scalar_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         % Table reference is not scalar
-        {table, _, _, _, _} -> false;
+        #table_def{} -> false;
         _ -> true
     end;
 is_scalar_type(_, _) ->
@@ -57,7 +59,7 @@ resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {struct, Fields} -> {struct, Fields};
         % Keep table types as atoms
-        {table, _, _, _, _} -> Type;
+        #table_def{} -> Type;
         {{enum, Base}, Values} -> {enum, Base, Values};
         _ -> Type
     end;

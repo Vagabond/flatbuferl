@@ -13,7 +13,8 @@
     deprecated = false :: boolean(),
     inline_size :: non_neg_integer(),
     is_scalar :: boolean(),
-    layout_key :: non_neg_integer()  %% size * 65536 + id for sorting
+    %% size * 65536 + id for sorting
+    layout_key :: non_neg_integer()
 }).
 
 %% Precomputed encoding layout for "all fields present" case

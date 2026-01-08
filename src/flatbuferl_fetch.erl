@@ -152,6 +152,8 @@
 %% @end
 -module(flatbuferl_fetch).
 
+-include("flatbuferl_records.hrl").
+
 -export([fetch/2]).
 
 -type path() :: [path_element()].
@@ -251,7 +253,7 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
             traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer);
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case maps:get(NestedType, Defs, undefined) of
-                {table, _, _, _, _} ->
+                #table_def{} ->
                     case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                         {ok, NestedTableRef} ->
                             do_fetch(NestedTableRef, Defs, NestedType, Rest, Buffer);
@@ -577,7 +579,7 @@ wildcard_over_vector(VecInfo, Length, ElemType, Defs, Rest, Buffer, Idx, Acc) ->
 continue_from_element(Elem, ElemType, Defs, [], Buffer) when is_atom(ElemType) ->
     %% Check if it's a table type
     case maps:get(ElemType, Defs, undefined) of
-        {table, _, _, _, _} ->
+        #table_def{} ->
             to_map(Elem, Defs, ElemType, Buffer);
         _ ->
             %% Scalar type (string, int, etc.)
@@ -589,7 +591,7 @@ continue_from_element(Elem, _ElemType, _Defs, [], _Buffer) ->
 continue_from_element(Elem, ElemType, Defs, Rest, Buffer) when is_atom(ElemType) ->
     %% Check if it's a table type
     case maps:get(ElemType, Defs, undefined) of
-        {table, _, _, _, _} ->
+        #table_def{} ->
             do_fetch(Elem, Defs, ElemType, Rest, Buffer);
         _ ->
             %% Scalar can't be traversed
@@ -757,12 +759,12 @@ extract_one(SubPath, TableRef, Defs, TableType, Buffer, _Context) when is_list(S
 
 %% Field lookup helper
 lookup_field(Defs, TableType, FieldName) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     find_field(Fields, FieldName).
 
 find_field([], _Name) ->
     error;
-find_field([#{name := Name, id := FieldId, type := Type, default := Default} | _], Name) ->
+find_field([#field_def{name = Name, id = FieldId, type = Type, default = Default} | _], Name) ->
     {ok, FieldId, Type, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
@@ -770,12 +772,12 @@ find_field([_ | Rest], Name) ->
 %% Check if a type has a given field
 type_has_field(TypeName, FieldName, Defs) ->
     case maps:get(TypeName, Defs, undefined) of
-        {table, _, _, Fields, _} -> field_exists(Fields, FieldName);
+        #table_def{all_fields = Fields} -> field_exists(Fields, FieldName);
         _ -> false
     end.
 
 field_exists([], _Name) -> false;
-field_exists([#{name := Name} | _], Name) -> true;
+field_exists([#field_def{name = Name} | _], Name) -> true;
 field_exists([_ | Rest], Name) -> field_exists(Rest, Name).
 
 %% Check if any union member has a given field
@@ -796,9 +798,9 @@ resolve_type(Type, _Defs) ->
 
 %% Convert table refs to maps
 to_map(TableRef, Defs, TableType, Buffer) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     Map = lists:foldl(
-        fun(#{name := FieldName, id := FieldId, type := Type, default := Default}, Acc) ->
+        fun(#field_def{name = FieldName, id = FieldId, type = Type, default = Default}, Acc) ->
             ResolvedType = resolve_type(Type, Defs),
             case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                 {ok, Value} ->
@@ -821,7 +823,7 @@ convert_value({table, _, _} = TableRef, Type, Defs, Buffer) when is_atom(Type) -
     end;
 convert_value(Values, {vector, ElemType}, Defs, Buffer) when is_list(Values), is_atom(ElemType) ->
     case maps:get(ElemType, Defs, undefined) of
-        {table, _, _, _, _} ->
+        #table_def{} ->
             [
                 case to_map(V, Defs, ElemType, Buffer) of
                     {ok, M} -> M

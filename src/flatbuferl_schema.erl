@@ -2,9 +2,13 @@
 -module(flatbuferl_schema).
 -export([parse/1, parse_file/1, process/1, validate/3]).
 
+-include("flatbuferl_records.hrl").
+
 -type type_name() :: atom().
 -type field_def() :: {atom(), atom() | tuple()} | {atom(), atom() | tuple(), map()}.
--type table_def() :: {table, Scalars :: [map()], Refs :: [map()], AllFields :: [map()], MaxId :: integer()}.
+%% Table can be old tuple format or new record format
+-type table_def() ::
+    #table_def{} | {table, [#field_def{}], [#field_def{}], [#field_def{}], integer()}.
 -type enum_def() :: {{enum, atom()}, [atom()], #{atom() => non_neg_integer()}}.
 -type union_def() :: {union, [atom()], #{atom() => pos_integer()}}.
 -type definitions() :: #{type_name() => table_def() | enum_def() | union_def()}.
@@ -203,63 +207,169 @@ process_def({table, Fields}, Defs) ->
     NormalizedFields = normalize_enum_defaults(ExpandedFields, Defs),
     %% Assign field IDs
     FieldsWithIds = assign_field_ids(NormalizedFields),
-    %% Convert to optimized map format with precomputed values
-    OptimizedFields = [optimize_field(F, Defs) || F <- FieldsWithIds],
+    %% Convert to #field_def{} records with precomputed values
+    FieldDefs = [optimize_field_to_record(F, Defs) || F <- FieldsWithIds],
     %% Pre-sort fields by layout order (size desc, id desc) for encoding
     SortedFields = lists:sort(
-        fun(#{layout_key := A}, #{layout_key := B}) -> A > B end,
-        OptimizedFields
+        fun(#field_def{layout_key = A}, #field_def{layout_key = B}) -> A > B end,
+        FieldDefs
     ),
     %% Pre-partition into scalars and refs (eliminates runtime partitioning)
-    %% Also precompute AllFields to avoid ++ at decode time
-    {Scalars, Refs} = lists:partition(fun(#{is_scalar := S}) -> S end, SortedFields),
+    {Scalars, Refs} = lists:partition(fun(#field_def{is_scalar = S}) -> S end, SortedFields),
     AllFields = Scalars ++ Refs,
-    %% Precompute max field id to avoid lists:max at encode time
-    MaxId = case AllFields of
-        [] -> -1;
-        _ -> lists:max([maps:get(id, F) || F <- AllFields])
-    end,
-    {table, Scalars, Refs, AllFields, MaxId};
+    %% Precompute max field id
+    MaxId =
+        case AllFields of
+            [] -> -1;
+            _ -> lists:max([F#field_def.id || F <- AllFields])
+        end,
+    %% Build field name -> field_def map for O(1) lookup
+    FieldMap = maps:from_list([{F#field_def.name, F} || F <- AllFields]),
+    %% Precompute encoding layout for fast encoding
+    EncodeLayout = precompute_encode_layout(Scalars, Refs, MaxId),
+    #table_def{
+        scalars = Scalars,
+        refs = Refs,
+        all_fields = AllFields,
+        field_map = FieldMap,
+        encode_layout = EncodeLayout,
+        max_id = MaxId
+    };
 process_def(Other, _Defs) ->
     %% Enums, unions, structs already processed in phase 1
     Other.
 
-%% Convert field tuple to optimized map with precomputed values
-%% Pass through already-optimized map fields (from included schemas)
-optimize_field(#{name := _} = Map, _Defs) ->
-    Map;
-optimize_field({Name, Type, Attrs}, Defs) ->
+%% Convert field tuple to #field_def{} record with precomputed values
+optimize_field_to_record(#field_def{} = F, _Defs) ->
+    F;
+optimize_field_to_record({Name, Type, Attrs}, Defs) ->
     NormalizedType = normalize_type(Type),
     Id = maps:get(id, Attrs, 0),
     InlineSize = field_inline_size(NormalizedType, Defs),
-    #{
-        name => Name,
-        id => Id,
-        type => NormalizedType,
-        default => extract_default(Type),
-        required => maps:get(required, Attrs, false),
-        deprecated => maps:get(deprecated, Attrs, false),
-        inline_size => InlineSize,
-        is_scalar => is_scalar_type(NormalizedType, Defs),
-        resolved_type => resolve_type(NormalizedType, Defs),
-        %% Layout key for fast sorting: size * 65536 + id (both descending)
-        layout_key => InlineSize * 65536 + Id
+    #field_def{
+        name = Name,
+        id = Id,
+        type = NormalizedType,
+        default = extract_default(Type),
+        required = maps:get(required, Attrs, false),
+        deprecated = maps:get(deprecated, Attrs, false),
+        inline_size = InlineSize,
+        is_scalar = is_scalar_type(NormalizedType, Defs),
+        resolved_type = resolve_type(NormalizedType, Defs),
+        layout_key = InlineSize * 65536 + Id
     };
-optimize_field({Name, Type}, Defs) ->
+optimize_field_to_record({Name, Type}, Defs) ->
     NormalizedType = normalize_type(Type),
     InlineSize = field_inline_size(NormalizedType, Defs),
-    #{
-        name => Name,
-        id => 0,
-        type => NormalizedType,
-        default => extract_default(Type),
-        required => false,
-        deprecated => false,
-        inline_size => InlineSize,
-        is_scalar => is_scalar_type(NormalizedType, Defs),
-        resolved_type => resolve_type(NormalizedType, Defs),
-        layout_key => InlineSize * 65536
+    #field_def{
+        name = Name,
+        id = 0,
+        type = NormalizedType,
+        default = extract_default(Type),
+        required = false,
+        deprecated = false,
+        inline_size = InlineSize,
+        is_scalar = is_scalar_type(NormalizedType, Defs),
+        resolved_type = resolve_type(NormalizedType, Defs),
+        layout_key = InlineSize * 65536
     }.
+
+%% Precompute encoding layout for "all fields present" case
+%% This allows O(1) encoding when all fields have values
+precompute_encode_layout(Scalars, Refs, MaxId) ->
+    %% Merge and sort by layout_key (size desc, id desc) for backward placement
+    AllFields = lists:sort(
+        fun(#field_def{layout_key = A}, #field_def{layout_key = B}) -> A > B end,
+        Scalars ++ Refs
+    ),
+    %% Sort refs in flatc order (done once at schema time, not per encode!)
+    RefsInFlatcOrder = sort_refs_flatc_order(Refs),
+    %% Calculate table layout for all fields present
+    {Slots, TableSize} = calc_all_present_layout(AllFields),
+    %% Build vtable bytes
+    VTableSize = 4 + ((MaxId + 1) * 2),
+    VTable = build_precomputed_vtable(MaxId, Slots, TableSize),
+    %% Collect all field IDs for quick "all present" check
+    AllFieldIds = [F#field_def.id || F <- AllFields],
+    #encode_layout{
+        vtable = VTable,
+        vtable_size = VTableSize,
+        table_size = TableSize,
+        slots = Slots,
+        scalars_order = Scalars,
+        refs_order = RefsInFlatcOrder,
+        all_field_ids = AllFieldIds,
+        max_id = MaxId
+    }.
+
+%% Sort refs in flatc order (precomputed at schema time)
+sort_refs_flatc_order([]) ->
+    [];
+sort_refs_flatc_order(Refs) ->
+    {ZeroRefs, NonZeroRefs} = lists:partition(
+        fun(#field_def{id = Id}) -> Id == 0 end, Refs
+    ),
+    case ZeroRefs of
+        [] ->
+            %% No id=0 ref: descending order
+            lists:sort(
+                fun(#field_def{id = A}, #field_def{id = B}) -> A >= B end,
+                NonZeroRefs
+            );
+        _ ->
+            %% Has id=0 ref: ascending with 0 at end
+            Sorted = lists:sort(
+                fun(#field_def{id = A}, #field_def{id = B}) -> A =< B end,
+                NonZeroRefs
+            ),
+            Sorted ++ ZeroRefs
+    end.
+
+%% Calculate slot offsets for all fields present
+%% Returns {SlotsMap, TableSize} where SlotsMap is #{id => {offset, size}}
+calc_all_present_layout(AllFields) ->
+    %% Fields are already sorted by layout_key (size desc, id desc)
+    %% Place them backward from end of table with alignment
+    RawSize = lists:sum([F#field_def.inline_size || F <- AllFields]),
+    TableDataSize = align_offset(RawSize, 4),
+    %% 4 for soffset
+    BaseTableSize = 4 + TableDataSize,
+    %% Place fields backward with proper alignment, building slot map
+    {Slots, _} = lists:foldl(
+        fun(#field_def{id = Id, inline_size = Size}, {Acc, EndPos}) ->
+            Align = min(Size, 4),
+            StartPos = EndPos - Size,
+            AlignedStart = align_down(StartPos, Align),
+            {Acc#{Id => {AlignedStart, Size}}, AlignedStart}
+        end,
+        {#{}, BaseTableSize},
+        AllFields
+    ),
+    {Slots, BaseTableSize}.
+
+%% Align offset DOWN to alignment boundary
+align_down(Off, Align) ->
+    Off - (Off rem Align).
+
+%% Build precomputed vtable bytes
+build_precomputed_vtable(-1, _Slots, TableSize) ->
+    %% Empty table - use list format to match build_vtable_from_fields
+    [uint16_bytes(4), uint16_bytes(TableSize)];
+build_precomputed_vtable(MaxId, Slots, TableSize) ->
+    NumSlots = MaxId + 1,
+    VTableSize = 4 + (NumSlots * 2),
+    SlotsList = [
+        case maps:get(Id, Slots, undefined) of
+            undefined -> uint16_bytes(0);
+            {Offset, _Size} -> uint16_bytes(Offset)
+        end
+     || Id <- lists:seq(0, MaxId)
+    ],
+    [uint16_bytes(VTableSize), uint16_bytes(TableSize) | SlotsList].
+
+%% Convert uint16 to little-endian 2-byte list (same as builder's uint16_bytes)
+uint16_bytes(X) when X < 256 -> [X, 0];
+uint16_bytes(V) -> [V band 16#FF, (V bsr 8) band 16#FF].
 
 %% Determine if a type is scalar (stored inline) vs reference (stored via offset)
 %% Scalars: primitives, enums, structs, fixed arrays, union type discriminator
@@ -285,7 +395,7 @@ is_scalar_type(Type, Defs) when is_atom(Type) ->
         {struct, _} -> true;
         {{enum, _}, _, _} -> true;
         {union, _, _} -> false;
-        {table, _, _, _, _} -> false;
+        #table_def{} -> false;
         %% Unprocessed table format (during phase 2 processing)
         {table, _} -> false;
         % primitive types
@@ -317,7 +427,7 @@ resolve_type(Type, Defs) when is_atom(Type) ->
         {{enum, Base}, _Values, IndexMap} -> {enum, normalize_scalar_type(Base), IndexMap};
         {struct, Fields} -> {struct, Fields};
         % Keep table types as atoms for Defs lookup (both processed and unprocessed)
-        {table, _, _, _, _} -> Type;
+        #table_def{} -> Type;
         {table, _} -> Type;
         _ -> normalize_scalar_type(Type)
     end;
@@ -418,7 +528,7 @@ type_size(_, _) -> 4.
 calc_struct_size(Fields, Defs) ->
     {_, EndOffset, MaxAlign} = lists:foldl(
         fun
-            (#{type := Type, offset := Offset, size := Size}, {_, _, MaxAlignAcc}) ->
+            (#{type := _Type, offset := Offset, size := Size}, {_, _, MaxAlignAcc}) ->
                 %% Enriched field - use precomputed offset and size
                 {ok, Offset + Size, max(MaxAlignAcc, Size)};
             ({_Name, Type}, {_, CurOffset, MaxAlignAcc}) ->
@@ -574,7 +684,7 @@ validate(Map, {Defs, SchemaOpts}, Opts) ->
 
 validate_table(Map, TableType, Defs, Opts) when is_map(Map) ->
     case maps:get(TableType, Defs, undefined) of
-        {table, _, _, Fields, _} ->
+        #table_def{all_fields = Fields} ->
             validate_table_fields(Map, Fields, Defs, Opts);
         undefined ->
             [{unknown_type, TableType}]
@@ -631,12 +741,15 @@ validate_field(Map, FieldDef, Defs, Opts) ->
             validate_value(Name, Value, Type, Defs, Opts)
     end.
 
-%% Get field name from either map or tuple format
+%% Get field name from either record, map or tuple format
+get_field_name(#field_def{name = Name}) -> Name;
 get_field_name(#{name := Name}) -> Name;
 get_field_name({Name, _Type}) -> Name;
 get_field_name({Name, _Type, _Attrs}) -> Name.
 
-%% Get field info from either map or tuple format
+%% Get field info from either record, map or tuple format
+get_field_info(#field_def{name = Name, type = Type, required = Required}) ->
+    {Name, Type, Required};
 get_field_info(#{name := Name, type := Type, required := Required}) ->
     {Name, Type, Required};
 get_field_info({Name, Type, Attrs}) ->
@@ -678,7 +791,7 @@ validate_value(Name, Value, Type, Defs, Opts) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, _BaseType}, Members, _IndexMap} ->
             validate_enum(Name, Value, Members);
-        {table, _, _, _, _} ->
+        #table_def{} ->
             case validate_table(Value, Type, Defs, Opts) of
                 [] -> [];
                 Errors -> [{nested_errors, Name, Errors}]

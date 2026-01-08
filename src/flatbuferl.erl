@@ -4,6 +4,8 @@
 %% iolists and decoding returns sub-binaries, both avoiding unnecessary copies.
 -module(flatbuferl).
 
+-include("flatbuferl_records.hrl").
+
 -export([
     parse_schema/1,
     parse_schema_file/1,
@@ -149,17 +151,17 @@ update(Ctx, Changes) ->
     flatbuferl_update:update(Ctx, Changes).
 
 table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
     lists:foldl(
         fun(
-            #{
-                name := FieldName,
-                id := FieldId,
-                type := Type,
-                resolved_type := ResolvedType,
-                default := Default,
-                deprecated := Deprecated
+            #field_def{
+                name = FieldName,
+                id = FieldId,
+                type = Type,
+                resolved_type = ResolvedType,
+                default = Default,
+                deprecated = Deprecated
             },
             Acc
         ) ->
@@ -298,7 +300,7 @@ convert_value(Values, {vector, ElemType}, Defs, Buffer, Opts) when
 ->
     %% Vector of tables - convert each element
     case maps:get(ElemType, Defs, undefined) of
-        {table, _, _, _, _} ->
+        #table_def{} ->
             [table_to_map(V, Defs, ElemType, Buffer, Opts) || V <- Values];
         _ ->
             Values
@@ -319,7 +321,7 @@ get_bytes(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root},
     end.
 
 get_bytes_internal(TableRef, Defs, TableType, [FieldName], Buffer) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, _Type, _Default} ->
             get_field_bytes(TableRef, FieldId, Buffer);
@@ -327,7 +329,7 @@ get_bytes_internal(TableRef, Defs, TableType, [FieldName], Buffer) ->
             error({unknown_field, FieldName})
     end;
 get_bytes_internal(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
@@ -409,7 +411,7 @@ get_internal(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Roo
     get_path(Root, Defs, RootType, Path, Buffer).
 
 get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, Type, Default} ->
             ReaderType = resolve_for_reader(Type, Defs),
@@ -425,7 +427,7 @@ get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
             error({unknown_field, FieldName})
     end;
 get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
-    {table, _, _, Fields, _} = maps:get(TableType, Defs),
+    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     case find_field(Fields, FieldName) of
         {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
@@ -442,7 +444,10 @@ get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
 
 find_field([], _Name) ->
     error;
-find_field([#{name := Name, id := FieldId, resolved_type := ResolvedType, default := Default} | _], Name) ->
+find_field(
+    [#field_def{name = Name, id = FieldId, resolved_type = ResolvedType, default = Default} | _],
+    Name
+) ->
     {ok, FieldId, ResolvedType, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
@@ -490,11 +495,14 @@ convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_
 convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_boolean(Default) ->
     convert_enum_value(Value, TypeName, Defs);
 %% Handle resolved enum type {enum, Base, IndexMap} from resolved_type
-convert_enum_value(Value, {enum, _Base, IndexMap}, _Defs) when is_integer(Value), is_map(IndexMap) ->
+convert_enum_value(Value, {enum, _Base, IndexMap}, _Defs) when
+    is_integer(Value), is_map(IndexMap)
+->
     %% Reverse lookup: find atom name for this integer value
     case [Name || {Name, V} <- maps:to_list(IndexMap), V == Value] of
         [Name] -> Name;
-        [] -> Value  %% Unknown value, return as-is
+        %% Unknown value, return as-is
+        [] -> Value
     end;
 convert_enum_value(Value, TypeName, Defs) when is_atom(TypeName), is_integer(Value) ->
     case maps:get(TypeName, Defs, undefined) of
