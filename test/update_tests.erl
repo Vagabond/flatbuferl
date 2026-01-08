@@ -601,3 +601,184 @@ string_shrink_no_copy_test() ->
     after 5000 ->
         ?assert(false)
     end.
+
+%% =============================================================================
+%% Flatc Compatibility Tests
+%% =============================================================================
+
+flatc_scalar_update_test() ->
+    %% Verify that a partial scalar update produces valid flatc-readable buffer
+    TmpSchema = "/tmp/flatbuferl_update_test.fbs",
+    TmpBin = "/tmp/flatbuferl_update_test.bin",
+    TmpJson = "/tmp/flatbuferl_update_test.json",
+
+    SchemaStr = "table Monster { name: string; hp: int = 100; level: ubyte = 1; }\nroot_type Monster;\n",
+    ok = file:write_file(TmpSchema, SchemaStr),
+
+    {ok, Schema} = flatbuferl:parse_schema(SchemaStr),
+    Data = #{name => <<"Goblin">>, hp => 75, level => 5},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+
+    %% Do partial update of hp
+    UpdatedBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{hp => 999})),
+    ok = file:write_file(TmpBin, UpdatedBuffer),
+
+    %% Use flatc to decode (--raw-binary for schemas without file_identifier)
+    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+                        [TmpSchema, TmpBin]),
+    Result = os:cmd(lists:flatten(Cmd)),
+    ?assertEqual("", Result),
+
+    %% Parse JSON and verify
+    {ok, JsonBin} = file:read_file(TmpJson),
+    Json = json:decode(JsonBin),
+    ?assertEqual(999, maps:get(<<"hp">>, Json)),
+    ?assertEqual(<<"Goblin">>, maps:get(<<"name">>, Json)),
+    ?assertEqual(5, maps:get(<<"level">>, Json)),
+
+    %% Cleanup
+    file:delete(TmpSchema),
+    file:delete(TmpBin),
+    file:delete(TmpJson).
+
+flatc_string_shrink_test() ->
+    %% Verify that a string shrink produces valid flatc-readable buffer
+    TmpSchema = "/tmp/flatbuferl_shrink_test.fbs",
+    TmpBin = "/tmp/flatbuferl_shrink_test.bin",
+    TmpJson = "/tmp/flatbuferl_shrink_test.json",
+
+    SchemaStr = "table Monster { name: string; hp: int = 100; }\nroot_type Monster;\n",
+    ok = file:write_file(TmpSchema, SchemaStr),
+
+    {ok, Schema} = flatbuferl:parse_schema(SchemaStr),
+    Data = #{name => <<"Goblin">>, hp => 75},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+
+    %% Shrink name from "Goblin" (6) to "Orc" (3)
+    UpdatedBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{name => <<"Orc">>})),
+    ok = file:write_file(TmpBin, UpdatedBuffer),
+
+    %% Use flatc to decode (--raw-binary for schemas without file_identifier)
+    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+                        [TmpSchema, TmpBin]),
+    Result = os:cmd(lists:flatten(Cmd)),
+    ?assertEqual("", Result),
+
+    %% Parse JSON and verify
+    {ok, JsonBin} = file:read_file(TmpJson),
+    Json = json:decode(JsonBin),
+    ?assertEqual(<<"Orc">>, maps:get(<<"name">>, Json)),
+    ?assertEqual(75, maps:get(<<"hp">>, Json)),
+
+    %% Cleanup
+    file:delete(TmpSchema),
+    file:delete(TmpBin),
+    file:delete(TmpJson).
+
+flatc_vector_shrink_test() ->
+    %% Verify that a vector shrink produces valid flatc-readable buffer
+    TmpSchema = "/tmp/flatbuferl_vecshrink_test.fbs",
+    TmpBin = "/tmp/flatbuferl_vecshrink_test.bin",
+    TmpJson = "/tmp/flatbuferl_vecshrink_test.json",
+
+    SchemaStr = "table Data { id: int; scores: [int]; }\nroot_type Data;\n",
+    ok = file:write_file(TmpSchema, SchemaStr),
+
+    {ok, Schema} = flatbuferl:parse_schema(SchemaStr),
+    Data = #{id => 42, scores => [10, 20, 30, 40, 50]},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+
+    %% Shrink vector from 5 to 3 elements
+    UpdatedBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{scores => [100, 200, 300]})),
+    ok = file:write_file(TmpBin, UpdatedBuffer),
+
+    %% Use flatc to decode (--raw-binary for schemas without file_identifier)
+    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+                        [TmpSchema, TmpBin]),
+    Result = os:cmd(lists:flatten(Cmd)),
+    ?assertEqual("", Result),
+
+    %% Parse JSON and verify
+    {ok, JsonBin} = file:read_file(TmpJson),
+    Json = json:decode(JsonBin),
+    ?assertEqual(42, maps:get(<<"id">>, Json)),
+    ?assertEqual([100, 200, 300], maps:get(<<"scores">>, Json)),
+
+    %% Cleanup
+    file:delete(TmpSchema),
+    file:delete(TmpBin),
+    file:delete(TmpJson).
+
+flatc_same_size_string_test() ->
+    %% Verify that same-size string replacement is valid per flatc
+    TmpSchema = "/tmp/flatbuferl_samesize_test.fbs",
+    TmpBin = "/tmp/flatbuferl_samesize_test.bin",
+    TmpJson = "/tmp/flatbuferl_samesize_test.json",
+
+    SchemaStr = "table Monster { name: string; hp: int; }\nroot_type Monster;\n",
+    ok = file:write_file(TmpSchema, SchemaStr),
+
+    {ok, Schema} = flatbuferl:parse_schema(SchemaStr),
+    Data = #{name => <<"Goblin">>, hp => 75},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+
+    %% Replace "Goblin" (6) with "Dragon" (6) - same size
+    UpdatedBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{name => <<"Dragon">>})),
+    ok = file:write_file(TmpBin, UpdatedBuffer),
+
+    %% Use flatc to decode (--raw-binary for schemas without file_identifier)
+    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+                        [TmpSchema, TmpBin]),
+    Result = os:cmd(lists:flatten(Cmd)),
+    ?assertEqual("", Result),
+
+    %% Parse JSON and verify
+    {ok, JsonBin} = file:read_file(TmpJson),
+    Json = json:decode(JsonBin),
+    ?assertEqual(<<"Dragon">>, maps:get(<<"name">>, Json)),
+    ?assertEqual(75, maps:get(<<"hp">>, Json)),
+
+    %% Cleanup
+    file:delete(TmpSchema),
+    file:delete(TmpBin),
+    file:delete(TmpJson).
+
+flatc_mixed_update_test() ->
+    %% Verify combined scalar + string shrink update is valid per flatc
+    TmpSchema = "/tmp/flatbuferl_mixed_test.fbs",
+    TmpBin = "/tmp/flatbuferl_mixed_test.bin",
+    TmpJson = "/tmp/flatbuferl_mixed_test.json",
+
+    SchemaStr = "table Monster { name: string; hp: int = 100; level: ubyte; }\nroot_type Monster;\n",
+    ok = file:write_file(TmpSchema, SchemaStr),
+
+    {ok, Schema} = flatbuferl:parse_schema(SchemaStr),
+    Data = #{name => <<"Goblin">>, hp => 75, level => 5},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+
+    %% Update both hp (scalar) and name (shrink)
+    UpdatedBuffer = iolist_to_binary(flatbuferl:update(Ctx, #{hp => 999, name => <<"Orc">>})),
+    ok = file:write_file(TmpBin, UpdatedBuffer),
+
+    %% Use flatc to decode (--raw-binary for schemas without file_identifier)
+    Cmd = io_lib:format("flatc --json --strict-json --raw-binary -o /tmp ~s -- ~s 2>&1",
+                        [TmpSchema, TmpBin]),
+    Result = os:cmd(lists:flatten(Cmd)),
+    ?assertEqual("", Result),
+
+    %% Parse JSON and verify
+    {ok, JsonBin} = file:read_file(TmpJson),
+    Json = json:decode(JsonBin),
+    ?assertEqual(<<"Orc">>, maps:get(<<"name">>, Json)),
+    ?assertEqual(999, maps:get(<<"hp">>, Json)),
+    ?assertEqual(5, maps:get(<<"level">>, Json)),
+
+    %% Cleanup
+    file:delete(TmpSchema),
+    file:delete(TmpBin),
+    file:delete(TmpJson).
