@@ -19,6 +19,33 @@ enum_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("enum Color : byte { Red, Green, Blue }"),
     ?assertEqual({{enum, byte}, ['Red', 'Green', 'Blue']}, maps:get('Color', Defs)).
 
+enum_default_test() ->
+    %% Enum field with default value - default should be atom, not binary
+    Schema = "enum Color : ubyte { Red, Green, Blue }\n"
+             "table Pixel { color: Color = Blue; }\n"
+             "root_type Pixel;\n",
+    {ok, {Defs, _Opts}} = flatbuferl:parse_schema(Schema),
+    {table, Fields} = maps:get('Pixel', Defs),
+    %% Default should be atom 'Blue', not binary <<"Blue">>
+    ?assertMatch([{color, {'Color', 'Blue'}, #{id := 0}}], Fields).
+
+enum_default_roundtrip_test() ->
+    %% Full encode/decode roundtrip with enum default
+    Schema = "enum Color : ubyte { Red, Green, Blue }\n"
+             "table Pixel { x: int; color: Color = Blue; }\n"
+             "root_type Pixel;\n",
+    {ok, S} = flatbuferl:parse_schema(Schema),
+    %% Encode with explicit enum value
+    Data = #{x => 10, color => 'Green'},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, S)),
+    Ctx = flatbuferl:new(Buffer, S),
+    ?assertEqual('Green', flatbuferl:get(Ctx, [color])),
+    %% Encode without color (should use default)
+    Data2 = #{x => 20},
+    Buffer2 = iolist_to_binary(flatbuferl:from_map(Data2, S)),
+    Ctx2 = flatbuferl:new(Buffer2, S),
+    ?assertEqual('Blue', flatbuferl:get(Ctx2, [color])).
+
 union_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("union Animal { Dog, Cat }"),
     ?assertEqual({union, ['Dog', 'Cat']}, maps:get('Animal', Defs)).

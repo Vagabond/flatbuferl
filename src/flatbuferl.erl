@@ -447,7 +447,7 @@ find_field([{Name, Type} | _], Name) ->
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
 
-extract_default({_Type, Default}) when is_number(Default); is_boolean(Default) ->
+extract_default({_Type, Default}) when is_number(Default); is_boolean(Default); is_atom(Default) ->
     Default;
 extract_default(_) ->
     undefined.
@@ -456,6 +456,11 @@ normalize_type({Type, Default}) when is_atom(Type), is_number(Default) ->
     Type;
 normalize_type({Type, Default}) when is_atom(Type), is_boolean(Default) ->
     Type;
+normalize_type({Type, Default}) when is_atom(Type), is_atom(Default),
+    Type /= vector, Type /= enum, Type /= struct,
+    Type /= array, Type /= union_type, Type /= union_value ->
+    %% enum with default value (not a type constructor)
+    Type;
 normalize_type({Type, undefined}) when is_atom(Type) ->
     %% optional scalar
     Type;
@@ -463,6 +468,15 @@ normalize_type(Type) ->
     Type.
 
 %% Resolve type name to reader-compatible type
+%% Handle types with defaults (unwrap first, but not type constructors)
+resolve_for_reader({TypeName, Default}, Defs) when is_atom(TypeName), is_atom(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    resolve_for_reader(TypeName, Defs);
+resolve_for_reader({TypeName, Default}, Defs) when is_atom(TypeName), is_number(Default) ->
+    resolve_for_reader(TypeName, Defs);
+resolve_for_reader({TypeName, Default}, Defs) when is_atom(TypeName), is_boolean(Default) ->
+    resolve_for_reader(TypeName, Defs);
 resolve_for_reader(TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
         {{enum, Base}, _Values} -> {enum, Base};
@@ -472,6 +486,15 @@ resolve_for_reader(Type, _Defs) ->
     Type.
 
 %% Convert integer enum value back to atom
+%% Handle types with defaults (unwrap first, but not type constructors)
+convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_atom(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    convert_enum_value(Value, TypeName, Defs);
+convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_number(Default) ->
+    convert_enum_value(Value, TypeName, Defs);
+convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_boolean(Default) ->
+    convert_enum_value(Value, TypeName, Defs);
 convert_enum_value(Value, TypeName, Defs) when is_atom(TypeName), is_integer(Value) ->
     case maps:get(TypeName, Defs, undefined) of
         {{enum, _Base}, Values} ->

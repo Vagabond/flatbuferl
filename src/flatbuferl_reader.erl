@@ -193,8 +193,13 @@ read_value(Buffer, Pos, {enum, UnderlyingType}) ->
     read_value(Buffer, Pos, UnderlyingType);
 %% Type with default value - extract just the type
 %% Defaults are only for scalar types, matched after enum
+%% Only handles numeric and boolean defaults - atom defaults (enum values)
+%% are handled at a higher level via resolve_for_reader
 read_value(Buffer, Pos, {Type, Default}) when
-    is_atom(Type), is_number(Default);
+    is_atom(Type), is_number(Default)
+->
+    read_value(Buffer, Pos, Type);
+read_value(Buffer, Pos, {Type, Default}) when
     is_atom(Type), is_boolean(Default)
 ->
     read_value(Buffer, Pos, Type);

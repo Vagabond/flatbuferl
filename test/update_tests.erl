@@ -194,14 +194,13 @@ preflight_union_vector_third_element_test() ->
 %% =============================================================================
 
 enum_ctx() ->
-    %% NOTE: Cannot use `color: Color = Red` due to bug - see TODO.md HIGH PRIORITY
     {ok, Schema} = flatbuferl:parse_schema(
         "\n"
         "        enum Color : ubyte { Red, Green, Blue }\n"
         "        table Pixel {\n"
         "            x: int;\n"
         "            y: int;\n"
-        "            color: Color;\n"
+        "            color: Color = Red;\n"
         "        }\n"
         "        root_type Pixel;\n"
         "    "

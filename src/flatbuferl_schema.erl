@@ -139,7 +139,9 @@ process({Defs, Opts}) ->
 process_def({table, Fields}, Defs) ->
     %% Expand union fields into type + value pairs before assigning IDs
     ExpandedFields = expand_union_fields(Fields, Defs),
-    {table, assign_field_ids(ExpandedFields)};
+    %% Fix enum default values (parser stores as binary, need atom)
+    NormalizedFields = normalize_enum_defaults(ExpandedFields, Defs),
+    {table, assign_field_ids(NormalizedFields)};
 process_def(Other, _Defs) ->
     Other.
 
@@ -181,6 +183,33 @@ expand_union_fields(Fields, Defs) ->
 
 normalize_field({Name, Type}) -> {Name, Type, #{}};
 normalize_field({Name, Type, Attrs}) -> {Name, Type, Attrs}.
+
+%% Fix enum default values: parser stores {EnumType, <<"Value">>}, needs {EnumType, 'Value'}
+normalize_enum_defaults(Fields, Defs) ->
+    lists:map(fun(Field) -> normalize_enum_default(Field, Defs) end, Fields).
+
+normalize_enum_default({Name, {TypeName, Default}, Attrs}, Defs) when is_binary(Default), is_atom(TypeName) ->
+    %% 3-tuple with attrs: check if TypeName refers to an enum
+    case maps:get(TypeName, Defs, undefined) of
+        {{enum, _BaseType}, _Members} ->
+            %% Convert binary default to atom
+            {Name, {TypeName, binary_to_atom(Default, utf8)}, Attrs};
+        _ ->
+            %% Not an enum, keep as-is (e.g. string default)
+            {Name, {TypeName, Default}, Attrs}
+    end;
+normalize_enum_default({Name, {TypeName, Default}}, Defs) when is_binary(Default), is_atom(TypeName) ->
+    %% 2-tuple (no attrs): check if TypeName refers to an enum
+    case maps:get(TypeName, Defs, undefined) of
+        {{enum, _BaseType}, _Members} ->
+            %% Convert binary default to atom
+            {Name, {TypeName, binary_to_atom(Default, utf8)}};
+        _ ->
+            %% Not an enum, keep as-is
+            {Name, {TypeName, Default}}
+    end;
+normalize_enum_default(Field, _Defs) ->
+    Field.
 
 %% Assign sequential IDs to fields, respecting explicit IDs
 assign_field_ids(Fields) ->

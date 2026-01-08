@@ -384,6 +384,23 @@ get_field_value(Map, Name) when is_atom(Name) ->
         Value -> Value
     end.
 
+%% Unwrap types with default values: {TypeName, DefaultValue} -> TypeName
+%% Only unwrap when TypeName is NOT a known type constructor
+is_scalar_type({TypeName, Default}) when is_atom(TypeName), is_atom(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    %% Enum with default value like {'Color', 'Blue'}
+    is_scalar_type(TypeName);
+is_scalar_type({TypeName, Default}) when is_atom(TypeName), is_number(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    %% Scalar with default value like {int, 100}
+    is_scalar_type(TypeName);
+is_scalar_type({TypeName, Default}) when is_atom(TypeName), is_boolean(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    %% Bool with default value like {bool, true}
+    is_scalar_type(TypeName);
 is_scalar_type({enum, _}) -> true;
 is_scalar_type({enum, _, _}) -> true;
 %% Structs are inline fixed-size data
@@ -416,6 +433,19 @@ is_scalar_type(float64) -> true;
 is_scalar_type(_) -> false.
 
 %% Resolve type name to its definition (for enums and structs)
+%% Unwrap types with default values first (not type constructors)
+resolve_type({TypeName, Default}, Defs) when is_atom(TypeName), is_atom(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    resolve_type(TypeName, Defs);
+resolve_type({TypeName, Default}, Defs) when is_atom(TypeName), is_number(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    resolve_type(TypeName, Defs);
+resolve_type({TypeName, Default}, Defs) when is_atom(TypeName), is_boolean(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    resolve_type(TypeName, Defs);
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, Base}, Values} -> {enum, Base, Values};
@@ -960,6 +990,19 @@ encode_byte_vector(Bin) ->
     PadLen = (4 - (TotalLen rem 4)) rem 4,
     [<<Len:32/little>>, Bin, <<0:(PadLen * 8)>>].
 
+%% Unwrap types with default values (not type constructors)
+encode_ref({TypeName, Default}, Value, Defs) when is_atom(TypeName), is_atom(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    encode_ref(TypeName, Value, Defs);
+encode_ref({TypeName, Default}, Value, Defs) when is_atom(TypeName), is_number(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    encode_ref(TypeName, Value, Defs);
+encode_ref({TypeName, Default}, Value, Defs) when is_atom(TypeName), is_boolean(Default),
+    TypeName /= vector, TypeName /= enum, TypeName /= struct,
+    TypeName /= array, TypeName /= union_type, TypeName /= union_value ->
+    encode_ref(TypeName, Value, Defs);
 encode_ref(string, Bin, _Defs) when is_binary(Bin) ->
     %% Return iolist to preserve sub-binary references
     encode_string(Bin);
