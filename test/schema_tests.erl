@@ -79,29 +79,28 @@ file_identifier_test() ->
 sequential_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { a: int; b: int; c: int; }"),
     {table, Fields} = maps:get('T', Defs),
-    [#{name := a, id := 0}, #{name := b, id := 1}, #{name := c, id := 2}] = Fields.
+    %% Pre-sorted by layout order (size desc, id desc). Same size = higher ID first
+    [#{name := c, id := 2}, #{name := b, id := 1}, #{name := a, id := 0}] = Fields.
 
 explicit_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema(
         "table T { a: int (id: 2); b: int (id: 0); c: int (id: 1); }"
     ),
     {table, Fields} = maps:get('T', Defs),
-    %% Fields keep original order, IDs as specified
-    [#{name := a, id := 2}, #{name := b, id := 0}, #{name := c, id := 1}] = Fields.
+    %% Pre-sorted by layout order (size desc, id desc)
+    [#{name := a, id := 2}, #{name := c, id := 1}, #{name := b, id := 0}] = Fields.
 
 mixed_ids_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema(
         "table T { a: int (id: 0); b: int (id: 2); c: int; d: int; }"
     ),
     {table, Fields} = maps:get('T', Defs),
-    %% c and d should fill gaps and continue after explicit IDs
+    %% Pre-sorted by layout order (size desc, id desc)
     [
-        #{name := a, id := 0},
+        #{name := d, id := 3},
         #{name := b, id := 2},
-        %% fills gap
         #{name := c, id := 1},
-        %% continues after 2
-        #{name := d, id := 3}
+        #{name := a, id := 0}
     ] = Fields.
 
 %% =============================================================================
@@ -111,7 +110,8 @@ mixed_ids_test() ->
 deprecated_attr_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { old: int (deprecated); new: int; }"),
     {table, Fields} = maps:get('T', Defs),
-    [#{name := old, deprecated := true}, #{name := new, deprecated := false}] = Fields.
+    %% Pre-sorted by layout_key (size desc, id desc). Same size = higher ID first
+    [#{name := new, deprecated := false}, #{name := old, deprecated := true}] = Fields.
 
 multiple_attrs_test() ->
     {ok, {Defs, _}} = flatbuferl:parse_schema("table T { f: int (id: 5, deprecated); }"),

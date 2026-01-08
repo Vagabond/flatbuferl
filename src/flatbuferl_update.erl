@@ -563,26 +563,6 @@ find_field([#{name := Name, id := FieldId, type := Type, default := Default} | _
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
 
-extract_default({_Type, Default}) when is_number(Default); is_boolean(Default) ->
-    Default;
-extract_default(_) ->
-    undefined.
-
-normalize_type({union_value, _} = Type) ->
-    Type;
-normalize_type({union_type, _} = Type) ->
-    Type;
-normalize_type({vector, _} = Type) ->
-    Type;
-normalize_type({array, _, _} = Type) ->
-    Type;
-normalize_type({struct, _} = Type) ->
-    Type;
-normalize_type({Type, _Default}) when is_atom(Type) ->
-    Type;
-normalize_type(Type) ->
-    Type.
-
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, Base}, _Values} -> {enum, Base, Type};

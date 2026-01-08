@@ -28,7 +28,9 @@
     value :: term(),
     size :: non_neg_integer(),
     is_scalar :: boolean(),
-    % set after slot calculation
+    %% Precomputed key for layout sorting (size * 65536 + id, sort descending)
+    layout_key :: non_neg_integer(),
+    %% Set after slot calculation
     offset :: non_neg_integer() | undefined
 }).
 
@@ -59,6 +61,11 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
         fun(#field{is_scalar = IsScalar}) -> IsScalar end,
         FieldValues
     ),
+    %% Compute AllFields once - both partitions are already sorted, merge is O(n)
+    AllFields = merge_by_layout_key(Scalars, Refs),
+
+    %% Compute raw table size once (sum of field sizes)
+    RawTableSize = calc_backward_table_size(AllFields),
 
     %% Header size: 4 (root offset) + 4 (file id) if file id present
     HeaderSize =
@@ -68,14 +75,16 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
         end,
 
     %% Calculate table size including ref padding
-    TableSizeWithPadding = calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs),
+    TableSizeWithPadding = calc_table_size_with_padding(
+        AllFields, RawTableSize, Refs, HeaderSize, Defs
+    ),
 
     %% Build root vtable with actual padded size (for output)
-    VTable = build_vtable_with_size(Scalars, Refs, 4, TableSizeWithPadding),
+    VTable = build_vtable_with_size(AllFields, RawTableSize, TableSizeWithPadding),
     VTableSize = vtable_size(VTable),
 
     %% Build comparison vtable (matches how nested tables build theirs)
-    VTableForComparison = build_vtable(Scalars, Refs, 4),
+    VTableForComparison = build_vtable_from_fields(AllFields, RawTableSize),
 
     %% Pre-build ref data to discover vtables for potential sharing
     {RefVTables, _} = collect_ref_vtables(Refs, Defs),
@@ -84,12 +93,12 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
     case lists:member(VTableForComparison, RefVTables) of
         true ->
             %% Root vtable matches a ref vtable - use vtable-after layout
-            %% Pass VTableForComparison since that's what nested tables use
             encode_root_vtable_after(
                 Defs,
                 FileId,
-                Scalars,
+                AllFields,
                 Refs,
+                RawTableSize,
                 VTableForComparison,
                 TableSizeWithPadding,
                 HeaderSize
@@ -97,8 +106,9 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
         false ->
             %% No match - use standard vtable-before layout
             encode_root_vtable_before(
-                Scalars,
+                AllFields,
                 Refs,
+                RawTableSize,
                 VTable,
                 VTableSize,
                 TableSizeWithPadding,
@@ -110,8 +120,9 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
 
 %% Standard layout: header | [pad] | vtable | soffset | table | ref_data
 encode_root_vtable_before(
-    Scalars,
-    Refs,
+    AllFields,
+    _Refs,
+    RawTableSize,
     VTable,
     VTableSize,
     TableSizeWithPadding,
@@ -124,7 +135,7 @@ encode_root_vtable_before(
     TablePos4 = align_offset(TablePosUnaligned, 4),
 
     %% If table has 8-byte fields, ensure they're 8-byte aligned in the buffer
-    First8ByteOffset = find_first_8byte_field_offset(Scalars ++ Refs, TableSizeWithPadding),
+    First8ByteOffset = find_first_8byte_field_offset(AllFields, TableSizeWithPadding),
     TablePos =
         case First8ByteOffset of
             none ->
@@ -137,8 +148,8 @@ encode_root_vtable_before(
         end,
     PreVTablePad = TablePos - VTableSize - HeaderSize,
 
-    %% Build table data
-    {TableData, RefDataBin} = build_table_data(Scalars, Refs, TablePos, Defs),
+    %% Build table data (using pre-merged AllFields and precomputed RawTableSize)
+    {TableData, RefDataBin} = build_table_data2(AllFields, RawTableSize, TablePos, Defs),
 
     %% soffset points back to vtable (positive)
     VTablePos = HeaderSize + PreVTablePad,
@@ -158,8 +169,9 @@ encode_root_vtable_before(
 encode_root_vtable_after(
     Defs,
     FileId,
-    Scalars,
-    Refs,
+    AllFields,
+    _Refs,
+    _RawTableSize,
     VTable,
     TableSizeWithPadding,
     HeaderSize
@@ -169,7 +181,6 @@ encode_root_vtable_after(
     RefDataStart = TablePos + TableSizeWithPadding,
 
     %% Build field layout to get ref field offsets
-    AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
     Slots = place_fields_backward(AllFields, TableSizeWithPadding),
     FieldLayout = [F#field{offset = maps:get(F#field.id, Slots)} || F <- AllFields],
     SortedLayout = lists:sort(fun(A, B) -> A#field.offset =< B#field.offset end, FieldLayout),
@@ -248,27 +259,11 @@ has_field_value(Map, Name) when is_atom(Name) ->
 collect_fields(Map, Fields, Defs, Opts) ->
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
     lists:flatmap(
-        fun(
-            #{
-                name := Name,
-                id := FieldId,
-                type := Type,
-                default := Default,
-                deprecated := Deprecated,
-                inline_size := InlineSize
-            } = Field
-        ) ->
-            %% Get is_scalar, computing it if not present (for backwards compat with old schemas)
-            %% Need to resolve the type first for named types like 'Vec2'
-            ResolvedType = resolve_type(Type, Defs),
-            IsScalar = maps:get(is_scalar, Field, is_scalar_type(ResolvedType)),
-            %% Skip deprecated fields if option says to
-            case {Deprecated, DeprecatedOpt} of
-                {true, skip} ->
-                    [];
-                _ ->
-                    collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs)
-            end
+        fun
+            (#{deprecated := true}) when DeprecatedOpt == skip ->
+                [];
+            (FieldDef) ->
+                collect_field(Map, FieldDef, Defs)
         end,
         Fields
     ).
@@ -277,11 +272,22 @@ collect_fields(Map, Fields, Defs) ->
     collect_fields(Map, Fields, Defs, #{}).
 
 %% Returns #field{} records
-collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs) ->
+collect_field(
+    Map,
+    #{
+        name := Name,
+        id := FieldId,
+        default := Default,
+        inline_size := InlineSize,
+        is_scalar := IsScalar,
+        resolved_type := Type,
+        layout_key := LayoutKey
+    },
+    Defs
+) ->
     case Type of
         {union_type, UnionName} ->
             %% Union type field - look for <field>_type key directly
-            %% The type is an atom/string of the member name
             case get_field_value(Map, Name) of
                 undefined ->
                     [];
@@ -294,7 +300,8 @@ collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs) ->
                             type = {union_type, UnionName},
                             value = TypeIndex,
                             size = InlineSize,
-                            is_scalar = true
+                            is_scalar = true,
+                            layout_key = LayoutKey
                         }
                     ];
                 MemberType when is_binary(MemberType) ->
@@ -306,15 +313,14 @@ collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs) ->
                             type = {union_type, UnionName},
                             value = TypeIndex,
                             size = InlineSize,
-                            is_scalar = true
+                            is_scalar = true,
+                            layout_key = LayoutKey
                         }
                     ];
                 _ ->
                     []
             end;
         {union_value, UnionName} ->
-            %% Union value field - the map is the table value directly
-            %% Get the type from the corresponding _type field
             TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
             case get_field_value(Map, Name) of
                 undefined ->
@@ -332,14 +338,14 @@ collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs) ->
                             type = {union_value, UnionName},
                             value = #{type => MemberType, value => TableValue},
                             size = InlineSize,
-                            is_scalar = false
+                            is_scalar = false,
+                            layout_key = LayoutKey
                         }
                     ];
                 _ ->
                     []
             end;
         {vector, {union_type, UnionName}} ->
-            %% Vector of union types - list of type names
             case get_field_value(Map, Name) of
                 undefined ->
                     [];
@@ -362,15 +368,14 @@ collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs) ->
                             type = {vector, ubyte},
                             value = TypeIndices,
                             size = InlineSize,
-                            is_scalar = false
+                            is_scalar = false,
+                            layout_key = LayoutKey
                         }
                     ];
                 _ ->
                     []
             end;
         {vector, {union_value, UnionName}} ->
-            %% Vector of union values - list of table maps
-            %% Get types from corresponding _type field
             TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
             case get_field_value(Map, Name) of
                 undefined ->
@@ -404,7 +409,8 @@ collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs) ->
                             type = {vector, {union_value, UnionName}},
                             value = TaggedValues,
                             size = InlineSize,
-                            is_scalar = false
+                            is_scalar = false,
+                            layout_key = LayoutKey
                         }
                     ];
                 _ ->
@@ -419,10 +425,11 @@ collect_field(Map, Name, FieldId, Type, Default, InlineSize, IsScalar, Defs) ->
                     [
                         #field{
                             id = FieldId,
-                            type = resolve_type(Type, Defs),
+                            type = Type,
                             value = Value,
                             size = InlineSize,
-                            is_scalar = IsScalar
+                            is_scalar = IsScalar,
+                            layout_key = LayoutKey
                         }
                     ]
             end
@@ -599,8 +606,13 @@ uint16_bytes(V) -> [V band 16#FF, (V bsr 8) band 16#FF].
 %% Get byte size of vtable
 vtable_size(VT) -> length(VT) * 2.
 
-build_vtable(Scalars, Refs, MaxAlign) ->
-    AllFields = Scalars ++ Refs,
+build_vtable(Scalars, Refs, _MaxAlign) ->
+    AllFields = merge_by_layout_key(Scalars, Refs),
+    RawSize = calc_backward_table_size(AllFields),
+    build_vtable_from_fields(AllFields, RawSize).
+
+%% Build vtable from pre-merged fields with precomputed raw size
+build_vtable_from_fields(AllFields, RawSize) ->
     case AllFields of
         [] ->
             [uint16_bytes(4), uint16_bytes(4)];
@@ -609,17 +621,15 @@ build_vtable(Scalars, Refs, MaxAlign) ->
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
 
-            TableDataSize = calc_table_data_size(Scalars, Refs),
-            TableSize = 4 + TableDataSize,
+            TableSize = 4 + align_offset(RawSize, 4),
 
-            Slots = build_slots_list(Scalars, Refs, NumSlots, MaxAlign),
+            Slots = build_slots_list(AllFields, RawSize, NumSlots),
 
             [uint16_bytes(VTableSize), uint16_bytes(TableSize) | Slots]
     end.
 
 %% Build vtable with pre-calculated table size (including ref padding)
-build_vtable_with_size(Scalars, Refs, MaxAlign, TableSize) ->
-    AllFields = Scalars ++ Refs,
+build_vtable_with_size(AllFields, RawSize, TableSize) ->
     case AllFields of
         [] ->
             [uint16_bytes(4), uint16_bytes(4)];
@@ -627,14 +637,12 @@ build_vtable_with_size(Scalars, Refs, MaxAlign, TableSize) ->
             MaxId = lists:max([F#field.id || F <- AllFields]),
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
-            Slots = build_slots_list(Scalars, Refs, NumSlots, MaxAlign),
+            Slots = build_slots_list(AllFields, RawSize, NumSlots),
             [uint16_bytes(VTableSize), uint16_bytes(TableSize) | Slots]
     end.
 
 %% Calculate table size including padding for ref data alignment
-calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs) ->
-    AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
-    RawSize = calc_backward_table_size(AllFields),
+calc_table_size_with_padding(AllFields, RawSize, Refs, HeaderSize, Defs) ->
     %% Table data must be 4-byte aligned (for soffset alignment)
     TableDataSize = align_offset(RawSize, 4),
     BaseTableSize = 4 + TableDataSize,
@@ -649,9 +657,8 @@ calc_table_size_with_padding(Scalars, Refs, HeaderSize, Defs) ->
     TablePosUnaligned = HeaderSize + VTableSize,
     TablePos = align_offset(TablePosUnaligned, 4),
 
-    %% Extract refs in flatc order: IDs 1, 2, 3, ..., N, then 0
-    RefFields = [F || F <- AllFields, not F#field.is_scalar],
-    RefFieldsOrdered = sort_refs_flatc_order(RefFields),
+    %% Sort refs in flatc order
+    RefFieldsOrdered = sort_refs_flatc_order(Refs),
 
     %% Calculate ref padding
     RefPadding = calc_ref_padding_for_refs(RefFieldsOrdered, TablePos + BaseTableSize, Defs),
@@ -675,8 +682,8 @@ sort_refs_flatc_order(Refs) ->
     end.
 
 %% Find the offset of the first 8-byte field using backward placement
-find_first_8byte_field_offset(Fields, TableSize) ->
-    AllFields = lists:sort(fun field_layout_order/2, Fields),
+%% Fields must be pre-sorted by layout_key
+find_first_8byte_field_offset(AllFields, TableSize) ->
     Slots = place_fields_backward(AllFields, TableSize),
     %% Find 8-byte fields and get their offsets
     EightByteFields = [F || F <- AllFields, F#field.size == 8],
@@ -719,21 +726,26 @@ calc_ref_padding_for_refs(
 ) ->
     {union, _Members} = maps:get(UnionName, Defs),
     calc_ref_padding_for_refs(
-        [#field{id = 0, type = MemberType, value = Value, size = 4, is_scalar = false}], Pos, Defs
+        [
+            #field{
+                id = 0,
+                type = MemberType,
+                value = Value,
+                size = 4,
+                is_scalar = false,
+                layout_key = 0
+            }
+        ],
+        Pos,
+        Defs
     );
 calc_ref_padding_for_refs(_, _Pos, _Defs) ->
     0.
 
-build_slots_list(Scalars, Refs, NumSlots, _MaxAlign) ->
+build_slots_list(AllFields, RawSize, NumSlots) ->
     %% flatc builds table from END backward, placing largest fields at end
-    %% 1. Sort by size descending, then ID descending
-    %% 2. Calculate table end position
-    %% 3. Place fields backward from end
-    AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
-
-    %% Calculate table size (aligned to 4 bytes for soffset)
-    TableDataSize = calc_backward_table_size(AllFields),
-    TableSize = 4 + align_offset(TableDataSize, 4),
+    %% Table size aligned to 4 bytes for soffset
+    TableSize = 4 + align_offset(RawSize, 4),
 
     %% Place fields backward from end of table
     Slots = place_fields_backward(AllFields, TableSize),
@@ -741,14 +753,16 @@ build_slots_list(Scalars, Refs, NumSlots, _MaxAlign) ->
     %% Return list of 2-byte lists for each slot
     [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)].
 
-%% Sort by size descending, then by field ID descending
-%% Uses precomputed inline_size from #field{} record
-field_layout_order(#field{id = IdA, size = SizeA}, #field{id = IdB, size = SizeB}) ->
-    field_layout_order_by_size(SizeA, SizeB, IdA, IdB).
-
-field_layout_order_by_size(SizeA, SizeB, _IdA, _IdB) when SizeA > SizeB -> true;
-field_layout_order_by_size(SizeA, SizeB, _IdA, _IdB) when SizeA < SizeB -> false;
-field_layout_order_by_size(_SizeA, _SizeB, IdA, IdB) -> IdA >= IdB.
+%% Merge two lists already sorted by layout_key descending - O(n) instead of O(n log n)
+merge_by_layout_key([], Bs) ->
+    Bs;
+merge_by_layout_key(As, []) ->
+    As;
+merge_by_layout_key([A | As] = AllA, [B | Bs] = AllB) ->
+    case A#field.layout_key >= B#field.layout_key of
+        true -> [A | merge_by_layout_key(As, AllB)];
+        false -> [B | merge_by_layout_key(AllA, Bs)]
+    end.
 
 %% Calculate raw data size for all fields using precomputed sizes
 calc_backward_table_size(Fields) ->
@@ -774,23 +788,19 @@ place_fields_backward(Fields, TableSize) ->
 align_down(Off, Align) ->
     Off - (Off rem Align).
 
-%% Calculate total table data size (aligned to 4 bytes for soffset)
-calc_table_data_size(Scalars, Refs) ->
-    AllFields = Scalars ++ Refs,
-    RawSize = calc_backward_table_size(AllFields),
-    align_offset(RawSize, 4).
-
 %% =============================================================================
 %% Data Building
 %% =============================================================================
 
 %% Build table data with fields placed backward from end (like flatc)
 build_table_data(Scalars, Refs, TablePos, Defs) ->
-    AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
-
-    %% Calculate table size and field positions (backward placement)
-    %% Table data must be 4-byte aligned for soffset
+    AllFields = merge_by_layout_key(Scalars, Refs),
     RawSize = calc_backward_table_size(AllFields),
+    build_table_data2(AllFields, RawSize, TablePos, Defs).
+
+%% Version that accepts pre-merged AllFields with precomputed raw size
+build_table_data2(AllFields, RawSize, TablePos, Defs) ->
+    %% Table data must be 4-byte aligned for soffset
     TableDataSize = align_offset(RawSize, 4),
     BaseTableSize = 4 + TableDataSize,
 
@@ -799,7 +809,7 @@ build_table_data(Scalars, Refs, TablePos, Defs) ->
     FieldLayout = [F#field{offset = maps:get(F#field.id, Slots)} || F <- AllFields],
     SortedLayout = lists:sort(fun(A, B) -> A#field.offset =< B#field.offset end, FieldLayout),
 
-    %% Extract refs in flatc order: IDs 1, 2, ..., N, then 0
+    %% Extract refs from sorted layout (has offsets) and sort in flatc order
     RefFields = [F || F <- SortedLayout, not F#field.is_scalar],
     RefFieldsOrdered = sort_refs_flatc_order(RefFields),
 
@@ -848,7 +858,18 @@ calc_ref_padding(
 ) ->
     {union, _Members} = maps:get(UnionName, Defs),
     calc_ref_padding(
-        [#field{id = 0, type = MemberType, value = Value, size = 4, is_scalar = false}], Pos, Defs
+        [
+            #field{
+                id = 0,
+                type = MemberType,
+                value = Value,
+                size = 4,
+                is_scalar = false,
+                layout_key = 0
+            }
+        ],
+        Pos,
+        Defs
     );
 calc_ref_padding(_, _Pos, _Defs) ->
     0.
@@ -1485,7 +1506,7 @@ encode_nested_table_body_only_padded(Scalars, Refs, Defs) ->
 %% Build table data with minimal string padding (for table vectors with vtable sharing)
 %% Strings are NOT padded to 4-byte boundary since vtables only need 2-byte alignment
 build_table_data_minimal_padding(Scalars, Refs, TablePos, Defs) ->
-    AllFields = lists:sort(fun field_layout_order/2, Scalars ++ Refs),
+    AllFields = merge_by_layout_key(Scalars, Refs),
     RawSize = calc_backward_table_size(AllFields),
     TableDataSize = align_offset(RawSize, 4),
     BaseTableSize = 4 + TableDataSize,

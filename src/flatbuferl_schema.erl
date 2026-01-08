@@ -145,7 +145,12 @@ process_def({table, Fields}, Defs) ->
     FieldsWithIds = assign_field_ids(NormalizedFields),
     %% Convert to optimized map format with precomputed values
     OptimizedFields = [optimize_field(F, Defs) || F <- FieldsWithIds],
-    {table, OptimizedFields};
+    %% Pre-sort fields by layout order (size desc, id desc) for encoding
+    SortedFields = lists:sort(
+        fun(#{layout_key := A}, #{layout_key := B}) -> A > B end,
+        OptimizedFields
+    ),
+    {table, SortedFields};
 process_def(Other, _Defs) ->
     Other.
 
@@ -155,18 +160,24 @@ optimize_field(#{name := _} = Map, _Defs) ->
     Map;
 optimize_field({Name, Type, Attrs}, Defs) ->
     NormalizedType = normalize_type(Type),
+    Id = maps:get(id, Attrs, 0),
+    InlineSize = field_inline_size(NormalizedType, Defs),
     #{
         name => Name,
-        id => maps:get(id, Attrs, 0),
+        id => Id,
         type => NormalizedType,
         default => extract_default(Type),
         required => maps:get(required, Attrs, false),
         deprecated => maps:get(deprecated, Attrs, false),
-        inline_size => field_inline_size(NormalizedType, Defs),
-        is_scalar => is_scalar_type(NormalizedType, Defs)
+        inline_size => InlineSize,
+        is_scalar => is_scalar_type(NormalizedType, Defs),
+        resolved_type => resolve_type(NormalizedType, Defs),
+        %% Layout key for fast sorting: size * 65536 + id (both descending)
+        layout_key => InlineSize * 65536 + Id
     };
 optimize_field({Name, Type}, Defs) ->
     NormalizedType = normalize_type(Type),
+    InlineSize = field_inline_size(NormalizedType, Defs),
     #{
         name => Name,
         id => 0,
@@ -174,8 +185,10 @@ optimize_field({Name, Type}, Defs) ->
         default => extract_default(Type),
         required => false,
         deprecated => false,
-        inline_size => field_inline_size(NormalizedType, Defs),
-        is_scalar => is_scalar_type(NormalizedType, Defs)
+        inline_size => InlineSize,
+        is_scalar => is_scalar_type(NormalizedType, Defs),
+        resolved_type => resolve_type(NormalizedType, Defs),
+        layout_key => InlineSize * 65536
     }.
 
 %% Determine if a type is scalar (stored inline) vs reference (stored via offset)
@@ -221,6 +234,25 @@ normalize_type({Type, _Default}) when
 ->
     Type;
 normalize_type(Type) ->
+    Type.
+
+%% Resolve type name to its definition (for enums and structs)
+%% This is precomputed into the schema for use during encoding
+%% NOTE: Tables are NOT resolved - they stay as atom names for lookup in Defs
+%% Only structs are resolved because struct data is encoded inline
+resolve_type(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        {{enum, Base}, Values} -> {enum, Base, Values};
+        {struct, Fields} -> {struct, Fields};
+        % Keep table types as atoms for Defs lookup
+        {table, _} -> Type;
+        _ -> Type
+    end;
+resolve_type({vector, ElemType}, Defs) ->
+    {vector, resolve_type(ElemType, Defs)};
+resolve_type({array, ElemType, Count}, Defs) ->
+    {array, resolve_type(ElemType, Defs), Count};
+resolve_type(Type, _Defs) ->
     Type.
 
 %% Extract default value from type, but not from type constructors

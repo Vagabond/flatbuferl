@@ -5,15 +5,54 @@
 field(Name, Type) -> field(Name, Type, #{}).
 field(Name, Type, Attrs) ->
     NormType = normalize_type(Type),
+    Defs = maps:get(defs, Attrs, #{}),
+    ResolvedType = resolve_type(NormType, Defs),
+    Id = maps:get(id, Attrs, 0),
+    InlineSize = maps:get(inline_size, Attrs, type_size(NormType)),
     #{
         name => Name,
-        id => maps:get(id, Attrs, 0),
+        id => Id,
         type => NormType,
         default => extract_default(Type),
         required => maps:get(required, Attrs, false),
         deprecated => maps:get(deprecated, Attrs, false),
-        inline_size => maps:get(inline_size, Attrs, type_size(NormType))
+        inline_size => InlineSize,
+        is_scalar => is_scalar_type(ResolvedType, Defs),
+        resolved_type => ResolvedType,
+        layout_key => InlineSize * 65536 + Id
     }.
+
+is_scalar_type(string, _) ->
+    false;
+is_scalar_type({vector, _}, _) ->
+    false;
+is_scalar_type({union_value, _}, _) ->
+    false;
+is_scalar_type({table, _}, _) ->
+    false;
+is_scalar_type(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        % Table reference is not scalar
+        {table, _} -> false;
+        _ -> true
+    end;
+is_scalar_type(_, _) ->
+    true.
+
+resolve_type(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        {struct, Fields} -> {struct, Fields};
+        % Keep table types as atoms
+        {table, _} -> Type;
+        {{enum, Base}, Values} -> {enum, Base, Values};
+        _ -> Type
+    end;
+resolve_type({vector, ElemType}, Defs) ->
+    {vector, resolve_type(ElemType, Defs)};
+resolve_type({array, ElemType, Count}, Defs) ->
+    {array, resolve_type(ElemType, Defs), Count};
+resolve_type(Type, _Defs) ->
+    Type.
 
 normalize_type({T, _Default}) when
     is_atom(T),
@@ -217,10 +256,13 @@ mixed_with_vector_test() ->
 %% =============================================================================
 
 nested_table_test() ->
+    Defs = #{
+        'Inner' => {table, [field(value, int)]}
+    },
     Schema = {
-        #{
-            'Outer' => {table, [field(name, string), field(inner, 'Inner', #{id => 1})]},
-            'Inner' => {table, [field(value, int)]}
+        Defs#{
+            'Outer' =>
+                {table, [field(name, string), field(inner, 'Inner', #{id => 1, defs => Defs})]}
         },
         #{root_type => 'Outer'}
     },
@@ -232,10 +274,12 @@ nested_table_test() ->
     ?assertEqual({ok, 42}, flatbuferl_reader:get_field(InnerRef, 0, int, Buffer)).
 
 nested_with_string_test() ->
+    Defs = #{
+        'Child' => {table, [field(name, string), field(age, int, #{id => 1})]}
+    },
     Schema = {
-        #{
-            'Parent' => {table, [field(child, 'Child')]},
-            'Child' => {table, [field(name, string), field(age, int, #{id => 1})]}
+        Defs#{
+            'Parent' => {table, [field(child, 'Child', #{defs => Defs})]}
         },
         #{root_type => 'Parent'}
     },
@@ -252,11 +296,9 @@ nested_with_string_test() ->
 
 simple_struct_test() ->
     %% Struct Vec2 with two floats (8 bytes inline)
+    Defs = #{'Vec2' => {struct, [{x, float}, {y, float}]}},
     Schema = {
-        #{
-            'Vec2' => {struct, [{x, float}, {y, float}]},
-            test => {table, [field(pos, 'Vec2', #{inline_size => 8})]}
-        },
+        Defs#{test => {table, [field(pos, 'Vec2', #{inline_size => 8, defs => Defs})]}},
         #{root_type => test}
     },
     Map = #{pos => #{x => 1.0, y => 2.0}},
@@ -268,11 +310,9 @@ simple_struct_test() ->
 
 struct_with_int_and_float_test() ->
     %% Struct with mixed types to test alignment (12 bytes with alignment)
+    Defs = #{'Mixed' => {struct, [{a, byte}, {b, float}, {c, short}]}},
     Schema = {
-        #{
-            'Mixed' => {struct, [{a, byte}, {b, float}, {c, short}]},
-            test => {table, [field(data, 'Mixed', #{inline_size => 12})]}
-        },
+        Defs#{test => {table, [field(data, 'Mixed', #{inline_size => 12, defs => Defs})]}},
         #{root_type => test}
     },
     Map = #{data => #{a => 10, b => 3.14, c => 1000}},
@@ -288,11 +328,14 @@ struct_with_int_and_float_test() ->
 
 struct_and_scalar_test() ->
     %% Table with both a struct and a regular scalar
+    Defs = #{'Vec2' => {struct, [{x, float}, {y, float}]}},
     Schema = {
-        #{
-            'Vec2' => {struct, [{x, float}, {y, float}]},
+        Defs#{
             test =>
-                {table, [field(pos, 'Vec2', #{inline_size => 8}), field(name, string, #{id => 1})]}
+                {table, [
+                    field(pos, 'Vec2', #{inline_size => 8, defs => Defs}),
+                    field(name, string, #{id => 1})
+                ]}
         },
         #{root_type => test}
     },

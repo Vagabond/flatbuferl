@@ -157,6 +157,7 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
                 name := FieldName,
                 id := FieldId,
                 type := Type,
+                resolved_type := ResolvedType,
                 default := Default,
                 deprecated := Deprecated
             },
@@ -168,11 +169,7 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
                     Acc;
                 {true, error} ->
                     %% Check if field is present in buffer
-                    case
-                        flatbuferl_reader:get_field(
-                            TableRef, FieldId, resolve_type(Type, Defs), Buffer
-                        )
-                    of
+                    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                         {ok, _} -> error({deprecated_field_present, TableType, FieldName});
                         missing -> Acc
                     end;
@@ -180,11 +177,20 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
                     %% For deprecated fields with allow, only include if actually present
                     %% (don't fall back to default value)
                     decode_field_no_default(
-                        FieldName, FieldId, Type, TableRef, Defs, Buffer, Opts, Acc
+                        FieldName, FieldId, Type, ResolvedType, TableRef, Defs, Buffer, Opts, Acc
                     );
                 _ ->
                     decode_field(
-                        FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc
+                        FieldName,
+                        FieldId,
+                        Type,
+                        ResolvedType,
+                        Default,
+                        TableRef,
+                        Defs,
+                        Buffer,
+                        Opts,
+                        Acc
                     )
             end
         end,
@@ -192,8 +198,7 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
         Fields
     ).
 
-decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Acc) ->
-    ResolvedType = resolve_type(Type, Defs),
+decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Buffer, Opts, Acc) ->
     case Type of
         {union_type, UnionName} ->
             %% Union type field - output as <field>_type with the member name
@@ -277,28 +282,13 @@ decode_field(FieldName, FieldId, Type, Default, TableRef, Defs, Buffer, Opts, Ac
     end.
 
 %% Decode field but don't include default values for missing fields (for deprecated fields)
-decode_field_no_default(FieldName, FieldId, Type, TableRef, Defs, Buffer, Opts, Acc) ->
-    ResolvedType = resolve_type(Type, Defs),
+decode_field_no_default(FieldName, FieldId, Type, ResolvedType, TableRef, Defs, Buffer, Opts, Acc) ->
     case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
         {ok, Value} ->
             Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
         missing ->
             Acc
     end.
-
-%% Resolve type name to its definition (for enums and structs)
-resolve_type(Type, Defs) when is_atom(Type) ->
-    case maps:get(Type, Defs, undefined) of
-        {{enum, Base}, _Values} -> {enum, Base};
-        {struct, Fields} -> {struct, Fields};
-        _ -> Type
-    end;
-resolve_type({vector, ElemType}, Defs) ->
-    {vector, resolve_type(ElemType, Defs)};
-resolve_type({array, ElemType, Count}, Defs) ->
-    {array, resolve_type(ElemType, Defs), Count};
-resolve_type(Type, _Defs) ->
-    Type.
 
 convert_value({table, _, _} = TableRef, Type, Defs, Buffer, Opts) when is_atom(Type) ->
     %% Nested table - recursively convert

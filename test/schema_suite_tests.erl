@@ -5,15 +5,54 @@
 field(Name, Type) -> field(Name, Type, #{}).
 field(Name, Type, Attrs) ->
     NormType = normalize_type(Type),
+    Defs = maps:get(defs, Attrs, #{}),
+    ResolvedType = resolve_type(NormType, Defs),
+    Id = maps:get(id, Attrs, 0),
+    InlineSize = maps:get(inline_size, Attrs, type_size(NormType)),
     #{
         name => Name,
-        id => maps:get(id, Attrs, 0),
+        id => Id,
         type => NormType,
         default => extract_default(Type),
         required => maps:get(required, Attrs, false),
         deprecated => maps:get(deprecated, Attrs, false),
-        inline_size => maps:get(inline_size, Attrs, type_size(NormType))
+        inline_size => InlineSize,
+        is_scalar => is_scalar_type(ResolvedType, Defs),
+        resolved_type => ResolvedType,
+        layout_key => InlineSize * 65536 + Id
     }.
+
+is_scalar_type(string, _) ->
+    false;
+is_scalar_type({vector, _}, _) ->
+    false;
+is_scalar_type({union_value, _}, _) ->
+    false;
+is_scalar_type({table, _}, _) ->
+    false;
+is_scalar_type(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        % Table reference is not scalar
+        {table, _} -> false;
+        _ -> true
+    end;
+is_scalar_type(_, _) ->
+    true.
+
+resolve_type(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        {struct, Fields} -> {struct, Fields};
+        % Keep table types as atoms
+        {table, _} -> Type;
+        {{enum, Base}, Values} -> {enum, Base, Values};
+        _ -> Type
+    end;
+resolve_type({vector, ElemType}, Defs) ->
+    {vector, resolve_type(ElemType, Defs)};
+resolve_type({array, ElemType, Count}, Defs) ->
+    {array, resolve_type(ElemType, Defs), Count};
+resolve_type(Type, _Defs) ->
+    Type.
 
 normalize_type({T, _Default}) when
     is_atom(T),
@@ -826,10 +865,10 @@ fixed_array_test_() ->
             {ok, {Defs, _Opts}} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
             ?assert(maps:is_key('ArrayTable', Defs)),
             {table, Fields} = maps:get('ArrayTable', Defs),
-            %% Fields are now maps with precomputed values
+            %% Fields are pre-sorted by layout_key (size desc, id desc)
             [
-                #{name := floats, type := {array, float, 3}},
                 #{name := ints, type := {array, int, 4}},
+                #{name := floats, type := {array, float, 3}},
                 #{name := bytes, type := {array, byte, 2}}
             ] = Fields
         end},

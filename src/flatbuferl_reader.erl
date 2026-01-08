@@ -191,6 +191,8 @@ read_value(Buffer, Pos, {vector, ElementType}) ->
 %% Enum - read as underlying type, return integer value
 read_value(Buffer, Pos, {enum, UnderlyingType}) ->
     read_value(Buffer, Pos, UnderlyingType);
+read_value(Buffer, Pos, {enum, UnderlyingType, _Values}) ->
+    read_value(Buffer, Pos, UnderlyingType);
 %% Type with default value - extract just the type
 %% Defaults are only for scalar types, matched after enum
 %% Only handles numeric and boolean defaults - atom defaults (enum values)
@@ -275,6 +277,8 @@ read_vector_element(Buffer, Pos, Type) when Type == double; Type == float64 ->
     {8, Value};
 %% Enum in vector
 read_vector_element(Buffer, Pos, {enum, UnderlyingType}) ->
+    read_vector_element(Buffer, Pos, UnderlyingType);
+read_vector_element(Buffer, Pos, {enum, UnderlyingType, _Values}) ->
     read_vector_element(Buffer, Pos, UnderlyingType);
 %% Type with default value in vector - extract just the type
 read_vector_element(Buffer, Pos, {Type, Default}) when
@@ -410,6 +414,8 @@ element_size(double) ->
 element_size(float64) ->
     8;
 element_size({enum, UnderlyingType}) ->
+    element_size(UnderlyingType);
+element_size({enum, UnderlyingType, _Values}) ->
     element_size(UnderlyingType);
 element_size({array, ElemType, Count}) ->
     element_size(ElemType) * Count;
