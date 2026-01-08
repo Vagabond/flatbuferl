@@ -64,8 +64,10 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
     %% Compute AllFields once - both partitions are already sorted, merge is O(n)
     AllFields = merge_by_layout_key(Scalars, Refs),
 
-    %% Compute raw table size once (sum of field sizes)
+    %% Precompute table metrics once
     RawTableSize = calc_backward_table_size(AllFields),
+    BaseTableSize = 4 + align_offset(RawTableSize, 4),
+    Slots = place_fields_backward(AllFields, BaseTableSize),
 
     %% Header size: 4 (root offset) + 4 (file id) if file id present
     HeaderSize =
@@ -80,11 +82,11 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
     ),
 
     %% Build root vtable with actual padded size (for output)
-    VTable = build_vtable_with_size(AllFields, RawTableSize, TableSizeWithPadding),
+    VTable = build_vtable_with_size(AllFields, Slots, TableSizeWithPadding),
     VTableSize = vtable_size(VTable),
 
     %% Build comparison vtable (matches how nested tables build theirs)
-    VTableForComparison = build_vtable_from_fields(AllFields, RawTableSize),
+    VTableForComparison = build_vtable_from_fields(AllFields, Slots, BaseTableSize),
 
     %% Pre-build ref data to discover vtables for potential sharing
     {RefVTables, _} = collect_ref_vtables(Refs, Defs),
@@ -97,18 +99,17 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
                 Defs,
                 FileId,
                 AllFields,
-                Refs,
-                RawTableSize,
-                VTableForComparison,
+                Slots,
                 TableSizeWithPadding,
+                VTableForComparison,
                 HeaderSize
             );
         false ->
             %% No match - use standard vtable-before layout
             encode_root_vtable_before(
                 AllFields,
-                Refs,
-                RawTableSize,
+                Slots,
+                BaseTableSize,
                 VTable,
                 VTableSize,
                 TableSizeWithPadding,
@@ -121,11 +122,11 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
 %% Standard layout: header | [pad] | vtable | soffset | table | ref_data
 encode_root_vtable_before(
     AllFields,
-    _Refs,
-    RawTableSize,
+    Slots,
+    BaseTableSize,
     VTable,
     VTableSize,
-    TableSizeWithPadding,
+    _TableSizeWithPadding,
     HeaderSize,
     FileId,
     Defs
@@ -135,7 +136,7 @@ encode_root_vtable_before(
     TablePos4 = align_offset(TablePosUnaligned, 4),
 
     %% If table has 8-byte fields, ensure they're 8-byte aligned in the buffer
-    First8ByteOffset = find_first_8byte_field_offset(AllFields, TableSizeWithPadding),
+    First8ByteOffset = find_first_8byte_field_offset(AllFields, Slots),
     TablePos =
         case First8ByteOffset of
             none ->
@@ -148,8 +149,8 @@ encode_root_vtable_before(
         end,
     PreVTablePad = TablePos - VTableSize - HeaderSize,
 
-    %% Build table data (using pre-merged AllFields and precomputed RawTableSize)
-    {TableData, RefDataBin} = build_table_data2(AllFields, RawTableSize, TablePos, Defs),
+    %% Build table data (using precomputed Slots)
+    {TableData, RefDataBin} = build_table_data2(AllFields, Slots, BaseTableSize, TablePos, Defs),
 
     %% soffset points back to vtable (positive)
     VTablePos = HeaderSize + PreVTablePad,
@@ -166,23 +167,23 @@ encode_root_vtable_before(
     ].
 
 %% Shared vtable layout: header | soffset | table | ref_data (vtable is inside ref_data)
+%% Note: This path needs slots computed with TableSizeWithPadding (includes padding)
 encode_root_vtable_after(
     Defs,
     FileId,
     AllFields,
-    _Refs,
-    _RawTableSize,
-    VTable,
+    _Slots,
     TableSizeWithPadding,
+    VTable,
     HeaderSize
 ) ->
     %% Root table starts right after header (no vtable before it)
     TablePos = HeaderSize,
     RefDataStart = TablePos + TableSizeWithPadding,
 
-    %% Build field layout to get ref field offsets
-    Slots = place_fields_backward(AllFields, TableSizeWithPadding),
-    FieldLayout = [F#field{offset = maps:get(F#field.id, Slots)} || F <- AllFields],
+    %% Build field layout - need slots with TableSizeWithPadding for this path
+    PaddedSlots = place_fields_backward(AllFields, TableSizeWithPadding),
+    FieldLayout = [F#field{offset = maps:get(F#field.id, PaddedSlots)} || F <- AllFields],
     SortedLayout = lists:sort(fun(A, B) -> A#field.offset =< B#field.offset end, FieldLayout),
 
     %% Extract refs in flatc order with field offsets
@@ -609,10 +610,12 @@ vtable_size(VT) -> length(VT) * 2.
 build_vtable(Scalars, Refs, _MaxAlign) ->
     AllFields = merge_by_layout_key(Scalars, Refs),
     RawSize = calc_backward_table_size(AllFields),
-    build_vtable_from_fields(AllFields, RawSize).
+    TableSize = 4 + align_offset(RawSize, 4),
+    Slots = place_fields_backward(AllFields, TableSize),
+    build_vtable_from_fields(AllFields, Slots, TableSize).
 
-%% Build vtable from pre-merged fields with precomputed raw size
-build_vtable_from_fields(AllFields, RawSize) ->
+%% Build vtable from pre-merged fields with precomputed Slots map and TableSize
+build_vtable_from_fields(AllFields, Slots, TableSize) ->
     case AllFields of
         [] ->
             [uint16_bytes(4), uint16_bytes(4)];
@@ -620,16 +623,13 @@ build_vtable_from_fields(AllFields, RawSize) ->
             MaxId = lists:max([F#field.id || F <- AllFields]),
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
-
-            TableSize = 4 + align_offset(RawSize, 4),
-
-            Slots = build_slots_list(AllFields, RawSize, NumSlots),
-
-            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | Slots]
+            %% Convert Slots map to list of uint16_bytes
+            SlotsList = [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)],
+            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | SlotsList]
     end.
 
-%% Build vtable with pre-calculated table size (including ref padding)
-build_vtable_with_size(AllFields, RawSize, TableSize) ->
+%% Build vtable with precomputed Slots map and table size (including ref padding)
+build_vtable_with_size(AllFields, Slots, TableSize) ->
     case AllFields of
         [] ->
             [uint16_bytes(4), uint16_bytes(4)];
@@ -637,8 +637,9 @@ build_vtable_with_size(AllFields, RawSize, TableSize) ->
             MaxId = lists:max([F#field.id || F <- AllFields]),
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
-            Slots = build_slots_list(AllFields, RawSize, NumSlots),
-            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | Slots]
+            %% Convert Slots map to list of uint16_bytes
+            SlotsList = [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)],
+            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | SlotsList]
     end.
 
 %% Calculate table size including padding for ref data alignment
@@ -681,11 +682,10 @@ sort_refs_flatc_order(Refs) ->
             SortedNonZero ++ ZeroRefs
     end.
 
-%% Find the offset of the first 8-byte field using backward placement
+%% Find the offset of the first 8-byte field using precomputed Slots map
 %% Fields must be pre-sorted by layout_key
-find_first_8byte_field_offset(AllFields, TableSize) ->
-    Slots = place_fields_backward(AllFields, TableSize),
-    %% Find 8-byte fields and get their offsets
+find_first_8byte_field_offset(AllFields, Slots) ->
+    %% Find 8-byte fields and get their offsets from precomputed Slots
     EightByteFields = [F || F <- AllFields, F#field.size == 8],
     case EightByteFields of
         [] ->
@@ -742,17 +742,6 @@ calc_ref_padding_for_refs(
 calc_ref_padding_for_refs(_, _Pos, _Defs) ->
     0.
 
-build_slots_list(AllFields, RawSize, NumSlots) ->
-    %% flatc builds table from END backward, placing largest fields at end
-    %% Table size aligned to 4 bytes for soffset
-    TableSize = 4 + align_offset(RawSize, 4),
-
-    %% Place fields backward from end of table
-    Slots = place_fields_backward(AllFields, TableSize),
-
-    %% Return list of 2-byte lists for each slot
-    [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)].
-
 %% Merge two lists already sorted by layout_key descending - O(n) instead of O(n log n)
 merge_by_layout_key([], Bs) ->
     Bs;
@@ -793,19 +782,17 @@ align_down(Off, Align) ->
 %% =============================================================================
 
 %% Build table data with fields placed backward from end (like flatc)
+%% Used for nested tables where we don't have precomputed Slots
 build_table_data(Scalars, Refs, TablePos, Defs) ->
     AllFields = merge_by_layout_key(Scalars, Refs),
     RawSize = calc_backward_table_size(AllFields),
-    build_table_data2(AllFields, RawSize, TablePos, Defs).
-
-%% Version that accepts pre-merged AllFields with precomputed raw size
-build_table_data2(AllFields, RawSize, TablePos, Defs) ->
-    %% Table data must be 4-byte aligned for soffset
-    TableDataSize = align_offset(RawSize, 4),
-    BaseTableSize = 4 + TableDataSize,
-
-    %% Build field layout with positions (using base table size for slot calculation)
+    BaseTableSize = 4 + align_offset(RawSize, 4),
     Slots = place_fields_backward(AllFields, BaseTableSize),
+    build_table_data2(AllFields, Slots, BaseTableSize, TablePos, Defs).
+
+%% Version that accepts pre-merged AllFields with precomputed Slots and BaseTableSize
+build_table_data2(AllFields, Slots, BaseTableSize, TablePos, Defs) ->
+    %% Build field layout with positions from precomputed Slots
     FieldLayout = [F#field{offset = maps:get(F#field.id, Slots)} || F <- AllFields],
     SortedLayout = lists:sort(fun(A, B) -> A#field.offset =< B#field.offset end, FieldLayout),
 
