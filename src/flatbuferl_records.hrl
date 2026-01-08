@@ -66,3 +66,10 @@
     tables = #{} :: map(),
     vtables = #{} :: map()
 }).
+
+%% Struct definition with precomputed layout
+%% Fields are enriched maps: #{name => atom(), type => atom(), offset => non_neg_integer(), size => non_neg_integer()}
+-record(struct_def, {
+    fields :: [map()],
+    total_size :: non_neg_integer()
+}).

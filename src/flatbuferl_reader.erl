@@ -1,5 +1,6 @@
 %% @private
 -module(flatbuferl_reader).
+-include("flatbuferl_records.hrl").
 -export([
     get_root/1,
     get_file_id/1,
@@ -17,8 +18,7 @@
 -export_type([table_ref/0]).
 
 -spec get_root(buffer()) -> table_ref().
-get_root(Buffer) ->
-    <<RootOffset:32/little-unsigned, _/binary>> = Buffer,
+get_root(<<RootOffset:32/little-unsigned, _/binary>> = Buffer) ->
     {table, RootOffset, Buffer}.
 
 -spec get_file_id(buffer()) -> binary().
@@ -193,7 +193,11 @@ read_value(Buffer, Pos, {enum, UnderlyingType, _IndexMap}) ->
     read_value(Buffer, Pos, UnderlyingType);
 read_value(Buffer, Pos, {enum, UnderlyingType}) ->
     read_value(Buffer, Pos, UnderlyingType);
-%% Struct - read inline fixed-size data
+%% Struct - read inline fixed-size data (enriched record format)
+read_value(Buffer, Pos, #struct_def{fields = Fields}) ->
+    StructMap = read_struct_fields_fast(Buffer, Pos, Fields, #{}),
+    {ok, StructMap};
+%% Struct - read inline fixed-size data (raw tuple format for tests)
 read_value(Buffer, Pos, {struct, Fields}) ->
     {StructMap, _Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {ok, StructMap};
@@ -263,41 +267,41 @@ read_vector_elements(Buffer, Pos, Count, ElementType, Acc) ->
     {ElementSize, Value} = read_vector_element(Buffer, Pos, ElementType),
     read_vector_elements(Buffer, Pos + ElementSize, Count - 1, ElementType, [Value | Acc]).
 
-%% 8-bit elements
+%% 8-bit elements (canonical types first)
 read_vector_element(Buffer, Pos, bool) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {1, Value =/= 0};
-read_vector_element(Buffer, Pos, Type) when Type == byte; Type == int8 ->
+read_vector_element(Buffer, Pos, int8) ->
     <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
     {1, Value};
-read_vector_element(Buffer, Pos, Type) when Type == ubyte; Type == uint8 ->
+read_vector_element(Buffer, Pos, uint8) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {1, Value};
-%% 16-bit elements
-read_vector_element(Buffer, Pos, Type) when Type == short; Type == int16 ->
+%% 16-bit elements (canonical types first)
+read_vector_element(Buffer, Pos, int16) ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
     {2, Value};
-read_vector_element(Buffer, Pos, Type) when Type == ushort; Type == uint16 ->
+read_vector_element(Buffer, Pos, uint16) ->
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {2, Value};
-%% 32-bit elements
-read_vector_element(Buffer, Pos, Type) when Type == int; Type == int32 ->
+%% 32-bit elements (canonical types first)
+read_vector_element(Buffer, Pos, int32) ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
     {4, Value};
-read_vector_element(Buffer, Pos, Type) when Type == uint; Type == uint32 ->
+read_vector_element(Buffer, Pos, uint32) ->
     <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
     {4, Value};
-read_vector_element(Buffer, Pos, Type) when Type == float; Type == float32 ->
+read_vector_element(Buffer, Pos, float32) ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
     {4, Value};
-%% 64-bit elements
-read_vector_element(Buffer, Pos, Type) when Type == long; Type == int64 ->
+%% 64-bit elements (canonical types first)
+read_vector_element(Buffer, Pos, int64) ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
     {8, Value};
-read_vector_element(Buffer, Pos, Type) when Type == ulong; Type == uint64 ->
+read_vector_element(Buffer, Pos, uint64) ->
     <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
     {8, Value};
-read_vector_element(Buffer, Pos, Type) when Type == double; Type == float64 ->
+read_vector_element(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {8, Value};
 %% Enum in vector
@@ -317,7 +321,11 @@ read_vector_element(Buffer, Pos, string) ->
     StringPos = Pos + StringOffset,
     <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary, _/binary>> = Buffer,
     {4, StringData};
-%% Struct in vector (inline data)
+%% Struct in vector (inline data - enriched record format)
+read_vector_element(Buffer, Pos, #struct_def{fields = Fields, total_size = TotalSize}) ->
+    StructMap = read_struct_fields_fast(Buffer, Pos, Fields, #{}),
+    {TotalSize, StructMap};
+%% Struct in vector (inline data - raw tuple format)
 read_vector_element(Buffer, Pos, {struct, Fields}) ->
     {StructMap, Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {Size, StructMap};
@@ -339,6 +347,27 @@ read_vector_element(Buffer, Pos, {union_value, _UnionName}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {4, {table, NestedTablePos, Buffer}};
+%% Non-canonical aliases (for tests that bypass schema parser)
+read_vector_element(Buffer, Pos, byte) ->
+    read_vector_element(Buffer, Pos, int8);
+read_vector_element(Buffer, Pos, ubyte) ->
+    read_vector_element(Buffer, Pos, uint8);
+read_vector_element(Buffer, Pos, short) ->
+    read_vector_element(Buffer, Pos, int16);
+read_vector_element(Buffer, Pos, ushort) ->
+    read_vector_element(Buffer, Pos, uint16);
+read_vector_element(Buffer, Pos, int) ->
+    read_vector_element(Buffer, Pos, int32);
+read_vector_element(Buffer, Pos, uint) ->
+    read_vector_element(Buffer, Pos, uint32);
+read_vector_element(Buffer, Pos, float) ->
+    read_vector_element(Buffer, Pos, float32);
+read_vector_element(Buffer, Pos, long) ->
+    read_vector_element(Buffer, Pos, int64);
+read_vector_element(Buffer, Pos, ulong) ->
+    read_vector_element(Buffer, Pos, uint64);
+read_vector_element(Buffer, Pos, double) ->
+    read_vector_element(Buffer, Pos, float64);
 %% Table in vector (offset to table)
 read_vector_element(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -348,6 +377,13 @@ read_vector_element(Buffer, Pos, TableName) when is_atom(TableName) ->
 %% =============================================================================
 %% Struct Reading
 %% =============================================================================
+
+%% Read struct fields inline - fast path using precomputed offsets from #struct_def{}
+read_struct_fields_fast(_Buffer, _Pos, [], Acc) ->
+    Acc;
+read_struct_fields_fast(Buffer, Pos, [#{name := Name, type := Type, offset := Offset} | Rest], Acc) ->
+    {ok, Value} = read_struct_value(Buffer, Pos + Offset, Type),
+    read_struct_fields_fast(Buffer, Pos, Rest, Acc#{Name => Value}).
 
 %% Read struct fields inline - structs are fixed-size, no vtable
 %% Handles both enriched format (maps) and raw tuple format
@@ -464,6 +500,8 @@ element_size({enum, UnderlyingType, _Values}) ->
     element_size(UnderlyingType);
 element_size({array, ElemType, Count}) ->
     element_size(ElemType) * Count;
+element_size(#struct_def{total_size = TotalSize}) ->
+    TotalSize;
 element_size({struct, Fields}) ->
     {_Offsets, Size} = calc_struct_layout(Fields),
     Size;

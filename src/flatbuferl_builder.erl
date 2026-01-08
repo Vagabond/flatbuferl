@@ -707,6 +707,7 @@ resolve_type({TypeName, Default}, Defs) when
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, Base}, Values} -> {enum, Base, Values};
+        #struct_def{} = StructDef -> StructDef;
         {struct, Fields} -> {struct, Fields};
         _ -> Type
     end;
@@ -1741,6 +1742,8 @@ encode_scalar(Value, {enum, Base, IndexMap}) when is_atom(Value), is_map(IndexMa
 encode_scalar(Value, {enum, Base, _IndexMap}) when is_integer(Value) ->
     %% Already an integer, use directly
     encode_scalar(Value, Base);
+encode_scalar(Map, #struct_def{fields = Fields}) when is_map(Map) ->
+    encode_struct(Map, Fields);
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
 encode_scalar(List, {array, ElemType, Count}) when is_list(List) ->
@@ -1818,6 +1821,7 @@ type_size(double) -> 8;
 type_size(float64) -> 8;
 type_size({enum, Base}) -> type_size(Base);
 type_size({enum, Base, _Values}) -> type_size(Base);
+type_size(#struct_def{total_size = TotalSize}) -> TotalSize;
 type_size({struct, Fields}) -> calc_struct_size(Fields);
 type_size({array, ElemType, Count}) -> type_size(ElemType) * Count;
 %% Union type is ubyte

@@ -260,6 +260,14 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
                         missing ->
                             missing
                     end;
+                #struct_def{} = StructDef ->
+                    %% Named struct type - look up and fetch from struct data
+                    case flatbuferl_reader:get_field(TableRef, FieldId, StructDef, Buffer) of
+                        {ok, StructMap} ->
+                            fetch_from_struct(StructMap, Rest);
+                        missing ->
+                            missing
+                    end;
                 {struct, Fields} ->
                     %% Named struct type - look up and fetch from struct data
                     case flatbuferl_reader:get_field(TableRef, FieldId, {struct, Fields}, Buffer) of
@@ -270,6 +278,13 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
                     end;
                 _ ->
                     error({not_a_table, FieldName, NestedType})
+            end;
+        {ok, FieldId, #struct_def{} = StructDef, _Default} ->
+            case flatbuferl_reader:get_field(TableRef, FieldId, StructDef, Buffer) of
+                {ok, StructMap} ->
+                    fetch_from_struct(StructMap, Rest);
+                missing ->
+                    missing
             end;
         {ok, FieldId, {struct, Fields}, _Default} ->
             case flatbuferl_reader:get_field(TableRef, FieldId, {struct, Fields}, Buffer) of
@@ -788,6 +803,7 @@ any_union_member_has_field(Members, FieldName, Defs) ->
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, Base}, _Values} -> {enum, Base};
+        #struct_def{} = StructDef -> StructDef;
         {struct, Fields} -> {struct, Fields};
         _ -> Type
     end;

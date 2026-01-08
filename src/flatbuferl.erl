@@ -153,64 +153,52 @@ update(Ctx, Changes) ->
 table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     DeprecatedOpt = maps:get(deprecated, Opts, skip),
-    lists:foldl(
-        fun(
-            #field_def{
-                name = FieldName,
-                id = FieldId,
-                type = Type,
-                resolved_type = ResolvedType,
-                default = Default,
-                deprecated = Deprecated
-            },
-            Acc
-        ) ->
-            %% Handle deprecated fields
-            case {Deprecated, DeprecatedOpt} of
-                {true, skip} ->
-                    Acc;
-                {true, error} ->
-                    %% Check if field is present in buffer
-                    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                        {ok, _} -> error({deprecated_field_present, TableType, FieldName});
-                        missing -> Acc
-                    end;
-                {true, allow} ->
-                    %% For deprecated fields with allow, only include if actually present
-                    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                        {ok, Value} -> Acc#{FieldName => Value};
-                        missing -> Acc
-                    end;
-                _ ->
-                    %% Fast path: inline common case for atom types (scalars, nested tables)
-                    case Type of
-                        _ when is_atom(Type) ->
-                            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                                {ok, Value} ->
-                                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
-                                missing when Default /= undefined ->
-                                    Acc#{FieldName => Default};
-                                missing ->
-                                    Acc
-                            end;
-                        {vector, ElemType} when is_atom(ElemType) ->
-                            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                                {ok, Value} ->
-                                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
-                                missing when Default /= undefined ->
-                                    Acc#{FieldName => Default};
-                                missing ->
-                                    Acc
-                            end;
-                        _ ->
-                            decode_field(FieldName, FieldId, Type, ResolvedType, Default,
-                                         TableRef, Defs, Buffer, Opts, Acc)
-                    end
-            end
-        end,
-        #{},
-        Fields
-    ).
+    decode_fields(Fields, TableRef, Defs, TableType, Buffer, Opts, DeprecatedOpt, #{}).
+
+%% Recursive field decoder - avoids anonymous function overhead
+decode_fields([], _TableRef, _Defs, _TableType, _Buffer, _Opts, _DeprecatedOpt, Acc) ->
+    Acc;
+%% Skip deprecated fields (common case: DeprecatedOpt = skip)
+decode_fields([#field_def{deprecated = true} | Rest], TableRef, Defs, TableType, Buffer, Opts, skip, Acc) ->
+    decode_fields(Rest, TableRef, Defs, TableType, Buffer, Opts, skip, Acc);
+%% Non-deprecated atom type (scalar or nested table) - most common path
+decode_fields([#field_def{name = Name, id = Id, type = Type, resolved_type = RT, default = Def, deprecated = false} | Rest],
+              TableRef, Defs, TableType, Buffer, Opts, DepOpt, Acc) when is_atom(Type) ->
+    Acc1 = case flatbuferl_reader:get_field(TableRef, Id, RT, Buffer) of
+        {ok, Value} -> Acc#{Name => convert_value(Value, Type, Defs, Buffer, Opts)};
+        missing when Def /= undefined -> Acc#{Name => Def};
+        missing -> Acc
+    end,
+    decode_fields(Rest, TableRef, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Non-deprecated vector of atoms
+decode_fields([#field_def{name = Name, id = Id, type = {vector, ElemType}, resolved_type = RT, default = Def, deprecated = false} | Rest],
+              TableRef, Defs, TableType, Buffer, Opts, DepOpt, Acc) when is_atom(ElemType) ->
+    Acc1 = case flatbuferl_reader:get_field(TableRef, Id, RT, Buffer) of
+        {ok, Value} -> Acc#{Name => convert_value(Value, {vector, ElemType}, Defs, Buffer, Opts)};
+        missing when Def /= undefined -> Acc#{Name => Def};
+        missing -> Acc
+    end,
+    decode_fields(Rest, TableRef, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Other non-deprecated fields - use decode_field
+decode_fields([#field_def{name = Name, id = Id, type = Type, resolved_type = RT, default = Def, deprecated = false} | Rest],
+              TableRef, Defs, TableType, Buffer, Opts, DepOpt, Acc) ->
+    Acc1 = decode_field(Name, Id, Type, RT, Def, TableRef, Defs, Buffer, Opts, Acc),
+    decode_fields(Rest, TableRef, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Deprecated field with error option
+decode_fields([#field_def{name = Name, id = Id, resolved_type = RT, deprecated = true} | Rest],
+              TableRef, Defs, TableType, Buffer, Opts, error, Acc) ->
+    case flatbuferl_reader:get_field(TableRef, Id, RT, Buffer) of
+        {ok, _} -> error({deprecated_field_present, TableType, Name});
+        missing -> decode_fields(Rest, TableRef, Defs, TableType, Buffer, Opts, error, Acc)
+    end;
+%% Deprecated field with allow option
+decode_fields([#field_def{name = Name, id = Id, resolved_type = RT, deprecated = true} | Rest],
+              TableRef, Defs, TableType, Buffer, Opts, allow, Acc) ->
+    Acc1 = case flatbuferl_reader:get_field(TableRef, Id, RT, Buffer) of
+        {ok, Value} -> Acc#{Name => Value};
+        missing -> Acc
+    end,
+    decode_fields(Rest, TableRef, Defs, TableType, Buffer, Opts, allow, Acc1).
 
 %% Union type field - output as <field>_type with the member name
 decode_field(FieldName, FieldId, {union_type, UnionName}, _ResolvedType, _Default,

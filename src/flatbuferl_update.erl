@@ -336,12 +336,17 @@ traverse_for_update([FieldName | Rest], Buffer, Defs, TableType, TableRef) ->
                         missing ->
                             missing
                     end;
+                #struct_def{fields = Fields} ->
+                    %% Struct field - get offset and continue into struct
+                    traverse_struct_for_update(TableRef, FieldId, Fields, Rest, Buffer, Defs);
                 {struct, Fields} ->
                     %% Struct field - get offset and continue into struct
                     traverse_struct_for_update(TableRef, FieldId, Fields, Rest, Buffer, Defs);
                 _ ->
                     {error, {not_traversable, FieldName, NestedType}}
             end;
+        {ok, FieldId, #struct_def{fields = Fields}, _Default} ->
+            traverse_struct_for_update(TableRef, FieldId, Fields, Rest, Buffer, Defs);
         {ok, FieldId, {struct, Fields}, _Default} ->
             traverse_struct_for_update(TableRef, FieldId, Fields, Rest, Buffer, Defs);
         {ok, FieldId, {vector, {union_value, UnionName}}, _Default} ->
@@ -631,11 +636,14 @@ is_fixed_size_type(float64, _Defs) ->
     {true, 8};
 is_fixed_size_type({enum, Base, _EnumName}, Defs) ->
     is_fixed_size_type(Base, Defs);
+is_fixed_size_type(#struct_def{total_size = TotalSize}, _Defs) ->
+    {true, TotalSize};
 is_fixed_size_type({struct, Fields}, Defs) ->
     {true, struct_size(Fields, Defs)};
 is_fixed_size_type(TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
         {{enum, Base}, _, _} -> is_fixed_size_type(Base, Defs);
+        #struct_def{total_size = TotalSize} -> {true, TotalSize};
         {struct, Fields} -> {true, struct_size(Fields, Defs)};
         _ -> false
     end;
@@ -663,6 +671,7 @@ type_size(int64) -> 8;
 type_size(uint64) -> 8;
 type_size(double) -> 8;
 type_size(float64) -> 8;
+type_size(#struct_def{total_size = TotalSize}) -> TotalSize;
 type_size({struct, Fields}) -> struct_size(Fields, #{});
 type_size(_) -> 0.
 
@@ -709,6 +718,8 @@ validate_value(Value, {enum, _Base, EnumName}, Defs) ->
         true -> ok;
         false -> {error, {invalid_enum_value, EnumName, Value}}
     end;
+validate_value(Value, #struct_def{fields = Fields}, Defs) when is_map(Value) ->
+    validate_struct_value(Value, Fields, Defs);
 validate_value(Value, {struct, Fields}, Defs) when is_map(Value) ->
     validate_struct_value(Value, Fields, Defs);
 validate_value(Value, TypeName, Defs) when is_atom(TypeName) ->
@@ -718,6 +729,8 @@ validate_value(Value, TypeName, Defs) when is_atom(TypeName) ->
                 true -> ok;
                 false -> {error, {invalid_enum_value, TypeName, Value}}
             end;
+        #struct_def{fields = Fields} ->
+            validate_struct_value(Value, Fields, Defs);
         {struct, Fields} ->
             validate_struct_value(Value, Fields, Defs);
         _ ->

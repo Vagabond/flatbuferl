@@ -154,18 +154,19 @@ enrich_def({{enum, BaseType}, Values}) ->
     IndexMap = maps:from_list(lists:zip(Values, lists:seq(0, length(Values) - 1))),
     {{enum, BaseType}, Values, IndexMap};
 enrich_def({struct, Fields}) ->
-    %% Precompute field offsets and sizes for efficient struct encoding
-    {EnrichedFields, _, _} = lists:foldl(
-        fun({Name, Type}, {Acc, Off, MaxAlign}) ->
+    %% Precompute field offsets, sizes, and total struct size for efficient decoding
+    {EnrichedFields, RawSize, MaxAlign} = lists:foldl(
+        fun({Name, Type}, {Acc, Off, MaxAlignAcc}) ->
             Size = primitive_type_size(Type),
             AlignedOff = align_to(Off, Size),
             Field = #{name => Name, type => Type, offset => AlignedOff, size => Size},
-            {[Field | Acc], AlignedOff + Size, max(MaxAlign, Size)}
+            {[Field | Acc], AlignedOff + Size, max(MaxAlignAcc, Size)}
         end,
         {[], 0, 1},
         Fields
     ),
-    {struct, lists:reverse(EnrichedFields)};
+    TotalSize = align_to(RawSize, MaxAlign),
+    #struct_def{fields = lists:reverse(EnrichedFields), total_size = TotalSize};
 enrich_def(Other) ->
     Other.
 
@@ -382,6 +383,8 @@ is_scalar_type({union_value, _}, _Defs) ->
     false;
 is_scalar_type({union_type, _}, _Defs) ->
     true;
+is_scalar_type(#struct_def{}, _Defs) ->
+    true;
 is_scalar_type({struct, _}, _Defs) ->
     true;
 is_scalar_type({array, _, _}, _Defs) ->
@@ -392,6 +395,7 @@ is_scalar_type({enum, _, _}, _Defs) ->
     true;
 is_scalar_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
+        #struct_def{} -> true;
         {struct, _} -> true;
         {{enum, _}, _, _} -> true;
         {union, _, _} -> false;
@@ -425,6 +429,7 @@ normalize_type(Type) ->
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         {{enum, Base}, _Values, IndexMap} -> {enum, normalize_scalar_type(Base), IndexMap};
+        #struct_def{} = StructDef -> StructDef;
         {struct, Fields} -> {struct, Fields};
         % Keep table types as atoms for Defs lookup (both processed and unprocessed)
         #table_def{} -> Type;
@@ -476,6 +481,8 @@ field_inline_size({union_value, _}, _Defs) ->
     4;
 field_inline_size({union_type, _}, _Defs) ->
     1;
+field_inline_size(#struct_def{total_size = TotalSize}, _Defs) ->
+    TotalSize;
 field_inline_size({struct, Fields}, Defs) ->
     calc_struct_size(Fields, Defs);
 field_inline_size({array, ElemType, Count}, Defs) ->
@@ -487,6 +494,7 @@ field_inline_size({enum, Base, _Values}, Defs) ->
 field_inline_size(Type, Defs) when is_atom(Type) ->
     %% Check if it's a user-defined type
     case maps:get(Type, Defs, undefined) of
+        #struct_def{total_size = TotalSize} -> TotalSize;
         {struct, Fields} -> calc_struct_size(Fields, Defs);
         {{enum, Base}, _, _} -> type_size(Base, Defs);
         _ -> type_size(Type, Defs)
@@ -518,6 +526,7 @@ type_size(double, _) -> 8;
 type_size(float64, _) -> 8;
 type_size({enum, Base}, Defs) -> type_size(Base, Defs);
 type_size({enum, Base, _Values}, Defs) -> type_size(Base, Defs);
+type_size(#struct_def{total_size = TotalSize}, _Defs) -> TotalSize;
 type_size({struct, Fields}, Defs) -> calc_struct_size(Fields, Defs);
 type_size({array, ElemType, Count}, Defs) -> type_size(ElemType, Defs) * Count;
 type_size({union_type, _}, _) -> 1;
@@ -796,6 +805,8 @@ validate_value(Name, Value, Type, Defs, Opts) when is_atom(Type) ->
                 [] -> [];
                 Errors -> [{nested_errors, Name, Errors}]
             end;
+        #struct_def{fields = Fields} ->
+            validate_struct(Name, Value, Fields);
         {struct, Fields} ->
             validate_struct(Name, Value, Fields);
         {union, _, _} ->
