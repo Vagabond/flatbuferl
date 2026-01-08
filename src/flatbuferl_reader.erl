@@ -8,7 +8,10 @@
     get_field_offset/3,
     get_vector_info/4,
     get_vector_element_at/3,
-    element_size/1
+    element_size/1,
+    %% Fast path - read vtable once, then read fields
+    read_vtable/1,
+    read_field/4
 ]).
 
 -type buffer() :: binary().
@@ -25,6 +28,35 @@ get_root(<<RootOffset:32/little-unsigned, _/binary>> = Buffer) ->
 get_file_id(Buffer) ->
     <<_RootOffset:32, FileId:4/binary, _/binary>> = Buffer,
     FileId.
+
+%% Read vtable once for a table - returns {TableOffset, VTableSize, VTableData, Buffer}
+%% VTableData is the vtable bytes starting after the 4-byte header
+-type vtable() :: {TableOffset :: non_neg_integer(), VTableSize :: non_neg_integer(),
+                   VTableData :: binary(), Buffer :: binary()}.
+-spec read_vtable(table_ref()) -> vtable().
+read_vtable({table, TableOffset, Buffer}) ->
+    <<_:TableOffset/binary, VTableSOffset:32/little-signed, _/binary>> = Buffer,
+    VTableOffset = TableOffset - VTableSOffset,
+    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _TableSize:16,
+      VTableData/binary>> = Buffer,
+    {TableOffset, VTableSize, VTableData, Buffer}.
+
+%% Read a field using pre-read vtable - avoids re-reading vtable per field
+-spec read_field(vtable(), field_id(), atom() | tuple(), buffer()) ->
+    {ok, term()} | missing.
+read_field({TableOffset, VTableSize, VTableData, Buffer}, FieldId, FieldType, _) ->
+    FieldOffsetPos = 4 + (FieldId * 2),
+    case FieldOffsetPos < VTableSize of
+        true ->
+            FieldOffsetInVTable = FieldOffsetPos - 4,
+            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableData,
+            case FieldOffset of
+                0 -> missing;
+                _ -> read_value(Buffer, TableOffset + FieldOffset, FieldType)
+            end;
+        false ->
+            missing
+    end.
 
 %% Low-level field access by ID and type
 -spec get_field(table_ref(), field_id(), atom() | tuple(), buffer()) ->
@@ -513,42 +545,55 @@ element_size({union_value, _}) ->
 element_size(TableName) when is_atom(TableName) -> 4.
 
 %% Read a scalar value from struct (no offset indirection)
+%% Canonical types first for fast matching
 read_struct_value(Buffer, Pos, bool) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value =/= 0};
-read_struct_value(Buffer, Pos, Type) when Type == byte; Type == int8 ->
+read_struct_value(Buffer, Pos, int8) ->
     <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == ubyte; Type == uint8 ->
+read_struct_value(Buffer, Pos, uint8) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == short; Type == int16 ->
+read_struct_value(Buffer, Pos, int16) ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == ushort; Type == uint16 ->
+read_struct_value(Buffer, Pos, uint16) ->
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == int; Type == int32 ->
+read_struct_value(Buffer, Pos, int32) ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == uint; Type == uint32 ->
+read_struct_value(Buffer, Pos, uint32) ->
     <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == float; Type == float32 ->
+read_struct_value(Buffer, Pos, float32) ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == long; Type == int64 ->
+read_struct_value(Buffer, Pos, int64) ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == ulong; Type == uint64 ->
+read_struct_value(Buffer, Pos, uint64) ->
     <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-read_struct_value(Buffer, Pos, Type) when Type == double; Type == float64 ->
+read_struct_value(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
+%% Compound types
 read_struct_value(Buffer, Pos, {array, ElemType, Count}) ->
     {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
-    {ok, Elements}.
+    {ok, Elements};
+%% Non-canonical aliases (for tests that bypass schema parser)
+read_struct_value(Buffer, Pos, byte) -> read_struct_value(Buffer, Pos, int8);
+read_struct_value(Buffer, Pos, ubyte) -> read_struct_value(Buffer, Pos, uint8);
+read_struct_value(Buffer, Pos, short) -> read_struct_value(Buffer, Pos, int16);
+read_struct_value(Buffer, Pos, ushort) -> read_struct_value(Buffer, Pos, uint16);
+read_struct_value(Buffer, Pos, int) -> read_struct_value(Buffer, Pos, int32);
+read_struct_value(Buffer, Pos, uint) -> read_struct_value(Buffer, Pos, uint32);
+read_struct_value(Buffer, Pos, float) -> read_struct_value(Buffer, Pos, float32);
+read_struct_value(Buffer, Pos, long) -> read_struct_value(Buffer, Pos, int64);
+read_struct_value(Buffer, Pos, ulong) -> read_struct_value(Buffer, Pos, uint64);
+read_struct_value(Buffer, Pos, double) -> read_struct_value(Buffer, Pos, float64).
 
 %% =============================================================================
 %% Array Reading
