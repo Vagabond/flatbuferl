@@ -177,117 +177,116 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
                     end;
                 {true, allow} ->
                     %% For deprecated fields with allow, only include if actually present
-                    %% (don't fall back to default value)
-                    decode_field_no_default(
-                        FieldName, FieldId, Type, ResolvedType, TableRef, Defs, Buffer, Opts, Acc
-                    );
+                    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                        {ok, Value} -> Acc#{FieldName => Value};
+                        missing -> Acc
+                    end;
                 _ ->
-                    decode_field(
-                        FieldName,
-                        FieldId,
-                        Type,
-                        ResolvedType,
-                        Default,
-                        TableRef,
-                        Defs,
-                        Buffer,
-                        Opts,
-                        Acc
-                    )
+                    %% Fast path: inline common case for atom types (scalars, nested tables)
+                    case Type of
+                        _ when is_atom(Type) ->
+                            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                                {ok, Value} ->
+                                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
+                                missing when Default /= undefined ->
+                                    Acc#{FieldName => Default};
+                                missing ->
+                                    Acc
+                            end;
+                        {vector, ElemType} when is_atom(ElemType) ->
+                            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                                {ok, Value} ->
+                                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
+                                missing when Default /= undefined ->
+                                    Acc#{FieldName => Default};
+                                missing ->
+                                    Acc
+                            end;
+                        _ ->
+                            decode_field(FieldName, FieldId, Type, ResolvedType, Default,
+                                         TableRef, Defs, Buffer, Opts, Acc)
+                    end
             end
         end,
         #{},
         Fields
     ).
 
-decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Buffer, Opts, Acc) ->
-    case Type of
-        {union_type, UnionName} ->
-            %% Union type field - output as <field>_type with the member name
-            case flatbuferl_reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
-                {ok, 0} ->
-                    %% NONE type - skip
-                    Acc;
-                {ok, TypeIndex} ->
+%% Union type field - output as <field>_type with the member name
+decode_field(FieldName, FieldId, {union_type, UnionName}, _ResolvedType, _Default,
+             TableRef, Defs, Buffer, _Opts, Acc) ->
+    case flatbuferl_reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
+        {ok, 0} ->
+            Acc;
+        {ok, TypeIndex} ->
+            {union, Members, _} = maps:get(UnionName, Defs),
+            MemberType = lists:nth(TypeIndex, Members),
+            Acc#{FieldName => MemberType};
+        missing ->
+            Acc
+    end;
+%% Union value field - output the nested table directly
+decode_field(FieldName, FieldId, {union_value, UnionName}, ResolvedType, _Default,
+             TableRef, Defs, Buffer, Opts, Acc) ->
+    TypeFieldId = FieldId - 1,
+    case flatbuferl_reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
+        {ok, 0} ->
+            Acc;
+        {ok, TypeIndex} ->
+            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
+                {ok, TableValueRef} ->
                     {union, Members, _} = maps:get(UnionName, Defs),
                     MemberType = lists:nth(TypeIndex, Members),
-                    Acc#{FieldName => MemberType};
+                    ConvertedValue = table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts),
+                    Acc#{FieldName => ConvertedValue};
                 missing ->
                     Acc
             end;
-        {union_value, UnionName} ->
-            %% Union value field - output the nested table directly
-            TypeFieldId = FieldId - 1,
-            case
-                flatbuferl_reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer)
-            of
-                {ok, 0} ->
-                    %% NONE type
-                    Acc;
-                {ok, TypeIndex} ->
-                    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                        {ok, TableValueRef} ->
-                            {union, Members, _} = maps:get(UnionName, Defs),
-                            MemberType = lists:nth(TypeIndex, Members),
-                            ConvertedValue = table_to_map(
-                                TableValueRef, Defs, MemberType, Buffer, Opts
-                            ),
-                            Acc#{FieldName => ConvertedValue};
-                        missing ->
-                            Acc
-                    end;
-                missing ->
-                    Acc
-            end;
-        {vector, {union_type, UnionName}} ->
-            %% Vector of union types - output as list of type names
-            case flatbuferl_reader:get_field(TableRef, FieldId, {vector, ubyte}, Buffer) of
-                {ok, TypeIndices} ->
+        missing ->
+            Acc
+    end;
+%% Vector of union types - output as list of type names
+decode_field(FieldName, FieldId, {vector, {union_type, UnionName}}, _ResolvedType, _Default,
+             TableRef, Defs, Buffer, _Opts, Acc) ->
+    case flatbuferl_reader:get_field(TableRef, FieldId, {vector, ubyte}, Buffer) of
+        {ok, TypeIndices} ->
+            {union, Members, _} = maps:get(UnionName, Defs),
+            TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
+            Acc#{FieldName => TypeNames};
+        missing ->
+            Acc
+    end;
+%% Vector of union values - decode each table using its type
+decode_field(FieldName, FieldId, {vector, {union_value, UnionName}}, _ResolvedType, _Default,
+             TableRef, Defs, Buffer, Opts, Acc) ->
+    TypeFieldId = FieldId - 1,
+    case flatbuferl_reader:get_field(TableRef, TypeFieldId, {vector, ubyte}, Buffer) of
+        {ok, TypeIndices} ->
+            case flatbuferl_reader:get_field(TableRef, FieldId, {vector, table}, Buffer) of
+                {ok, TableRefs} ->
                     {union, Members, _} = maps:get(UnionName, Defs),
-                    TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
-                    Acc#{FieldName => TypeNames};
+                    DecodedValues = lists:zipwith(
+                        fun(TypeIdx, TableValueRef) ->
+                            MemberType = lists:nth(TypeIdx, Members),
+                            table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
+                        end,
+                        TypeIndices,
+                        TableRefs
+                    ),
+                    Acc#{FieldName => DecodedValues};
                 missing ->
                     Acc
             end;
-        {vector, {union_value, UnionName}} ->
-            %% Vector of union values - decode each table using its type
-            TypeFieldId = FieldId - 1,
-            case flatbuferl_reader:get_field(TableRef, TypeFieldId, {vector, ubyte}, Buffer) of
-                {ok, TypeIndices} ->
-                    case flatbuferl_reader:get_field(TableRef, FieldId, {vector, table}, Buffer) of
-                        {ok, TableRefs} ->
-                            {union, Members, _} = maps:get(UnionName, Defs),
-                            DecodedValues = lists:zipwith(
-                                fun(TypeIdx, TableValueRef) ->
-                                    MemberType = lists:nth(TypeIdx, Members),
-                                    table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
-                                end,
-                                TypeIndices,
-                                TableRefs
-                            ),
-                            Acc#{FieldName => DecodedValues};
-                        missing ->
-                            Acc
-                    end;
-                missing ->
-                    Acc
-            end;
-        _ ->
-            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                {ok, Value} ->
-                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
-                missing when Default =/= undefined ->
-                    Acc#{FieldName => Default};
-                missing ->
-                    Acc
-            end
-    end.
-
-%% Decode field but don't include default values for missing fields (for deprecated fields)
-decode_field_no_default(FieldName, FieldId, Type, ResolvedType, TableRef, Defs, Buffer, Opts, Acc) ->
+        missing ->
+            Acc
+    end;
+%% Catch-all for other types (e.g., vectors of structs)
+decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Buffer, Opts, Acc) ->
     case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
         {ok, Value} ->
             Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
+        missing when Default /= undefined ->
+            Acc#{FieldName => Default};
         missing ->
             Acc
     end.

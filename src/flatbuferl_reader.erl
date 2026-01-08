@@ -138,84 +138,40 @@ get_vector_element_at({Length, ElementsStart, ElementType}, Index, Buffer) ->
 
 %% Read a value of given type at position
 %% Types are normalized to canonical forms at schema parse time for fast matching
-%% Aliases are kept for backward compatibility with direct API usage
-%% Boolean
+%% Canonical types are listed first, aliases at end for backward compatibility
+%%
+%% === Canonical scalar types (used by parsed schemas) ===
 read_value(Buffer, Pos, bool) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value =/= 0};
-%% 8-bit integers
 read_value(Buffer, Pos, int8) ->
-    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-%% alias
-read_value(Buffer, Pos, byte) ->
     <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint8) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-%% alias
-read_value(Buffer, Pos, ubyte) ->
-    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-%% 16-bit integers
 read_value(Buffer, Pos, int16) ->
-    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-%% alias
-read_value(Buffer, Pos, short) ->
     <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint16) ->
     <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-%% alias
-read_value(Buffer, Pos, ushort) ->
-    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-%% 32-bit integers
 read_value(Buffer, Pos, int32) ->
-    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-%% alias
-read_value(Buffer, Pos, int) ->
     <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint32) ->
     <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-%% alias
-read_value(Buffer, Pos, uint) ->
-    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-%% 64-bit integers
 read_value(Buffer, Pos, int64) ->
-    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-%% alias
-read_value(Buffer, Pos, long) ->
     <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
     {ok, Value};
 read_value(Buffer, Pos, uint64) ->
     <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
     {ok, Value};
-%% alias
-read_value(Buffer, Pos, ulong) ->
-    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-%% Floating point
 read_value(Buffer, Pos, float32) ->
     <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
     {ok, Value};
-%% alias
-read_value(Buffer, Pos, float) ->
-    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
-    {ok, Value};
 read_value(Buffer, Pos, float64) ->
-    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
-    {ok, Value};
-%% alias
-read_value(Buffer, Pos, double) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
 %% String (offset to length-prefixed UTF-8)
@@ -224,6 +180,7 @@ read_value(Buffer, Pos, string) ->
     StringPos = Pos + StringOffset,
     <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary, _/binary>> = Buffer,
     {ok, StringData};
+%% === Compound types ===
 %% Vector (offset to length-prefixed array)
 read_value(Buffer, Pos, {vector, ElementType}) ->
     <<_:Pos/binary, VectorOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -232,22 +189,18 @@ read_value(Buffer, Pos, {vector, ElementType}) ->
     ElementsStart = VectorPos + 4,
     read_vector_elements(Buffer, ElementsStart, Length, ElementType, []);
 %% Enum - read as underlying type, return integer value
+read_value(Buffer, Pos, {enum, UnderlyingType, _IndexMap}) ->
+    read_value(Buffer, Pos, UnderlyingType);
 read_value(Buffer, Pos, {enum, UnderlyingType}) ->
     read_value(Buffer, Pos, UnderlyingType);
-read_value(Buffer, Pos, {enum, UnderlyingType, _Values}) ->
-    read_value(Buffer, Pos, UnderlyingType);
-%% Type with default value - extract just the type
-%% Defaults are only for scalar types, matched after enum
-%% Only handles numeric and boolean defaults - atom defaults (enum values)
-%% are handled at a higher level via resolve_for_reader
-read_value(Buffer, Pos, {Type, Default}) when
-    is_atom(Type), is_number(Default)
-->
-    read_value(Buffer, Pos, Type);
-read_value(Buffer, Pos, {Type, Default}) when
-    is_atom(Type), is_boolean(Default)
-->
-    read_value(Buffer, Pos, Type);
+%% Struct - read inline fixed-size data
+read_value(Buffer, Pos, {struct, Fields}) ->
+    {StructMap, _Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
+    {ok, StructMap};
+%% Array - read inline fixed-size array
+read_value(Buffer, Pos, {array, ElemType, Count}) ->
+    {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
+    {ok, Elements};
 %% Union type - read the discriminator byte
 read_value(Buffer, Pos, {union_type, _UnionName}) ->
     <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
@@ -257,15 +210,44 @@ read_value(Buffer, Pos, {union_value, _UnionName}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {ok, {table, NestedTablePos, Buffer}};
-%% Struct - read inline fixed-size data
-read_value(Buffer, Pos, {struct, Fields}) ->
-    {StructMap, _Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
-    {ok, StructMap};
-%% Array - read inline fixed-size array
-read_value(Buffer, Pos, {array, ElemType, Count}) ->
-    {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
-    {ok, Elements};
-%% Nested table - return table reference for lazy access
+%% Type with default value - extract just the type (used internally)
+read_value(Buffer, Pos, {Type, Default}) when is_atom(Type), is_number(Default) ->
+    read_value(Buffer, Pos, Type);
+read_value(Buffer, Pos, {Type, Default}) when is_atom(Type), is_boolean(Default) ->
+    read_value(Buffer, Pos, Type);
+%% === Aliases (for backward compatibility with direct API usage) ===
+%% Must come before the catch-all atom clause below
+read_value(Buffer, Pos, byte) ->
+    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, ubyte) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, short) ->
+    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, ushort) ->
+    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, int) ->
+    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, uint) ->
+    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, long) ->
+    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, ulong) ->
+    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, float) ->
+    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
+    {ok, Value};
+read_value(Buffer, Pos, double) ->
+    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
+    {ok, Value};
+%% Nested table - return table reference for lazy access (catch-all for atoms)
 read_value(Buffer, Pos, TableName) when is_atom(TableName) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
