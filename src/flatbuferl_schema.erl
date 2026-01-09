@@ -249,7 +249,9 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
     NormalizedType = normalize_type(Type),
     Id = maps:get(id, Attrs, 0),
     InlineSize = field_inline_size(NormalizedType, Defs),
-    ResolvedType = resolve_type(NormalizedType, Defs),
+    ResolvedType0 = resolve_type(NormalizedType, Defs),
+    %% For union_value_def, set the type_field_id now that we know the field ID
+    ResolvedType = finalize_resolved_type(ResolvedType0, Id),
     #field_def{
         name = Name,
         id = Id,
@@ -266,7 +268,8 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
 optimize_field_to_record({Name, Type}, Defs) ->
     NormalizedType = normalize_type(Type),
     InlineSize = field_inline_size(NormalizedType, Defs),
-    ResolvedType = resolve_type(NormalizedType, Defs),
+    ResolvedType0 = resolve_type(NormalizedType, Defs),
+    ResolvedType = finalize_resolved_type(ResolvedType0, 0),
     #field_def{
         name = Name,
         id = 0,
@@ -280,6 +283,12 @@ optimize_field_to_record({Name, Type}, Defs) ->
         resolved_type = ResolvedType,
         layout_key = InlineSize * 65536
     }.
+
+%% Set type_field_id for union_value_def records (value field ID - 1)
+finalize_resolved_type(#union_value_def{} = R, FieldId) ->
+    R#union_value_def{type_field_id = FieldId - 1};
+finalize_resolved_type(Other, _FieldId) ->
+    Other.
 
 %% True only for primitive scalar types (11 canonical types + enums)
 is_primitive_scalar(bool) -> true;
@@ -473,7 +482,9 @@ resolve_type({union_type, UnionName}, Defs) ->
     #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
 resolve_type({union_value, UnionName}, Defs) ->
     {union, _Members, IndexMap} = maps:get(UnionName, Defs),
-    #union_value_def{name = UnionName, index_map = IndexMap};
+    ReverseMap = maps:fold(fun(K, V, M) -> M#{V => K} end, #{}, IndexMap),
+    %% type_field_id is set later in optimize_field_to_record when we know the field ID
+    #union_value_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
 resolve_type(Type, _Defs) ->
     Type.
 

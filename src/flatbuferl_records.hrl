@@ -94,5 +94,9 @@
 %% Union value field (stores reference to the table)
 -record(union_value_def, {
     name :: atom(),
-    index_map :: #{atom() => pos_integer()}
+    index_map :: #{atom() => pos_integer()},
+    %% Precomputed reverse map for fast decode (index -> atom)
+    reverse_map :: #{pos_integer() => atom()},
+    %% Precomputed type field ID (value_field_id - 1)
+    type_field_id :: non_neg_integer()
 }).

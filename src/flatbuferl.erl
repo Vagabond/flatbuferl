@@ -221,6 +221,38 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Union value field - use precomputed type_field_id and reverse_map
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = #union_value_def{reverse_map = ReverseMap, type_field_id = TypeFieldId},
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_union_type_field(VTable, TypeFieldId, Buffer) of
+            {ok, 0} -> Acc;
+            {ok, TypeIndex} ->
+                case flatbuferl_reader:read_union_value_field(VTable, Id, Buffer) of
+                    {ok, TableRef} ->
+                        MemberType = maps:get(TypeIndex, ReverseMap),
+                        Acc#{Name => table_to_map(TableRef, Defs, MemberType, Buffer, Opts)};
+                    missing -> Acc
+                end;
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Primitive scalar - fast path with only 11 clause function
 decode_fields(
     [
@@ -360,69 +392,6 @@ decode_fields(
             missing when Def /= undefined -> Acc#{Name => Def};
             missing ->
                 Acc
-        end,
-    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Union type field - read discriminator and resolve to member name
-decode_fields(
-    [
-        #field_def{
-            name = Name,
-            id = Id,
-            type = {union_type, UnionName},
-            deprecated = false
-        }
-        | Rest
-    ],
-    VTable,
-    Defs,
-    TableType,
-    Buffer,
-    Opts,
-    DepOpt,
-    Acc
-) ->
-    Acc1 =
-        case flatbuferl_reader:read_union_type_field(VTable, Id, Buffer) of
-            {ok, 0} -> Acc;
-            {ok, TypeIndex} ->
-                {union, Members, _} = maps:get(UnionName, Defs),
-                MemberType = lists:nth(TypeIndex, Members),
-                Acc#{Name => MemberType};
-            missing -> Acc
-        end,
-    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Union value field - read table reference and convert
-decode_fields(
-    [
-        #field_def{
-            name = Name,
-            id = Id,
-            type = {union_value, UnionName},
-            deprecated = false
-        }
-        | Rest
-    ],
-    VTable,
-    Defs,
-    TableType,
-    Buffer,
-    Opts,
-    DepOpt,
-    Acc
-) ->
-    TypeFieldId = Id - 1,
-    Acc1 =
-        case flatbuferl_reader:read_union_type_field(VTable, TypeFieldId, Buffer) of
-            {ok, 0} -> Acc;
-            {ok, TypeIndex} ->
-                case flatbuferl_reader:read_union_value_field(VTable, Id, Buffer) of
-                    {ok, TableRef} ->
-                        {union, Members, _} = maps:get(UnionName, Defs),
-                        MemberType = lists:nth(TypeIndex, Members),
-                        Acc#{Name => table_to_map(TableRef, Defs, MemberType, Buffer, Opts)};
-                    missing -> Acc
-                end;
-            missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Vector of union types - read discriminator bytes and map to member names
