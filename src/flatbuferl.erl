@@ -191,6 +191,36 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Union type field - read discriminator and convert index to atom
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = #union_type_def{reverse_map = ReverseMap},
+            deprecated = false,
+            is_primitive = true
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    %% Use precomputed reverse map (index -> atom) for decoding
+    Acc1 =
+        case flatbuferl_reader:read_union_type_field(VTable, Id, Buffer) of
+            {ok, 0} -> Acc;
+            {ok, TypeIndex} ->
+                MemberType = maps:get(TypeIndex, ReverseMap),
+                Acc#{Name => MemberType};
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Primitive scalar - fast path with only 11 clause function
 decode_fields(
     [

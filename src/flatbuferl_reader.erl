@@ -225,7 +225,11 @@ read_scalar(Buffer, Pos, float64) ->
 read_scalar(Buffer, Pos, {enum, UnderlyingType, _IndexMap}) ->
     read_scalar(Buffer, Pos, UnderlyingType);
 read_scalar(Buffer, Pos, {enum, UnderlyingType}) ->
-    read_scalar(Buffer, Pos, UnderlyingType).
+    read_scalar(Buffer, Pos, UnderlyingType);
+%% Union type - ubyte discriminator
+read_scalar(Buffer, Pos, #union_type_def{}) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {ok, Value}.
 
 %% Low-level field access by ID and type
 -spec get_field(table_ref(), field_id(), atom() | tuple(), buffer()) ->
@@ -369,8 +373,15 @@ read_value(Buffer, Pos, {array, ElemType, Count}) ->
 read_value(Buffer, Pos, {union_type, _UnionName}) ->
     <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
     {ok, TypeIndex};
+read_value(Buffer, Pos, #union_type_def{}) ->
+    <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
+    {ok, TypeIndex};
 %% Union value - read offset to table (returns table ref, caller resolves type)
 read_value(Buffer, Pos, {union_value, _UnionName}) ->
+    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+    NestedTablePos = Pos + TableOffset,
+    {ok, {table, NestedTablePos, Buffer}};
+read_value(Buffer, Pos, #union_value_def{}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {ok, {table, NestedTablePos, Buffer}};
@@ -446,7 +457,11 @@ read_scalar_value(Buffer, Pos, float64) ->
 read_scalar_value(Buffer, Pos, {enum, UnderlyingType, _IndexMap}) ->
     read_scalar_value(Buffer, Pos, UnderlyingType);
 read_scalar_value(Buffer, Pos, {enum, UnderlyingType}) ->
-    read_scalar_value(Buffer, Pos, UnderlyingType).
+    read_scalar_value(Buffer, Pos, UnderlyingType);
+%% Union type - stored as uint8
+read_scalar_value(Buffer, Pos, #union_type_def{}) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    Value.
 
 %% Read compound vector element value
 read_compound_value(Buffer, Pos, string) ->
@@ -459,7 +474,13 @@ read_compound_value(Buffer, Pos, #struct_def{fields = Fields}) ->
 read_compound_value(Buffer, Pos, {union_type, _UnionName}) ->
     <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
     TypeIndex;
+read_compound_value(Buffer, Pos, #union_type_def{}) ->
+    <<_:Pos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
+    TypeIndex;
 read_compound_value(Buffer, Pos, {union_value, _UnionName}) ->
+    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+    {table, Pos + TableOffset, Buffer};
+read_compound_value(Buffer, Pos, #union_value_def{}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     {table, Pos + TableOffset, Buffer};
 read_compound_value(Buffer, Pos, TableName) when is_atom(TableName) ->
@@ -612,10 +633,14 @@ element_size(#struct_def{total_size = TotalSize}) ->
 element_size({struct, Fields}) ->
     {_Offsets, Size} = calc_struct_layout(Fields),
     Size;
-% offset
+% Union types (both record and tuple forms for compatibility with fetch/update modules)
 element_size({union_type, _}) ->
     1;
+element_size(#union_type_def{}) ->
+    1;
 element_size({union_value, _}) ->
+    4;
+element_size(#union_value_def{}) ->
     4;
 element_size(TableName) when is_atom(TableName) -> 4.
 

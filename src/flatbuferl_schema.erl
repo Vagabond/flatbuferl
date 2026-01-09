@@ -294,6 +294,7 @@ is_primitive_scalar(uint64) -> true;
 is_primitive_scalar(float32) -> true;
 is_primitive_scalar(float64) -> true;
 is_primitive_scalar({enum, _, _}) -> true;
+is_primitive_scalar(#union_type_def{}) -> true;
 is_primitive_scalar(_) -> false.
 
 %% Precompute encoding layout for "all fields present" case
@@ -466,15 +467,23 @@ resolve_type({vector, ElemType}, Defs) ->
     };
 resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
+resolve_type({union_type, UnionName}, Defs) ->
+    {union, _Members, IndexMap} = maps:get(UnionName, Defs),
+    ReverseMap = maps:fold(fun(K, V, M) -> M#{V => K} end, #{}, IndexMap),
+    #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
+resolve_type({union_value, UnionName}, Defs) ->
+    {union, _Members, IndexMap} = maps:get(UnionName, Defs),
+    #union_value_def{name = UnionName, index_map = IndexMap};
 resolve_type(Type, _Defs) ->
     Type.
 
 %% Vector element size - actual inline size for scalars/structs, offset size for refs
 vector_element_size(string, _Defs) ->
     4;
-vector_element_size({union_type, _}, _Defs) ->
+%% Union types (record form only - tuple form resolved before this is called)
+vector_element_size(#union_type_def{}, _Defs) ->
     1;
-vector_element_size({union_value, _}, _Defs) ->
+vector_element_size(#union_value_def{}, _Defs) ->
     4;
 vector_element_size({enum, UnderlyingType, _}, Defs) ->
     type_size(UnderlyingType, Defs);
@@ -610,8 +619,14 @@ expand_union_fields(Fields, Defs) ->
         fun(Field) ->
             {Name, Type, Attrs} = normalize_field(Field),
             case Type of
+                {vector, {union_type, _}} ->
+                    %% Already expanded union type vector - pass through
+                    [Field];
+                {vector, {union_value, _}} ->
+                    %% Already expanded union value vector - pass through
+                    [Field];
                 {vector, ElemType} ->
-                    %% Check if element type is a union
+                    %% Check if element type is a union (match both enriched and raw forms)
                     case maps:get(ElemType, Defs, undefined) of
                         {union, _, _} ->
                             %% Vector of union becomes two vector fields
@@ -620,13 +635,33 @@ expand_union_fields(Fields, Defs) ->
                                 {TypeFieldName, {vector, {union_type, ElemType}}, Attrs},
                                 {Name, {vector, {union_value, ElemType}}, Attrs}
                             ];
+                        {union, _} ->
+                            %% Unenriched union (phase 1)
+                            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+                            [
+                                {TypeFieldName, {vector, {union_type, ElemType}}, Attrs},
+                                {Name, {vector, {union_value, ElemType}}, Attrs}
+                            ];
                         _ ->
                             [Field]
                     end;
+                {union_type, _} ->
+                    %% Already expanded union type - pass through
+                    [Field];
+                {union_value, _} ->
+                    %% Already expanded union value - pass through
+                    [Field];
                 _ ->
                     case maps:get(Type, Defs, undefined) of
                         {union, _, _} ->
                             %% Union field becomes two fields: name_type and name
+                            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+                            [
+                                {TypeFieldName, {union_type, Type}, Attrs},
+                                {Name, {union_value, Type}, Attrs}
+                            ];
+                        {union, _} ->
+                            %% Unenriched union (phase 1)
                             TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
                             [
                                 {TypeFieldName, {union_type, Type}, Attrs},

@@ -60,6 +60,7 @@ is_primitive_scalar(uint64) -> true;
 is_primitive_scalar(float32) -> true;
 is_primitive_scalar(float64) -> true;
 is_primitive_scalar({enum, _, _}) -> true;
+is_primitive_scalar(#union_type_def{}) -> true;
 is_primitive_scalar(_) -> false.
 
 %% Normalize scalar type aliases to canonical forms
@@ -110,6 +111,28 @@ resolve_type({vector, ElemType}, Defs) ->
     };
 resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
+resolve_type({union_type, UnionName}, Defs) ->
+    case maps:get(UnionName, Defs, undefined) of
+        {union, _Members, IndexMap} ->
+            ReverseMap = maps:fold(fun(K, V, M) -> M#{V => K} end, #{}, IndexMap),
+            #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
+        {union, Members} ->
+            IndexMap = maps:from_list(lists:zip(Members, lists:seq(1, length(Members)))),
+            ReverseMap = maps:fold(fun(K, V, M) -> M#{V => K} end, #{}, IndexMap),
+            #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
+        _ ->
+            #union_type_def{name = UnionName, index_map = #{}, reverse_map = #{}}
+    end;
+resolve_type({union_value, UnionName}, Defs) ->
+    case maps:get(UnionName, Defs, undefined) of
+        {union, Members, IndexMap} ->
+            #union_value_def{name = UnionName, index_map = IndexMap};
+        {union, Members} ->
+            IndexMap = maps:from_list(lists:zip(Members, lists:seq(1, length(Members)))),
+            #union_value_def{name = UnionName, index_map = IndexMap};
+        _ ->
+            #union_value_def{name = UnionName, index_map = #{}}
+    end;
 resolve_type(Type, _Defs) ->
     Type.
 
@@ -722,17 +745,17 @@ deprecated_decode_test_() ->
 %% =============================================================================
 
 union_vector_test_() ->
+    %% Use raw tuples to ensure proper schema processing of union types
     Schema = flatbuferl_schema:process(
         {
             #{
                 'Event' => {union, ['Login', 'Logout']},
-                'Login' => table([field(user, string)]),
-                'Logout' => table([field(user, string)]),
-                'EventLog' =>
-                    table([
-                        field(events_type, {vector, {union_type, 'Event'}}),
-                        field(events, {vector, {union_value, 'Event'}}, #{id => 1})
-                    ])
+                'Login' => {table, [{user, string}]},
+                'Logout' => {table, [{user, string}]},
+                'EventLog' => {table, [
+                    {events_type, {vector, {union_type, 'Event'}}},
+                    {events, {vector, {union_value, 'Event'}}, #{id => 1}}
+                ]}
             },
             #{root_type => 'EventLog'}
         }

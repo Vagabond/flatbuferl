@@ -82,3 +82,17 @@
     is_primitive :: boolean(),
     element_size :: pos_integer()
 }).
+
+%% Union type field (stores the type index as uint8)
+-record(union_type_def, {
+    name :: atom(),
+    index_map :: #{atom() => pos_integer()},
+    %% Precomputed reverse map for fast decode (index -> atom)
+    reverse_map :: #{pos_integer() => atom()}
+}).
+
+%% Union value field (stores reference to the table)
+-record(union_value_def, {
+    name :: atom(),
+    index_map :: #{atom() => pos_integer()}
+}).

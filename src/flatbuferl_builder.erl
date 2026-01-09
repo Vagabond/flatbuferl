@@ -440,21 +440,20 @@ collect_field(
         resolved_type = Type,
         layout_key = LayoutKey
     },
-    Defs
+    _Defs
 ) ->
     case Type of
-        {union_type, UnionName} ->
+        #union_type_def{index_map = IndexMap} ->
             %% Union type field - look for <field>_type key directly
             case get_field_value(Map, Name) of
                 undefined ->
                     [];
                 MemberType when is_atom(MemberType) ->
-                    {union, _Members, IndexMap} = maps:get(UnionName, Defs),
                     TypeIndex = find_union_index(MemberType, IndexMap),
                     [
                         #field{
                             id = FieldId,
-                            type = {union_type, UnionName},
+                            type = Type,
                             value = TypeIndex,
                             size = InlineSize,
                             is_scalar = true,
@@ -462,12 +461,11 @@ collect_field(
                         }
                     ];
                 MemberType when is_binary(MemberType) ->
-                    {union, _Members, IndexMap} = maps:get(UnionName, Defs),
                     TypeIndex = find_union_index(binary_to_atom(MemberType), IndexMap),
                     [
                         #field{
                             id = FieldId,
-                            type = {union_type, UnionName},
+                            type = Type,
                             value = TypeIndex,
                             size = InlineSize,
                             is_scalar = true,
@@ -477,7 +475,7 @@ collect_field(
                 _ ->
                     []
             end;
-        {union_value, UnionName} ->
+        #union_value_def{} ->
             TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
             case get_field_value(Map, Name) of
                 undefined ->
@@ -492,7 +490,7 @@ collect_field(
                     [
                         #field{
                             id = FieldId,
-                            type = {union_value, UnionName},
+                            type = Type,
                             value = #{type => MemberType, value => TableValue},
                             size = InlineSize,
                             is_scalar = false,
@@ -502,14 +500,10 @@ collect_field(
                 _ ->
                     []
             end;
-        #vector_def{element_type = {union_type, UnionName}} ->
-            collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, Defs);
-        {vector, {union_type, UnionName}} ->
-            collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, Defs);
-        #vector_def{element_type = {union_value, UnionName}} ->
-            collect_union_value_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey);
-        {vector, {union_value, UnionName}} ->
-            collect_union_value_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey);
+        #vector_def{element_type = #union_type_def{index_map = IndexMap}} = VecType ->
+            collect_union_type_vector(Map, Name, FieldId, VecType, IndexMap, InlineSize, LayoutKey);
+        #vector_def{element_type = #union_value_def{}} = VecType ->
+            collect_union_value_vector(Map, Name, FieldId, VecType, InlineSize, LayoutKey);
         _ ->
             case get_field_value(Map, Name) of
                 undefined ->
@@ -530,12 +524,11 @@ collect_field(
     end.
 
 %% Helper for collecting union type vectors
-collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, Defs) ->
+collect_union_type_vector(Map, Name, FieldId, VecType, IndexMap, InlineSize, LayoutKey) ->
     case get_field_value(Map, Name) of
         undefined ->
             [];
         TypeList when is_list(TypeList) ->
-            {union, _Members, IndexMap} = maps:get(UnionName, Defs),
             TypeIndices = [
                 begin
                     T =
@@ -550,7 +543,7 @@ collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, 
             [
                 #field{
                     id = FieldId,
-                    type = {vector, ubyte},
+                    type = VecType,
                     value = TypeIndices,
                     size = InlineSize,
                     is_scalar = false,
@@ -562,7 +555,7 @@ collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, 
     end.
 
 %% Helper for collecting union value vectors
-collect_union_value_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey) ->
+collect_union_value_vector(Map, Name, FieldId, VecType, InlineSize, LayoutKey) ->
     TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
     case get_field_value(Map, Name) of
         undefined ->
@@ -592,7 +585,7 @@ collect_union_value_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey)
             [
                 #field{
                     id = FieldId,
-                    type = {vector, {union_value, UnionName}},
+                    type = VecType,
                     value = TaggedValues,
                     size = InlineSize,
                     is_scalar = false,
@@ -662,8 +655,8 @@ is_scalar_type({struct, _}) ->
 %% Fixed arrays are inline fixed-size data
 is_scalar_type({array, _, _}) ->
     true;
-%% Union type field is ubyte
-is_scalar_type({union_type, _}) ->
+%% Union type field is ubyte (record form only)
+is_scalar_type(#union_type_def{}) ->
     true;
 is_scalar_type(bool) ->
     true;
@@ -756,6 +749,21 @@ resolve_type({vector, ElemType}, Defs) ->
     {vector, resolve_type(ElemType, Defs)};
 resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
+resolve_type({union_type, UnionName}, Defs) ->
+    case maps:get(UnionName, Defs, undefined) of
+        {union, _Members, IndexMap} ->
+            ReverseMap = maps:fold(fun(K, V, M) -> M#{V => K} end, #{}, IndexMap),
+            #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
+        _ ->
+            #union_type_def{name = UnionName, index_map = #{}, reverse_map = #{}}
+    end;
+resolve_type({union_value, UnionName}, Defs) ->
+    case maps:get(UnionName, Defs, undefined) of
+        {union, _Members, IndexMap} ->
+            #union_value_def{name = UnionName, index_map = IndexMap};
+        _ ->
+            #union_value_def{name = UnionName, index_map = #{}}
+    end;
 resolve_type(Type, _Defs) ->
     Type.
 
@@ -868,11 +876,10 @@ calc_ref_padding_for_refs([#field{type = Type, value = Value} | _], Pos, Defs) w
             0
     end;
 calc_ref_padding_for_refs(
-    [#field{type = {union_value, UnionName}, value = #{type := MemberType, value := Value}} | _],
+    [#field{type = #union_value_def{}, value = #{type := MemberType, value := Value}} | _],
     Pos,
     Defs
 ) ->
-    {union, _, _} = maps:get(UnionName, Defs),
     calc_ref_padding_for_refs(
         [
             #field{
@@ -971,12 +978,11 @@ calc_ref_padding_cached([#field{type = Type, value = Value} | _], Pos, Defs, #la
             0
     end;
 calc_ref_padding_cached(
-    [#field{type = {union_value, UnionName}, value = #{type := MemberType, value := Value}} | _],
+    [#field{type = #union_value_def{}, value = #{type := MemberType, value := Value}} | _],
     Pos,
     Defs,
     Cache
 ) ->
-    {union, _, _} = maps:get(UnionName, Defs),
     calc_ref_padding_cached(
         [
             #field{
@@ -1057,10 +1063,9 @@ collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen, Cache) when is_atom(Typ
             {VTAcc, Seen, Cache}
     end;
 collect_vtables_from_ref(
-    {union_value, UnionName}, #{type := MemberType, value := Value}, Defs, VTAcc, Seen, Cache
+    #union_value_def{}, #{type := MemberType, value := Value}, Defs, VTAcc, Seen, Cache
 ) ->
     %% Union value - cache the member table layout
-    {union, _, _} = maps:get(UnionName, Defs),
     collect_vtables_from_ref(MemberType, Value, Defs, VTAcc, Seen, Cache);
 collect_vtables_from_ref(_, _, _, VTAcc, Seen, Cache) ->
     {VTAcc, Seen, Cache}.
@@ -1075,8 +1080,11 @@ build_ref_data_with_vtable_sharing(RefFieldsOrdered, RefDataStart, SharedVTable,
         fun(
             #field{type = Type, value = Value, offset = FieldOff}, {DataAcc, PosAcc, VTPos, DataPos}
         ) ->
-            %% Add padding for 8-byte vector alignment if needed
-            AlignPad = calc_vector_alignment_padding(Type, DataPos, Defs),
+            %% Only vectors with 8-byte elements need alignment padding
+            AlignPad = case Type of
+                #vector_def{element_size = 8} -> (12 - (DataPos rem 8)) rem 8;
+                _ -> 0
+            end,
             PaddedPos = DataPos + AlignPad,
 
             DataIo = encode_ref(Type, Value, Defs, LayoutCache),
@@ -1143,7 +1151,11 @@ build_ref_data(RefFields, RefDataStart, Defs, LayoutCache) ->
 encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFun) ->
     {DataIoList, Positions, _} = lists:foldl(
         fun(#field{type = Type, value = Value, offset = FieldOff}, {DataAcc, PosAcc, DataPos}) ->
-            AlignPad = calc_vector_alignment_padding(Type, DataPos, Defs),
+            %% Only vectors with 8-byte elements need alignment padding
+            AlignPad = case Type of
+                #vector_def{element_size = 8} -> (12 - (DataPos rem 8)) rem 8;
+                _ -> 0
+            end,
             PaddedPos = DataPos + AlignPad,
             DataIo = EncoderFun(Type, Value, Defs, LayoutCache),
             RefTargetPos =
@@ -1163,24 +1175,6 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
     ),
     {lists:reverse(DataIoList), Positions}.
 
-%% Calculate padding needed for vector 8-byte alignment
-%% Vector data (after 4-byte length) must be 8-byte aligned for 8-byte elements
-calc_vector_alignment_padding(#vector_def{element_size = 8}, DataPos, _Defs) ->
-    %% Need (DataPos + 4) % 8 == 0, so DataPos % 8 == 4
-    (12 - (DataPos rem 8)) rem 8;
-calc_vector_alignment_padding(#vector_def{}, _DataPos, _Defs) ->
-    0;
-calc_vector_alignment_padding({vector, ElemType}, DataPos, Defs) ->
-    ResolvedType = resolve_type(ElemType, Defs),
-    case type_size(ResolvedType) of
-        8 ->
-            (12 - (DataPos rem 8)) rem 8;
-        _ ->
-            0
-    end;
-calc_vector_alignment_padding(_, _, _) ->
-    0.
-
 %% Check if type is a nested table (vtable is at START, need offset to point to soffset)
 %% Returns {true, VTableSize} or false
 %% VTable size only depends on MaxId (from schema), not field values
@@ -1193,10 +1187,9 @@ is_nested_table_type_cached(Type, _Value, Defs, _Cache) when is_atom(Type) ->
             false
     end;
 is_nested_table_type_cached(
-    {union_value, UnionName}, #{type := MemberType, value := Value}, Defs, Cache
+    #union_value_def{}, #{type := MemberType, value := Value}, Defs, Cache
 ) ->
     %% Union value - check the member type
-    {union, _, _} = maps:get(UnionName, Defs),
     is_nested_table_type_cached(MemberType, Value, Defs, Cache);
 is_nested_table_type_cached(_, _, _, _) ->
     false.
@@ -1312,9 +1305,8 @@ encode_ref({vector, ElemType}, Bin, _Defs, _LayoutCache) when
     encode_byte_vector(Bin);
 encode_ref({vector, ElemType}, Values, Defs, LayoutCache) when is_list(Values) ->
     encode_vector(ElemType, Values, Defs, LayoutCache);
-encode_ref({union_value, UnionName}, #{type := MemberType, value := Value}, Defs, LayoutCache) ->
+encode_ref(#union_value_def{}, #{type := MemberType, value := Value}, Defs, LayoutCache) ->
     %% Union value - encode as the member table type
-    {union, _, _} = maps:get(UnionName, Defs),
     encode_nested_table(MemberType, Value, Defs, LayoutCache);
 encode_ref(TableType, Map, Defs, LayoutCache) when is_atom(TableType), is_map(Map) ->
     %% Nested table - build it inline
@@ -1390,14 +1382,17 @@ encode_string_vector_dedup(Values) ->
     %% Return as iolist - preserves sub-binary references until final flatten
     [<<Len:32/little>>, Offsets, lists:reverse(DataIoLists)].
 
-encode_ref_vector_standard(ElemType, Values, Defs, LayoutCache) ->
+encode_ref_vector_standard(ElemType, Values, Defs, LayoutCache) when is_atom(ElemType) ->
     %% Check if this is a table vector that needs vtable sharing
     case maps:get(ElemType, Defs, undefined) of
         #table_def{} ->
             encode_table_vector_with_sharing(ElemType, Values, Defs, LayoutCache);
         _ ->
             encode_ref_vector_simple(ElemType, Values, Defs, LayoutCache)
-    end.
+    end;
+encode_ref_vector_standard(ElemType, Values, Defs, LayoutCache) ->
+    %% Non-atom element types (union values, etc.) - use simple encoding
+    encode_ref_vector_simple(ElemType, Values, Defs, LayoutCache).
 
 %% Simple ref vector encoding (non-table elements)
 encode_ref_vector_simple(ElemType, Values, Defs, LayoutCache) ->
@@ -1772,6 +1767,8 @@ encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
 encode_scalar(List, {array, ElemType, Count}) when is_list(List) ->
     encode_array(List, ElemType, Count);
 encode_scalar(TypeIndex, {union_type, _UnionName}) when is_integer(TypeIndex) ->
+    <<TypeIndex:8/unsigned>>;
+encode_scalar(TypeIndex, #union_type_def{}) when is_integer(TypeIndex) ->
     <<TypeIndex:8/unsigned>>.
 
 %% Encode fixed-size array as inline data
@@ -1847,8 +1844,8 @@ type_size({enum, Base, _Values}) -> type_size(Base);
 type_size(#struct_def{total_size = TotalSize}) -> TotalSize;
 type_size({struct, Fields}) -> calc_struct_size(Fields);
 type_size({array, ElemType, Count}) -> type_size(ElemType) * Count;
-%% Union type is ubyte
-type_size({union_type, _}) -> 1;
+%% Union type is ubyte (record form only)
+type_size(#union_type_def{}) -> 1;
 type_size(_) -> 4.
 
 %% Calculate struct size with proper alignment
