@@ -279,7 +279,7 @@ optimize_field_to_record({Name, Type}, Defs) ->
         layout_key = InlineSize * 65536
     }.
 
-%% True only for the 11 canonical primitive scalar types
+%% True only for primitive scalar types (11 canonical types + enums)
 is_primitive_scalar(bool) -> true;
 is_primitive_scalar(int8) -> true;
 is_primitive_scalar(uint8) -> true;
@@ -291,6 +291,7 @@ is_primitive_scalar(int64) -> true;
 is_primitive_scalar(uint64) -> true;
 is_primitive_scalar(float32) -> true;
 is_primitive_scalar(float64) -> true;
+is_primitive_scalar({enum, _, _}) -> true;
 is_primitive_scalar(_) -> false.
 
 %% Precompute encoding layout for "all fields present" case
@@ -455,11 +456,36 @@ resolve_type(Type, Defs) when is_atom(Type) ->
         _ -> normalize_scalar_type(Type)
     end;
 resolve_type({vector, ElemType}, Defs) ->
-    {vector, resolve_type(ElemType, Defs)};
+    ResolvedElem = resolve_type(ElemType, Defs),
+    #vector_def{
+        element_type = ResolvedElem,
+        is_primitive = is_primitive_scalar(ResolvedElem),
+        element_size = vector_element_size(ResolvedElem, Defs)
+    };
 resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
 resolve_type(Type, _Defs) ->
     Type.
+
+%% Vector element size - actual inline size for scalars/structs, offset size for refs
+vector_element_size(string, _Defs) ->
+    4;
+vector_element_size({union_type, _}, _Defs) ->
+    1;
+vector_element_size({union_value, _}, _Defs) ->
+    4;
+vector_element_size({enum, UnderlyingType, _}, Defs) ->
+    type_size(UnderlyingType, Defs);
+vector_element_size(#struct_def{total_size = Size}, _Defs) ->
+    Size;
+vector_element_size(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        % Table reference
+        #table_def{} -> 4;
+        _ -> type_size(Type, Defs)
+    end;
+vector_element_size(_, _Defs) ->
+    4.
 
 %% Normalize scalar type aliases to canonical forms for faster pattern matching
 %% This eliminates guard conditions like `when Type == int; Type == int32`

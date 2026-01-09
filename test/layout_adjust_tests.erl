@@ -19,16 +19,20 @@
 
 make_precomputed_slots_3_ints() ->
     #{
-        0 => {4, 4},   %% a: offset 4, size 4
-        1 => {8, 4},   %% b: offset 8, size 4
-        2 => {12, 4}   %% c: offset 12, size 4
+        %% a: offset 4, size 4
+        0 => {4, 4},
+        %% b: offset 8, size 4
+        1 => {8, 4},
+        %% c: offset 12, size 4
+        2 => {12, 4}
     }.
 
 %% Test: all fields present - offsets unchanged
 all_present_test() ->
     PrecomputedSlots = make_precomputed_slots_3_ints(),
     PresentIds = [0, 1, 2],
-    AllIds = [2, 1, 0],  %% layout order: highest layout_key first (c, b, a)
+    %% layout order: highest layout_key first (c, b, a)
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
@@ -38,8 +42,10 @@ all_present_test() ->
 %% Test: field c (id:2) missing - placed first, so b and a keep their offsets
 missing_first_placed_test() ->
     PrecomputedSlots = make_precomputed_slots_3_ints(),
-    PresentIds = [0, 1],  %% c is missing
-    AllIds = [2, 1, 0],  %% layout order: c, b, a
+    %% c is missing
+    PresentIds = [0, 1],
+    %% layout order: c, b, a
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
@@ -51,8 +57,10 @@ missing_first_placed_test() ->
 %% Test: field a (id:0) missing - placed last, so c and b should shift down
 missing_last_placed_test() ->
     PrecomputedSlots = make_precomputed_slots_3_ints(),
-    PresentIds = [1, 2],  %% a is missing
-    AllIds = [2, 1, 0],  %% layout order: c, b, a
+    %% a is missing
+    PresentIds = [1, 2],
+    %% layout order: c, b, a
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
@@ -65,8 +73,10 @@ missing_last_placed_test() ->
 %% Test: field b (id:1) missing - middle field
 missing_middle_test() ->
     PrecomputedSlots = make_precomputed_slots_3_ints(),
-    PresentIds = [0, 2],  %% b is missing
-    AllIds = [2, 1, 0],  %% layout order: c, b, a
+    %% b is missing
+    PresentIds = [0, 2],
+    %% layout order: c, b, a
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
@@ -107,23 +117,29 @@ make_precomputed_slots_mixed() ->
     %%   AlignedStart = align_down(6, 2) = 6
     %%   EndPos = 6
     #{
-        0 => {6, 2},   %% short: offset 6, size 2
-        1 => {8, 4},   %% int: offset 8, size 4
-        2 => {12, 8}   %% long: offset 12, size 8
+        %% short: offset 6, size 2
+        0 => {6, 2},
+        %% int: offset 8, size 4
+        1 => {8, 4},
+        %% long: offset 12, size 8
+        2 => {12, 8}
     }.
 
 mixed_sizes_all_present_test() ->
     PrecomputedSlots = make_precomputed_slots_mixed(),
     PresentIds = [0, 1, 2],
-    AllIds = [2, 1, 0],  %% layout order: long, int, short
+    %% layout order: long, int, short
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
     ?assertEqual(#{0 => 6, 1 => 8, 2 => 12}, AdjustedSlots).
 
 mixed_sizes_missing_long_test() ->
     PrecomputedSlots = make_precomputed_slots_mixed(),
-    PresentIds = [0, 1],  %% long (id:2) missing
-    AllIds = [2, 1, 0],  %% layout order: long, int, short
+    %% long (id:2) missing
+    PresentIds = [0, 1],
+    %% layout order: long, int, short
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
@@ -137,8 +153,10 @@ mixed_sizes_missing_long_test() ->
 %% This case exposes the alignment issue!
 mixed_sizes_missing_short_test() ->
     PrecomputedSlots = make_precomputed_slots_mixed(),
-    PresentIds = [1, 2],  %% short (id:0) missing
-    AllIds = [2, 1, 0],  %% layout order: long, int, short
+    %% short (id:0) missing
+    PresentIds = [1, 2],
+    %% layout order: long, int, short
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
@@ -154,8 +172,10 @@ mixed_sizes_missing_short_test() ->
 %% Test: missing int (middle field)
 mixed_sizes_missing_int_test() ->
     PrecomputedSlots = make_precomputed_slots_mixed(),
-    PresentIds = [0, 2],  %% int (id:1) missing
-    AllIds = [2, 1, 0],  %% layout order: long, int, short
+    %% int (id:1) missing
+    PresentIds = [0, 2],
+    %% layout order: long, int, short
+    AllIds = [2, 1, 0],
 
     AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
@@ -191,8 +211,8 @@ adjust_slots(PrecomputedSlots, PresentIds, AllIds) ->
 
     %% Filter to present fields in layout order (highest layout_key first)
     PresentFieldInfo = [
-        {Id, Size} ||
-        Id <- AllIds,
+        {Id, Size}
+     || Id <- AllIds,
         sets:is_element(Id, PresentSet),
         {_, Size} <- [maps:get(Id, PrecomputedSlots)]
     ],
@@ -218,7 +238,8 @@ adjust_slots(PrecomputedSlots, PresentIds, AllIds) ->
 %% Verify against dynamic calculation
 verify_against_dynamic_test() ->
     PrecomputedSlots = make_precomputed_slots_3_ints(),
-    AllIds = [2, 1, 0],  %% layout order: c, b, a
+    %% layout order: c, b, a
+    AllIds = [2, 1, 0],
 
     %% Test each combination of present fields
     Combos = [
@@ -235,9 +256,14 @@ verify_against_dynamic_test() ->
         fun(PresentIds) ->
             Adjusted = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
             Dynamic = calc_dynamic_slots(PresentIds),
-            ?assertEqual(Dynamic, Adjusted,
-                io_lib:format("Mismatch for present=~p: dynamic=~p adjusted=~p",
-                    [PresentIds, Dynamic, Adjusted]))
+            ?assertEqual(
+                Dynamic,
+                Adjusted,
+                io_lib:format(
+                    "Mismatch for present=~p: dynamic=~p adjusted=~p",
+                    [PresentIds, Dynamic, Adjusted]
+                )
+            )
         end,
         Combos
     ).
@@ -246,15 +272,21 @@ verify_against_dynamic_test() ->
 calc_dynamic_slots(PresentIds) ->
     %% Build list of {id, size, layout_key} for present fields only
     FieldInfo = #{
-        0 => {4, 4*65536 + 0},   %% a: size=4, layout_key
-        1 => {4, 4*65536 + 1},   %% b
-        2 => {4, 4*65536 + 2}    %% c
+        %% a: size=4, layout_key
+        0 => {4, 4 * 65536 + 0},
+        %% b
+        1 => {4, 4 * 65536 + 1},
+        %% c
+        2 => {4, 4 * 65536 + 2}
     },
 
-    Fields = [begin
-        {Size, LayoutKey} = maps:get(Id, FieldInfo),
-        {Id, Size, LayoutKey}
-    end || Id <- PresentIds],
+    Fields = [
+        begin
+            {Size, LayoutKey} = maps:get(Id, FieldInfo),
+            {Id, Size, LayoutKey}
+        end
+     || Id <- PresentIds
+    ],
 
     %% Sort by layout_key descending
     Sorted = lists:sort(fun({_, _, LK1}, {_, _, LK2}) -> LK1 > LK2 end, Fields),
@@ -307,7 +339,9 @@ integration_3_ints_all_combos_test() ->
     },
 
     %% Get layout order (highest layout_key first)
-    AllFieldDefs = [CDef, BDef, ADef],  %% Same size, so ordered by id descending
+
+    %% Same size, so ordered by id descending
+    AllFieldDefs = [CDef, BDef, ADef],
     AllIds = [F#field_def.id || F <- AllFieldDefs],
 
     %% Test all non-empty subsets
@@ -338,8 +372,11 @@ integration_3_ints_all_combos_test() ->
             lists:foreach(
                 fun({Name, ExpectedValue}) ->
                     ActualValue = flatbuferl:get(Ctx, [Name]),
-                    ?assertEqual(ExpectedValue, ActualValue,
-                        io_lib:format("Field ~p mismatch for present=~p", [Name, PresentFields]))
+                    ?assertEqual(
+                        ExpectedValue,
+                        ActualValue,
+                        io_lib:format("Field ~p mismatch for present=~p", [Name, PresentFields])
+                    )
                 end,
                 PresentFields
             ),

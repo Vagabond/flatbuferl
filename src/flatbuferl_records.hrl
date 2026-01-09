@@ -75,3 +75,10 @@
     fields :: [map()],
     total_size :: non_neg_integer()
 }).
+
+%% Vector definition with precomputed element info
+-record(vector_def, {
+    element_type :: term(),
+    is_primitive :: boolean(),
+    element_size :: pos_integer()
+}).

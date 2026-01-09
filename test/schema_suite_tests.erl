@@ -34,9 +34,37 @@ field(Name, Type, Attrs) ->
         deprecated = maps:get(deprecated, Attrs, false),
         inline_size = InlineSize,
         is_scalar = is_scalar_type(ResolvedType, Defs),
+        is_primitive = is_primitive_scalar(ResolvedType),
         resolved_type = ResolvedType,
         layout_key = InlineSize * 65536 + Id
     }.
+
+is_primitive_scalar(bool) -> true;
+is_primitive_scalar(int8) -> true;
+is_primitive_scalar(uint8) -> true;
+is_primitive_scalar(int16) -> true;
+is_primitive_scalar(uint16) -> true;
+is_primitive_scalar(int32) -> true;
+is_primitive_scalar(uint32) -> true;
+is_primitive_scalar(int64) -> true;
+is_primitive_scalar(uint64) -> true;
+is_primitive_scalar(float32) -> true;
+is_primitive_scalar(float64) -> true;
+is_primitive_scalar({enum, _, _}) -> true;
+is_primitive_scalar(_) -> false.
+
+%% Normalize scalar type aliases to canonical forms
+normalize_scalar_type(byte) -> int8;
+normalize_scalar_type(ubyte) -> uint8;
+normalize_scalar_type(short) -> int16;
+normalize_scalar_type(ushort) -> uint16;
+normalize_scalar_type(int) -> int32;
+normalize_scalar_type(uint) -> uint32;
+normalize_scalar_type(long) -> int64;
+normalize_scalar_type(ulong) -> uint64;
+normalize_scalar_type(float) -> float32;
+normalize_scalar_type(double) -> float64;
+normalize_scalar_type(Type) -> Type.
 
 is_scalar_type(string, _) ->
     false;
@@ -61,10 +89,16 @@ resolve_type(Type, Defs) when is_atom(Type) ->
         % Keep table types as atoms
         #table_def{} -> Type;
         {{enum, Base}, Values} -> {enum, Base, Values};
-        _ -> Type
+        _ -> normalize_scalar_type(Type)
     end;
 resolve_type({vector, ElemType}, Defs) ->
-    {vector, resolve_type(ElemType, Defs)};
+    ResolvedElem = resolve_type(ElemType, Defs),
+    ElemSize = type_size(ResolvedElem),
+    #vector_def{
+        element_type = ResolvedElem,
+        is_primitive = is_primitive_scalar(ResolvedElem),
+        element_size = ElemSize
+    };
 resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
 resolve_type(Type, _Defs) ->

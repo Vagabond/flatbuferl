@@ -240,21 +240,23 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
     is_atom(FieldName), FieldName /= '*'
 ->
     case lookup_field(Defs, TableType, FieldName) of
-        {ok, FieldId, {vector, _} = VecType, _Default} ->
-            traverse_vector(TableRef, FieldId, VecType, Defs, Rest, Buffer);
-        {ok, FieldId, {array, ElemType, Count} = ArrayType, _Default} ->
-            traverse_array(TableRef, FieldId, ArrayType, ElemType, Count, Defs, Rest, Buffer);
-        {ok, FieldId, string, _Default} when Rest == ['_size'] ->
+        {ok, FieldId, {vector, _} = VecType, ResolvedVec, _Default} ->
+            traverse_vector(TableRef, FieldId, VecType, ResolvedVec, Defs, Rest, Buffer);
+        {ok, FieldId, {array, ElemType, Count} = ArrayType, ResolvedArray, _Default} ->
+            traverse_array(
+                TableRef, FieldId, ArrayType, ResolvedArray, ElemType, Count, Defs, Rest, Buffer
+            );
+        {ok, FieldId, string, _ResolvedType, _Default} when Rest == ['_size'] ->
             case flatbuferl_reader:get_field(TableRef, FieldId, string, Buffer) of
                 {ok, Bin} -> {ok, byte_size(Bin)};
                 missing -> {ok, 0}
             end;
-        {ok, FieldId, {union_value, UnionName}, _Default} ->
+        {ok, FieldId, {union_value, UnionName}, _ResolvedType, _Default} ->
             traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer);
-        {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
+        {ok, FieldId, NestedType, ResolvedType, _Default} when is_atom(NestedType) ->
             case maps:get(NestedType, Defs, undefined) of
                 #table_def{} ->
-                    case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
+                    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                         {ok, NestedTableRef} ->
                             do_fetch(NestedTableRef, Defs, NestedType, Rest, Buffer);
                         missing ->
@@ -279,21 +281,21 @@ fetch_traverse(TableRef, Defs, TableType, FieldName, Rest, Buffer) when
                 _ ->
                     error({not_a_table, FieldName, NestedType})
             end;
-        {ok, FieldId, #struct_def{} = StructDef, _Default} ->
+        {ok, FieldId, _Type, #struct_def{} = StructDef, _Default} ->
             case flatbuferl_reader:get_field(TableRef, FieldId, StructDef, Buffer) of
                 {ok, StructMap} ->
                     fetch_from_struct(StructMap, Rest);
                 missing ->
                     missing
             end;
-        {ok, FieldId, {struct, Fields}, _Default} ->
+        {ok, FieldId, _Type, {struct, Fields}, _Default} ->
             case flatbuferl_reader:get_field(TableRef, FieldId, {struct, Fields}, Buffer) of
                 {ok, StructMap} ->
                     fetch_from_struct(StructMap, Rest);
                 missing ->
                     missing
             end;
-        {ok, _FieldId, Type, _Default} ->
+        {ok, _FieldId, Type, _ResolvedType, _Default} ->
             error({not_a_table, FieldName, Type});
         error ->
             error({unknown_field, FieldName})
@@ -373,10 +375,12 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
     end.
 
 %% Array traversal (fixed-size arrays)
-traverse_array(_TableRef, _FieldId, _ArrayType, _ElemType, Count, _Defs, ['_size'], _Buffer) ->
+traverse_array(
+    _TableRef, _FieldId, _ArrayType, _ResolvedArray, _ElemType, Count, _Defs, ['_size'], _Buffer
+) ->
     {ok, Count};
-traverse_array(TableRef, FieldId, ArrayType, ElemType, Count, Defs, Rest, Buffer) ->
-    case flatbuferl_reader:get_field(TableRef, FieldId, ArrayType, Buffer) of
+traverse_array(TableRef, FieldId, _ArrayType, ResolvedArray, ElemType, Count, Defs, Rest, Buffer) ->
+    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedArray, Buffer) of
         {ok, Elements} when is_list(Elements) ->
             traverse_array_elements(Elements, ElemType, Count, Defs, Rest, Buffer);
         missing ->
@@ -423,7 +427,13 @@ traverse_array_elements(_Elements, _ElemType, _Count, _Defs, [Other | _], _Buffe
 
 %% Vector traversal
 traverse_vector(
-    TableRef, FieldId, {vector, {union_value, UnionName} = ElemType}, Defs, Rest, Buffer
+    TableRef,
+    FieldId,
+    {vector, {union_value, UnionName} = ElemType},
+    _ResolvedVec,
+    Defs,
+    Rest,
+    Buffer
 ) ->
     %% Union vectors have parallel type and value vectors
     TypeFieldId = FieldId - 1,
@@ -445,8 +455,8 @@ traverse_vector(
                 _ -> missing
             end
     end;
-traverse_vector(TableRef, FieldId, {vector, ElemType}, Defs, Rest, Buffer) ->
-    case flatbuferl_reader:get_vector_info(TableRef, FieldId, {vector, ElemType}, Buffer) of
+traverse_vector(TableRef, FieldId, {vector, ElemType}, ResolvedVec, Defs, Rest, Buffer) ->
+    case flatbuferl_reader:get_vector_info(TableRef, FieldId, ResolvedVec, Buffer) of
         {ok, VecInfo} ->
             traverse_vector_with_info(VecInfo, ElemType, Defs, Rest, Buffer);
         missing ->
@@ -647,8 +657,7 @@ fetch_from_struct(StructMap, [FieldName | Rest]) when is_atom(FieldName) ->
 %% Field lookup
 fetch_field(TableRef, Defs, TableType, FieldName, Buffer) ->
     case lookup_field(Defs, TableType, FieldName) of
-        {ok, FieldId, Type, Default} ->
-            ResolvedType = resolve_type(Type, Defs),
+        {ok, FieldId, Type, ResolvedType, Default} ->
             case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                 {ok, Value} ->
                     {ok, convert_value(Value, Type, Defs, Buffer)};
@@ -779,8 +788,16 @@ lookup_field(Defs, TableType, FieldName) ->
 
 find_field([], _Name) ->
     error;
-find_field([#field_def{name = Name, id = FieldId, type = Type, default = Default} | _], Name) ->
-    {ok, FieldId, Type, Default};
+find_field(
+    [
+        #field_def{
+            name = Name, id = FieldId, type = Type, resolved_type = ResolvedType, default = Default
+        }
+        | _
+    ],
+    Name
+) ->
+    {ok, FieldId, Type, ResolvedType, Default};
 find_field([_ | Rest], Name) ->
     find_field(Rest, Name).
 
@@ -799,28 +816,19 @@ field_exists([_ | Rest], Name) -> field_exists(Rest, Name).
 any_union_member_has_field(Members, FieldName, Defs) ->
     lists:any(fun(Member) -> type_has_field(Member, FieldName, Defs) end, Members).
 
-%% Type resolution
-resolve_type(Type, Defs) when is_atom(Type) ->
-    case maps:get(Type, Defs, undefined) of
-        {{enum, Base}, _Values} -> {enum, Base};
-        #struct_def{} = StructDef -> StructDef;
-        {struct, Fields} -> {struct, Fields};
-        _ -> Type
-    end;
-resolve_type({vector, ElemType}, Defs) ->
-    {vector, resolve_type(ElemType, Defs)};
-resolve_type(Type, _Defs) ->
-    Type.
-
 %% Convert table refs to maps
 to_map(TableRef, Defs, TableType, Buffer) ->
     #table_def{all_fields = Fields} = maps:get(TableType, Defs),
     Map = lists:foldl(
-        fun(#field_def{name = FieldName, id = FieldId, type = Type, default = Default}, Acc) ->
-            ResolvedType = resolve_type(Type, Defs),
+        fun(
+            #field_def{
+                name = FieldName, id = FieldId, resolved_type = ResolvedType, default = Default
+            },
+            Acc
+        ) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
                 {ok, Value} ->
-                    Acc#{FieldName => convert_value(Value, Type, Defs, Buffer)};
+                    Acc#{FieldName => convert_value(Value, ResolvedType, Defs, Buffer)};
                 missing ->
                     case Default of
                         undefined -> Acc;

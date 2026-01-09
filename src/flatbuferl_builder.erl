@@ -111,13 +111,27 @@ encode_fast_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs) ->
     case lists:member(VTableForComparison, RefVTables) of
         true ->
             encode_root_vtable_after(
-                Defs, FileId, AllFields, Slots, TableSizeWithPadding,
-                VTableForComparison, HeaderSize, LayoutCache
+                Defs,
+                FileId,
+                AllFields,
+                Slots,
+                TableSizeWithPadding,
+                VTableForComparison,
+                HeaderSize,
+                LayoutCache
             );
         false ->
             encode_root_vtable_before(
-                AllFields, Slots, BaseTableSize, VTable, VTableSize,
-                TableSizeWithPadding, HeaderSize, FileId, Defs, LayoutCache
+                AllFields,
+                Slots,
+                BaseTableSize,
+                VTable,
+                VTableSize,
+                TableSizeWithPadding,
+                HeaderSize,
+                FileId,
+                Defs,
+                LayoutCache
             )
     end.
 
@@ -159,13 +173,27 @@ encode_medium_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs) ->
     case lists:member(VTableForComparison, RefVTables) of
         true ->
             encode_root_vtable_after(
-                Defs, FileId, AllFields, AdjustedSlots, TableSizeWithPadding,
-                VTableForComparison, HeaderSize, LayoutCache
+                Defs,
+                FileId,
+                AllFields,
+                AdjustedSlots,
+                TableSizeWithPadding,
+                VTableForComparison,
+                HeaderSize,
+                LayoutCache
             );
         false ->
             encode_root_vtable_before(
-                AllFields, AdjustedSlots, BaseTableSize, VTable, VTableSize,
-                TableSizeWithPadding, HeaderSize, FileId, Defs, LayoutCache
+                AllFields,
+                AdjustedSlots,
+                BaseTableSize,
+                VTable,
+                VTableSize,
+                TableSizeWithPadding,
+                HeaderSize,
+                FileId,
+                Defs,
+                LayoutCache
             )
     end.
 
@@ -183,8 +211,8 @@ adjust_slots_for_missing(PrecomputedSlots, PresentIds, AllFieldIds) ->
     %% Filter to present fields in layout order (highest layout_key first)
     %% AllFieldIds is already in descending layout_key order
     PresentFieldInfo = [
-        {Id, Size} ||
-        Id <- AllFieldIds,
+        {Id, Size}
+     || Id <- AllFieldIds,
         sets:is_element(Id, PresentSet),
         {_, Size} <- [maps:get(Id, PrecomputedSlots)]
     ],
@@ -227,13 +255,27 @@ encode_slow_path(Scalars, Refs, HeaderSize, FileId, Defs) ->
     case lists:member(VTableForComparison, RefVTables) of
         true ->
             encode_root_vtable_after(
-                Defs, FileId, AllFields, Slots, TableSizeWithPadding,
-                VTableForComparison, HeaderSize, LayoutCache
+                Defs,
+                FileId,
+                AllFields,
+                Slots,
+                TableSizeWithPadding,
+                VTableForComparison,
+                HeaderSize,
+                LayoutCache
             );
         false ->
             encode_root_vtable_before(
-                AllFields, Slots, BaseTableSize, VTable, VTableSize,
-                TableSizeWithPadding, HeaderSize, FileId, Defs, LayoutCache
+                AllFields,
+                Slots,
+                BaseTableSize,
+                VTable,
+                VTableSize,
+                TableSizeWithPadding,
+                HeaderSize,
+                FileId,
+                Defs,
+                LayoutCache
             )
     end.
 
@@ -472,77 +514,14 @@ collect_field(
                 _ ->
                     []
             end;
+        #vector_def{element_type = {union_type, UnionName}} ->
+            collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, Defs);
         {vector, {union_type, UnionName}} ->
-            case get_field_value(Map, Name) of
-                undefined ->
-                    [];
-                TypeList when is_list(TypeList) ->
-                    {union, _Members, IndexMap} = maps:get(UnionName, Defs),
-                    TypeIndices = [
-                        begin
-                            T =
-                                case is_binary(MT) of
-                                    true -> binary_to_atom(MT);
-                                    false -> MT
-                                end,
-                            find_union_index(T, IndexMap)
-                        end
-                     || MT <- TypeList
-                    ],
-                    [
-                        #field{
-                            id = FieldId,
-                            type = {vector, ubyte},
-                            value = TypeIndices,
-                            size = InlineSize,
-                            is_scalar = false,
-                            layout_key = LayoutKey
-                        }
-                    ];
-                _ ->
-                    []
-            end;
+            collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, Defs);
+        #vector_def{element_type = {union_value, UnionName}} ->
+            collect_union_value_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey);
         {vector, {union_value, UnionName}} ->
-            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
-            case get_field_value(Map, Name) of
-                undefined ->
-                    [];
-                ValueList when is_list(ValueList) ->
-                    TypeList =
-                        case get_field_value(Map, TypeFieldName) of
-                            TL when is_list(TL) -> TL;
-                            _ -> error({missing_union_type_field, TypeFieldName})
-                        end,
-                    length(TypeList) == length(ValueList) orelse
-                        error(
-                            {union_vector_length_mismatch, Name, length(TypeList),
-                                length(ValueList)}
-                        ),
-                    TaggedValues = lists:zipwith(
-                        fun(T, V) ->
-                            Type0 =
-                                case is_binary(T) of
-                                    true -> binary_to_atom(T);
-                                    false -> T
-                                end,
-                            #{type => Type0, value => V}
-                        end,
-                        TypeList,
-                        ValueList
-                    ),
-                    [
-                        #field{
-                            id = FieldId,
-                            type = {vector, {union_value, UnionName}},
-                            value = TaggedValues,
-                            size = InlineSize,
-                            is_scalar = false,
-                            layout_key = LayoutKey
-                        }
-                    ];
-                _ ->
-                    []
-            end;
+            collect_union_value_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey);
         _ ->
             case get_field_value(Map, Name) of
                 undefined ->
@@ -560,6 +539,80 @@ collect_field(
                         }
                     ]
             end
+    end.
+
+%% Helper for collecting union type vectors
+collect_union_type_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey, Defs) ->
+    case get_field_value(Map, Name) of
+        undefined ->
+            [];
+        TypeList when is_list(TypeList) ->
+            {union, _Members, IndexMap} = maps:get(UnionName, Defs),
+            TypeIndices = [
+                begin
+                    T =
+                        case is_binary(MT) of
+                            true -> binary_to_atom(MT);
+                            false -> MT
+                        end,
+                    find_union_index(T, IndexMap)
+                end
+             || MT <- TypeList
+            ],
+            [
+                #field{
+                    id = FieldId,
+                    type = {vector, ubyte},
+                    value = TypeIndices,
+                    size = InlineSize,
+                    is_scalar = false,
+                    layout_key = LayoutKey
+                }
+            ];
+        _ ->
+            []
+    end.
+
+%% Helper for collecting union value vectors
+collect_union_value_vector(Map, Name, FieldId, UnionName, InlineSize, LayoutKey) ->
+    TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
+    case get_field_value(Map, Name) of
+        undefined ->
+            [];
+        ValueList when is_list(ValueList) ->
+            TypeList =
+                case get_field_value(Map, TypeFieldName) of
+                    TL when is_list(TL) -> TL;
+                    _ -> error({missing_union_type_field, TypeFieldName})
+                end,
+            length(TypeList) == length(ValueList) orelse
+                error(
+                    {union_vector_length_mismatch, Name, length(TypeList), length(ValueList)}
+                ),
+            TaggedValues = lists:zipwith(
+                fun(T, V) ->
+                    Type0 =
+                        case is_binary(T) of
+                            true -> binary_to_atom(T);
+                            false -> T
+                        end,
+                    #{type => Type0, value => V}
+                end,
+                TypeList,
+                ValueList
+            ),
+            [
+                #field{
+                    id = FieldId,
+                    type = {vector, {union_value, UnionName}},
+                    value = TaggedValues,
+                    size = InlineSize,
+                    is_scalar = false,
+                    layout_key = LayoutKey
+                }
+            ];
+        _ ->
+            []
     end.
 
 %% O(1) lookup using precomputed index map from schema
@@ -1008,6 +1061,12 @@ collect_ref_vtables(Refs, Defs) ->
     ),
     {VTables, Cache}.
 
+collect_vtables_from_ref(
+    #vector_def{element_type = ElemType}, Values, Defs, VTAcc, Seen, Cache
+) when
+    is_list(Values)
+->
+    collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen, Cache);
 collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen, Cache) when
     is_list(Values)
 ->
@@ -1165,6 +1224,8 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
 
 %% Calculate padding needed for vector 8-byte alignment
 %% Vector data (after 4-byte length) must be 8-byte aligned for 8-byte elements
+calc_vector_alignment_padding(#vector_def{element_type = ElemType}, DataPos, Defs) ->
+    calc_vector_alignment_padding({vector, ElemType}, DataPos, Defs);
 calc_vector_alignment_padding({vector, ElemType}, DataPos, Defs) ->
     ResolvedType = resolve_type(ElemType, Defs),
     case type_size(ResolvedType) of
@@ -1290,6 +1351,11 @@ encode_ref({TypeName, Default}, Value, Defs, LayoutCache) when
 encode_ref(string, Bin, _Defs, _LayoutCache) when is_binary(Bin) ->
     %% Return iolist to preserve sub-binary references
     encode_string(Bin);
+%% Vector with enriched record - delegate to tuple form
+encode_ref(#vector_def{element_type = ElemType}, Bin, Defs, LayoutCache) when is_binary(Bin) ->
+    encode_ref({vector, ElemType}, Bin, Defs, LayoutCache);
+encode_ref(#vector_def{element_type = ElemType}, Values, Defs, LayoutCache) when is_list(Values) ->
+    encode_ref({vector, ElemType}, Values, Defs, LayoutCache);
 encode_ref({vector, ElemType}, Bin, _Defs, _LayoutCache) when
     is_binary(Bin),
     (ElemType == ubyte orelse ElemType == byte orelse ElemType == int8 orelse ElemType == uint8)
@@ -1527,8 +1593,14 @@ encode_table_vector_with_sharing(TableType, Values, Defs, #layout_cache{tables =
                 NonOwners
             ),
             %% Convert to buffer elements with {Type, OrigIdx, TotalSize, BodyIo, VTable}
-            NonOwnerElems = [{vtable_after, Idx, Size, Body, VTable} || {Idx, Size, Body, _} <- SortedNonOwners],
-            OwnerElems = [{vtable_before, Idx, Size, Body, VTable} || {Idx, Size, Body, _} <- Owners],
+            NonOwnerElems = [
+                {vtable_after, Idx, Size, Body, VTable}
+             || {Idx, Size, Body, _} <- SortedNonOwners
+            ],
+            OwnerElems = [
+                {vtable_before, Idx, Size, Body, VTable}
+             || {Idx, Size, Body, _} <- Owners
+            ],
             %% Insert vtable before owner
             NonOwnerElems ++ [{vtable_insert, VTable}] ++ OwnerElems
         end,
