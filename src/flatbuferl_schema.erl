@@ -2,6 +2,10 @@
 -module(flatbuferl_schema).
 -export([parse/1, parse_file/1, process/1, validate/3]).
 
+-ifdef(TEST).
+-export([precompute_encode_layout/3]).
+-endif.
+
 -include("flatbuferl_records.hrl").
 
 -type type_name() :: atom().

@@ -15,7 +15,16 @@ table(Fields) ->
             [] -> -1;
             _ -> lists:max([F#field_def.id || F <- AllFields])
         end,
-    #table_def{scalars = Scalars, refs = Refs, all_fields = AllFields, max_id = MaxId}.
+    FieldMap = maps:from_list([{F#field_def.name, F} || F <- AllFields]),
+    EncodeLayout = flatbuferl_schema:precompute_encode_layout(Scalars, Refs, MaxId),
+    #table_def{
+        scalars = Scalars,
+        refs = Refs,
+        all_fields = AllFields,
+        field_map = FieldMap,
+        encode_layout = EncodeLayout,
+        max_id = MaxId
+    }.
 
 %% Helper to create field records in new format
 field(Name, Type) -> field(Name, Type, #{}).

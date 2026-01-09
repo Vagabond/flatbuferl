@@ -62,18 +62,14 @@ from_map_internal(Map, Defs, RootType, FileId, Opts) ->
         end,
 
     %% Check if we can use the fast path (precomputed layout, all fields present)
-    case EncodeLayout of
-        #encode_layout{all_field_ids = AllFieldIds} ->
-            PresentCount = length(Scalars) + length(Refs),
-            case PresentCount == length(AllFieldIds) of
-                true ->
-                    encode_fast_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs);
-                false ->
-                    %% Medium path: use precomputed layout with adjustment
-                    encode_medium_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs)
-            end;
-        undefined ->
-            encode_slow_path(Scalars, Refs, HeaderSize, FileId, Defs)
+    #encode_layout{all_field_ids = AllFieldIds} = EncodeLayout,
+    PresentCount = length(Scalars) + length(Refs),
+    case PresentCount == length(AllFieldIds) of
+        true ->
+            encode_fast_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs);
+        false ->
+            %% Medium path: use precomputed layout with adjustment
+            encode_medium_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs)
     end.
 
 %% Fast path: all fields present, use precomputed layout
@@ -234,50 +230,6 @@ adjust_slots_for_missing(PrecomputedSlots, PresentIds, AllFieldIds) ->
         PresentFieldInfo
     ),
     Slots.
-
-%% Slow path: some fields missing, compute layout dynamically
-encode_slow_path(Scalars, Refs, HeaderSize, FileId, Defs) ->
-    AllFields = merge_by_layout_key(Scalars, Refs),
-    MaxId =
-        case AllFields of
-            [] -> -1;
-            _ -> lists:max([F#field.id || F <- AllFields])
-        end,
-    {Slots, BaseTableSize} = place_fields_and_calc_size(AllFields),
-    RawTableSize = BaseTableSize - 4,
-    TableSizeWithPadding = calc_table_size_with_padding(
-        AllFields, RawTableSize, Refs, HeaderSize, Defs, MaxId
-    ),
-    VTable = build_vtable_with_size(AllFields, Slots, TableSizeWithPadding, MaxId),
-    VTableSize = vtable_size(VTable),
-    VTableForComparison = build_vtable_from_fields(AllFields, Slots, BaseTableSize, MaxId),
-    {RefVTables, LayoutCache} = collect_ref_vtables(Refs, Defs),
-    case lists:member(VTableForComparison, RefVTables) of
-        true ->
-            encode_root_vtable_after(
-                Defs,
-                FileId,
-                AllFields,
-                Slots,
-                TableSizeWithPadding,
-                VTableForComparison,
-                HeaderSize,
-                LayoutCache
-            );
-        false ->
-            encode_root_vtable_before(
-                AllFields,
-                Slots,
-                BaseTableSize,
-                VTable,
-                VTableSize,
-                TableSizeWithPadding,
-                HeaderSize,
-                FileId,
-                Defs,
-                LayoutCache
-            )
-    end.
 
 %% Standard layout: header | [pad] | vtable | soffset | table | ref_data
 encode_root_vtable_before(
@@ -953,13 +905,6 @@ place_fields_backward(Fields, TableSize) ->
         Fields
     ),
     Slots.
-
-%% Compute slots and base table size for dynamic layout (no precomputation)
-place_fields_and_calc_size(AllFields) ->
-    RawSize = calc_backward_table_size(AllFields),
-    BaseTableSize = 4 + align_offset(RawSize, 4),
-    Slots = place_fields_backward(AllFields, BaseTableSize),
-    {Slots, BaseTableSize}.
 
 %% Align offset DOWN to alignment boundary
 align_down(Off, Align) ->
