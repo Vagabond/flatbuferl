@@ -433,6 +433,7 @@ collect_field(
     Map,
     #field_def{
         name = Name,
+        binary_name = BinaryName,
         id = FieldId,
         default = Default,
         inline_size = InlineSize,
@@ -445,7 +446,7 @@ collect_field(
     case Type of
         #union_type_def{index_map = IndexMap} ->
             %% Union type field - look for <field>_type key directly
-            case get_field_value(Map, Name) of
+            case get_field_value(Map, Name, BinaryName) of
                 undefined ->
                     [];
                 MemberType when is_atom(MemberType) ->
@@ -475,17 +476,16 @@ collect_field(
                 _ ->
                     []
             end;
-        #union_value_def{} ->
-            TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
-            case get_field_value(Map, Name) of
+        #union_value_def{type_name = TypeName, type_binary_name = TypeBinaryName} ->
+            case get_field_value(Map, Name, BinaryName) of
                 undefined ->
                     [];
                 TableValue when is_map(TableValue) ->
                     MemberType =
-                        case get_field_value(Map, TypeFieldName) of
+                        case get_field_value(Map, TypeName, TypeBinaryName) of
                             T when is_atom(T) -> T;
                             T when is_binary(T) -> binary_to_atom(T);
-                            _ -> error({missing_union_type_field, TypeFieldName})
+                            _ -> error({missing_union_type_field, TypeName})
                         end,
                     [
                         #field{
@@ -501,11 +501,14 @@ collect_field(
                     []
             end;
         #vector_def{element_type = #union_type_def{index_map = IndexMap}} = VecType ->
-            collect_union_type_vector(Map, Name, FieldId, VecType, IndexMap, InlineSize, LayoutKey);
+            collect_union_type_vector(Map, Name, BinaryName, FieldId, VecType, IndexMap, InlineSize, LayoutKey);
         #vector_def{element_type = #union_value_def{}} = VecType ->
-            collect_union_value_vector(Map, Name, FieldId, VecType, InlineSize, LayoutKey);
+            %% For vectors, type name is based on the vector field name, not the union name
+            TypeName = list_to_atom(atom_to_list(Name) ++ "_type"),
+            TypeBinaryName = <<BinaryName/binary, "_type">>,
+            collect_union_value_vector(Map, Name, BinaryName, FieldId, VecType, TypeName, TypeBinaryName, InlineSize, LayoutKey);
         _ ->
-            case get_field_value(Map, Name) of
+            case get_field_value(Map, Name, BinaryName) of
                 undefined ->
                     [];
                 Value when Value == Default -> [];
@@ -524,8 +527,8 @@ collect_field(
     end.
 
 %% Helper for collecting union type vectors
-collect_union_type_vector(Map, Name, FieldId, VecType, IndexMap, InlineSize, LayoutKey) ->
-    case get_field_value(Map, Name) of
+collect_union_type_vector(Map, Name, BinaryName, FieldId, VecType, IndexMap, InlineSize, LayoutKey) ->
+    case get_field_value(Map, Name, BinaryName) of
         undefined ->
             [];
         TypeList when is_list(TypeList) ->
@@ -555,16 +558,15 @@ collect_union_type_vector(Map, Name, FieldId, VecType, IndexMap, InlineSize, Lay
     end.
 
 %% Helper for collecting union value vectors
-collect_union_value_vector(Map, Name, FieldId, VecType, InlineSize, LayoutKey) ->
-    TypeFieldName = list_to_atom(atom_to_list(Name) ++ "_type"),
-    case get_field_value(Map, Name) of
+collect_union_value_vector(Map, Name, BinaryName, FieldId, VecType, TypeName, TypeBinaryName, InlineSize, LayoutKey) ->
+    case get_field_value(Map, Name, BinaryName) of
         undefined ->
             [];
         ValueList when is_list(ValueList) ->
             TypeList =
-                case get_field_value(Map, TypeFieldName) of
+                case get_field_value(Map, TypeName, TypeBinaryName) of
                     TL when is_list(TL) -> TL;
-                    _ -> error({missing_union_type_field, TypeFieldName})
+                    _ -> error({missing_union_type_field, TypeName})
                 end,
             length(TypeList) == length(ValueList) orelse
                 error(
@@ -601,6 +603,14 @@ find_union_index(Type, IndexMap) when is_map(IndexMap) ->
     maps:get(Type, IndexMap, 0).
 
 %% Look up field by atom key or binary key
+%% Fast path with precomputed binary name (avoids atom_to_binary at runtime)
+get_field_value(Map, Name, BinaryName) ->
+    case maps:get(Name, Map, undefined) of
+        undefined -> maps:get(BinaryName, Map, undefined);
+        Value -> Value
+    end.
+
+%% Slow path for dynamically computed names (e.g., union type field names)
 get_field_value(Map, Name) when is_atom(Name) ->
     case maps:get(Name, Map, undefined) of
         undefined -> maps:get(atom_to_binary(Name), Map, undefined);
@@ -1782,10 +1792,10 @@ encode_array(List, ElemType, Count) ->
 encode_struct(Map, Fields) ->
     {IoReversed, EndOff} = lists:foldl(
         fun
-            (#{name := Name, type := Type, offset := FieldOff, size := Size}, {Acc, Off}) ->
-                %% Enriched field - use precomputed offset
+            (#{name := Name, binary_name := BinaryName, type := Type, offset := FieldOff, size := Size}, {Acc, Off}) ->
+                %% Enriched field - use precomputed offset and binary_name
                 Pad = FieldOff - Off,
-                Value = get_field_value(Map, Name),
+                Value = get_field_value(Map, Name, BinaryName),
                 ValIo = encode_scalar(Value, Type),
                 case Pad of
                     0 -> {[ValIo | Acc], FieldOff + Size};

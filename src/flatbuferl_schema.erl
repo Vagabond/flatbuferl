@@ -163,7 +163,8 @@ enrich_def({struct, Fields}) ->
         fun({Name, Type}, {Acc, Off, MaxAlignAcc}) ->
             Size = primitive_type_size(Type),
             AlignedOff = align_to(Off, Size),
-            Field = #{name => Name, type => Type, offset => AlignedOff, size => Size},
+            Field = #{name => Name, binary_name => atom_to_binary(Name),
+                      type => Type, offset => AlignedOff, size => Size},
             {[Field | Acc], AlignedOff + Size, max(MaxAlignAcc, Size)}
         end,
         {[], 0, 1},
@@ -250,10 +251,11 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
     Id = maps:get(id, Attrs, 0),
     InlineSize = field_inline_size(NormalizedType, Defs),
     ResolvedType0 = resolve_type(NormalizedType, Defs),
-    %% For union_value_def, set the type_field_id now that we know the field ID
-    ResolvedType = finalize_resolved_type(ResolvedType0, Id),
+    %% For union_value_def, set type_field_id and type field names now
+    ResolvedType = finalize_resolved_type(ResolvedType0, Id, Name),
     #field_def{
         name = Name,
+        binary_name = atom_to_binary(Name),
         id = Id,
         type = NormalizedType,
         default = extract_default(Type),
@@ -269,9 +271,10 @@ optimize_field_to_record({Name, Type}, Defs) ->
     NormalizedType = normalize_type(Type),
     InlineSize = field_inline_size(NormalizedType, Defs),
     ResolvedType0 = resolve_type(NormalizedType, Defs),
-    ResolvedType = finalize_resolved_type(ResolvedType0, 0),
+    ResolvedType = finalize_resolved_type(ResolvedType0, 0, Name),
     #field_def{
         name = Name,
+        binary_name = atom_to_binary(Name),
         id = 0,
         type = NormalizedType,
         default = extract_default(Type),
@@ -284,10 +287,16 @@ optimize_field_to_record({Name, Type}, Defs) ->
         layout_key = InlineSize * 65536
     }.
 
-%% Set type_field_id for union_value_def records (value field ID - 1)
-finalize_resolved_type(#union_value_def{} = R, FieldId) ->
-    R#union_value_def{type_field_id = FieldId - 1};
-finalize_resolved_type(Other, _FieldId) ->
+%% Set type_field_id and type field names for union_value_def records
+finalize_resolved_type(#union_value_def{} = R, FieldId, FieldName) ->
+    TypeName = list_to_atom(atom_to_list(FieldName) ++ "_type"),
+    TypeBinaryName = atom_to_binary(TypeName),
+    R#union_value_def{
+        type_field_id = FieldId - 1,
+        type_name = TypeName,
+        type_binary_name = TypeBinaryName
+    };
+finalize_resolved_type(Other, _FieldId, _FieldName) ->
     Other.
 
 %% True only for primitive scalar types (11 canonical types + enums)
@@ -305,6 +314,16 @@ is_primitive_scalar(float64) -> true;
 is_primitive_scalar({enum, _, _}) -> true;
 is_primitive_scalar(#union_type_def{}) -> true;
 is_primitive_scalar(_) -> false.
+
+%% Check if a resolved element type is a table (for vector element detection)
+%% Must handle both {table, _} format (during Phase 2) and #table_def{} format
+is_table_type(Type, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        #table_def{} -> true;
+        {table, _} -> true;
+        _ -> false
+    end;
+is_table_type(_, _) -> false.
 
 %% Precompute encoding layout for "all fields present" case
 %% This allows O(1) encoding when all fields have values
@@ -472,7 +491,8 @@ resolve_type({vector, ElemType}, Defs) ->
     #vector_def{
         element_type = ResolvedElem,
         is_primitive = is_primitive_scalar(ResolvedElem),
-        element_size = vector_element_size(ResolvedElem, Defs)
+        element_size = vector_element_size(ResolvedElem, Defs),
+        is_table_element = is_table_type(ResolvedElem, Defs)
     };
 resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};

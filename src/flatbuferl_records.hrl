@@ -5,6 +5,8 @@
 %% Field definition from schema (immutable after parse)
 -record(field_def, {
     name :: atom(),
+    %% Precomputed binary name for fast map lookup during encode
+    binary_name :: binary(),
     id :: non_neg_integer(),
     type :: term(),
     resolved_type :: term(),
@@ -80,7 +82,9 @@
 -record(vector_def, {
     element_type :: term(),
     is_primitive :: boolean(),
-    element_size :: pos_integer()
+    element_size :: pos_integer(),
+    %% True if element_type is a table (for skipping Defs lookup at decode time)
+    is_table_element = false :: boolean()
 }).
 
 %% Union type field (stores the type index as uint8)
@@ -98,5 +102,8 @@
     %% Precomputed reverse map for fast decode (index -> atom)
     reverse_map :: #{pos_integer() => atom()},
     %% Precomputed type field ID (value_field_id - 1)
-    type_field_id :: non_neg_integer()
+    type_field_id :: non_neg_integer(),
+    %% Precomputed type field name (e.g., foo_type for union field foo) for encode
+    type_name :: atom(),
+    type_binary_name :: binary()
 }).

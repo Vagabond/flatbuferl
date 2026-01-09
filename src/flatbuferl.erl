@@ -281,7 +281,7 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Non-primitive atom type (nested table) - needs convert_value for recursive decode
+%% Non-primitive atom type (nested table) - recursively decode
 decode_fields(
     [
         #field_def{
@@ -305,7 +305,7 @@ decode_fields(
 ) when Type /= string, is_atom(Type), is_atom(RT) ->
     Acc1 =
         case flatbuferl_reader:read_ref_field(VTable, Id, RT, Buffer) of
-            {ok, Value} -> Acc#{Name => convert_value(Value, Type, Defs, Buffer, Opts)};
+            {ok, TableRef} -> Acc#{Name => table_to_map(TableRef, Defs, Type, Buffer, Opts)};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
         end,
@@ -364,14 +364,13 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Non-deprecated vector of atoms
+%% Vector of tables - use precomputed is_table_element flag
 decode_fields(
     [
         #field_def{
             name = Name,
             id = Id,
-            type = {vector, ElemType},
-            resolved_type = RT,
+            resolved_type = #vector_def{element_type = ElemType, is_table_element = true} = RT,
             default = Def,
             deprecated = false
         }
@@ -384,24 +383,23 @@ decode_fields(
     Opts,
     DepOpt,
     Acc
-) when is_atom(ElemType) ->
+) ->
     Acc1 =
         case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
-            {ok, Value} ->
-                Acc#{Name => convert_value(Value, {vector, ElemType}, Defs, Buffer, Opts)};
+            {ok, TableRefs} ->
+                Acc#{Name => [table_to_map(V, Defs, ElemType, Buffer, Opts) || V <- TableRefs]};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing ->
                 Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Vector of union types - read discriminator bytes and map to member names
+%% Vector of union types - use precomputed reverse_map from element_type
 decode_fields(
     [
         #field_def{
             name = Name,
             id = Id,
-            type = {vector, {union_type, UnionName}},
-            resolved_type = RT,
+            resolved_type = #vector_def{element_type = #union_type_def{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
         | Rest
@@ -417,21 +415,19 @@ decode_fields(
     Acc1 =
         case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
             {ok, TypeIndices} ->
-                {union, Members, _} = maps:get(UnionName, Defs),
-                TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
+                TypeNames = [maps:get(Idx, ReverseMap) || Idx <- TypeIndices, Idx > 0],
                 Acc#{Name => TypeNames};
             missing ->
                 Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Vector of union values - decode each table using its type
+%% Vector of union values - use precomputed reverse_map from element_type
 decode_fields(
     [
         #field_def{
             name = Name,
             id = Id,
-            type = {vector, {union_value, UnionName}},
-            resolved_type = RT,
+            resolved_type = #vector_def{element_type = #union_value_def{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
         | Rest
@@ -451,10 +447,9 @@ decode_fields(
             {ok, TypeIndices} ->
                 case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
                     {ok, TableRefs} ->
-                        {union, Members, _} = maps:get(UnionName, Defs),
                         DecodedValues = lists:zipwith(
                             fun(TypeIdx, TableValueRef) ->
-                                MemberType = lists:nth(TypeIdx, Members),
+                                MemberType = maps:get(TypeIdx, ReverseMap),
                                 table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
                             end,
                             TypeIndices,
@@ -464,6 +459,34 @@ decode_fields(
                     missing ->
                         Acc
                 end;
+            missing ->
+                Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Vector of non-tables (scalars, strings, structs, enums) - return raw values
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = #vector_def{is_table_element = false} = RT,
+            default = Def,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+            {ok, Value} -> Acc#{Name => Value};
+            missing when Def /= undefined -> Acc#{Name => Def};
             missing ->
                 Acc
         end,
@@ -500,22 +523,6 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, allow, Acc1).
-
-convert_value({table, _, _} = TableRef, Type, Defs, Buffer, Opts) when is_atom(Type) ->
-    %% Nested table - recursively convert
-    table_to_map(TableRef, Defs, Type, Buffer, Opts);
-convert_value(Values, {vector, ElemType}, Defs, Buffer, Opts) when
-    is_list(Values), is_atom(ElemType)
-->
-    %% Vector of tables - convert each element
-    case maps:get(ElemType, Defs, undefined) of
-        #table_def{} ->
-            [table_to_map(V, Defs, ElemType, Buffer, Opts) || V <- Values];
-        _ ->
-            Values
-    end;
-convert_value(Value, _Type, _Defs, _Buffer, _Opts) ->
-    Value.
 
 %% =============================================================================
 %% Raw Bytes Access
