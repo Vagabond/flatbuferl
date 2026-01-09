@@ -13,6 +13,8 @@
     deprecated = false :: boolean(),
     inline_size :: non_neg_integer(),
     is_scalar :: boolean(),
+    %% true only for primitive scalars (bool, int8-64, uint8-64, float32/64)
+    is_primitive :: boolean(),
     %% size * 65536 + id for sorting
     layout_key :: non_neg_integer()
 }).

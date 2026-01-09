@@ -156,14 +156,23 @@ table_to_map(TableRef, Defs, TableType, Buffer, Opts) ->
     VTable = flatbuferl_reader:read_vtable(TableRef),
     decode_fields(Fields, VTable, Defs, TableType, Buffer, Opts, DeprecatedOpt, #{}).
 
-%% Recursive field decoder - reads vtable once, uses read_field for fast path
+%% Recursive field decoder - reads vtable once, dispatches by field type
 decode_fields([], _VTable, _Defs, _TableType, _Buffer, _Opts, _DeprecatedOpt, Acc) ->
     Acc;
 %% Skip deprecated fields (common case: DeprecatedOpt = skip)
 decode_fields([#field_def{deprecated = true} | Rest], VTable, Defs, TableType, Buffer, Opts, skip, Acc) ->
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, skip, Acc);
-%% Non-deprecated atom type (scalar or nested table) - most common path
-decode_fields([#field_def{name = Name, id = Id, type = Type, resolved_type = RT, default = Def, deprecated = false} | Rest],
+%% Primitive scalar - fast path with only 11 clause function
+decode_fields([#field_def{name = Name, id = Id, resolved_type = RT, default = Def, deprecated = false, is_primitive = true} | Rest],
+              VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc) ->
+    Acc1 = case flatbuferl_reader:read_scalar_field(VTable, Id, RT, Buffer) of
+        {ok, Value} -> Acc#{Name => Value};
+        missing when Def /= undefined -> Acc#{Name => Def};
+        missing -> Acc
+    end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Non-primitive atom type (nested table) - needs convert_value for recursive decode
+decode_fields([#field_def{name = Name, id = Id, type = Type, resolved_type = RT, default = Def, deprecated = false, is_primitive = false} | Rest],
               VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc) when is_atom(Type) ->
     Acc1 = case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
         {ok, Value} -> Acc#{Name => convert_value(Value, Type, Defs, Buffer, Opts)};

@@ -11,7 +11,8 @@
     element_size/1,
     %% Fast path - read vtable once, then read fields
     read_vtable/1,
-    read_field/4
+    read_field/4,
+    read_scalar_field/4
 ]).
 
 -type buffer() :: binary().
@@ -52,11 +53,81 @@ read_field({TableOffset, VTableSize, VTableData, Buffer}, FieldId, FieldType, _)
             <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableData,
             case FieldOffset of
                 0 -> missing;
-                _ -> read_value(Buffer, TableOffset + FieldOffset, FieldType)
+                _ ->
+                    Pos = TableOffset + FieldOffset,
+                    case is_primitive_element(FieldType) of
+                        true -> read_scalar(Buffer, Pos, normalize_type(FieldType));
+                        false -> read_value(Buffer, Pos, FieldType)
+                    end
             end;
         false ->
             missing
     end.
+
+%% Fast path for scalar fields - only 11 canonical types
+-spec read_scalar_field(vtable(), field_id(), atom(), buffer()) ->
+    {ok, term()} | missing.
+read_scalar_field({TableOffset, VTableSize, VTableData, Buffer}, FieldId, ScalarType, _) ->
+    FieldOffsetPos = 4 + (FieldId * 2),
+    case FieldOffsetPos < VTableSize of
+        true ->
+            FieldOffsetInVTable = FieldOffsetPos - 4,
+            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableData,
+            case FieldOffset of
+                0 -> missing;
+                _ -> read_scalar(Buffer, TableOffset + FieldOffset, ScalarType)
+            end;
+        false ->
+            missing
+    end.
+
+%% Normalize type alias to canonical type
+normalize_type(byte) -> int8;
+normalize_type(ubyte) -> uint8;
+normalize_type(short) -> int16;
+normalize_type(ushort) -> uint16;
+normalize_type(int) -> int32;
+normalize_type(uint) -> uint32;
+normalize_type(long) -> int64;
+normalize_type(ulong) -> uint64;
+normalize_type(float) -> float32;
+normalize_type(double) -> float64;
+normalize_type(T) -> T.
+
+%% Read scalar value - only canonical types (11 clauses)
+read_scalar(Buffer, Pos, bool) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {ok, Value =/= 0};
+read_scalar(Buffer, Pos, int8) ->
+    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, uint8) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, int16) ->
+    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, uint16) ->
+    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, int32) ->
+    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, uint32) ->
+    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, int64) ->
+    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, uint64) ->
+    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, float32) ->
+    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
+    {ok, Value};
+read_scalar(Buffer, Pos, float64) ->
+    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
+    {ok, Value}.
 
 %% Low-level field access by ID and type
 -spec get_field(table_ref(), field_id(), atom() | tuple(), buffer()) ->
@@ -90,7 +161,10 @@ get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
                 _ ->
                     %% Field is present at TableOffset + FieldOffset
                     FieldPos = TableOffset + FieldOffset,
-                    read_value(Buffer, FieldPos, FieldType)
+                    case is_primitive_element(FieldType) of
+                        true -> read_scalar(Buffer, FieldPos, normalize_type(FieldType));
+                        false -> read_value(Buffer, FieldPos, FieldType)
+                    end
             end;
         false ->
             %% Field ID beyond vtable - field not present
@@ -169,43 +243,8 @@ get_vector_element_at({Length, ElementsStart, ElementType}, Index, Buffer) ->
     end.
 
 %% Read a value of given type at position
-%% Types are normalized to canonical forms at schema parse time for fast matching
-%% Canonical types are listed first, aliases at end for backward compatibility
-%%
-%% === Canonical scalar types (used by parsed schemas) ===
-read_value(Buffer, Pos, bool) ->
-    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
-    {ok, Value =/= 0};
-read_value(Buffer, Pos, int8) ->
-    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, uint8) ->
-    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, int16) ->
-    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, uint16) ->
-    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, int32) ->
-    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, uint32) ->
-    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, int64) ->
-    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, uint64) ->
-    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, float32) ->
-    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, float64) ->
-    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
-    {ok, Value};
+%% Dispatches based on type class
+
 %% String (offset to length-prefixed UTF-8)
 read_value(Buffer, Pos, string) ->
     <<_:Pos/binary, StringOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -251,53 +290,104 @@ read_value(Buffer, Pos, {Type, Default}) when is_atom(Type), is_number(Default) 
     read_value(Buffer, Pos, Type);
 read_value(Buffer, Pos, {Type, Default}) when is_atom(Type), is_boolean(Default) ->
     read_value(Buffer, Pos, Type);
-%% === Aliases (for backward compatibility with direct API usage) ===
-%% Must come before the catch-all atom clause below
-read_value(Buffer, Pos, byte) ->
-    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, ubyte) ->
-    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, short) ->
-    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, ushort) ->
-    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, int) ->
-    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, uint) ->
-    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, long) ->
-    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, ulong) ->
-    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, float) ->
-    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
-    {ok, Value};
-read_value(Buffer, Pos, double) ->
-    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
-    {ok, Value};
-%% Nested table - return table reference for lazy access (catch-all for atoms)
-read_value(Buffer, Pos, TableName) when is_atom(TableName) ->
-    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
-    NestedTablePos = Pos + TableOffset,
-    {ok, {table, NestedTablePos, Buffer}};
+%% Atom types - dispatch based on primitive vs table
+read_value(Buffer, Pos, Type) when is_atom(Type) ->
+    case is_primitive_element(Type) of
+        true -> read_scalar(Buffer, Pos, normalize_type(Type));
+        false ->
+            %% Nested table - return table reference for lazy access
+            <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+            NestedTablePos = Pos + TableOffset,
+            {ok, {table, NestedTablePos, Buffer}}
+    end;
 %% Unsupported type
 read_value(_Buffer, _Pos, Type) ->
     {error, {unsupported_type, Type}}.
 
-%% Read vector elements
-read_vector_elements(_Buffer, _Pos, 0, _ElementType, Acc) ->
-    {ok, lists:reverse(Acc)};
+%% Read vector elements - dispatch based on element type
 read_vector_elements(Buffer, Pos, Count, ElementType, Acc) ->
+    case is_primitive_element(ElementType) of
+        true -> read_scalar_elements(Buffer, Pos, Count, ElementType, Acc);
+        false -> read_compound_elements(Buffer, Pos, Count, ElementType, Acc)
+    end.
+
+%% Fast path for primitive scalar elements (11 types)
+read_scalar_elements(Buffer, Pos, Count, ElementType, Acc) ->
+    CanonicalType = normalize_type(ElementType),
+    read_scalar_elements_loop(Buffer, Pos, Count, CanonicalType, Acc).
+
+read_scalar_elements_loop(_Buffer, _Pos, 0, _ElementType, Acc) ->
+    {ok, lists:reverse(Acc)};
+read_scalar_elements_loop(Buffer, Pos, Count, ElementType, Acc) ->
+    {ElementSize, Value} = read_scalar_element(Buffer, Pos, ElementType),
+    read_scalar_elements_loop(Buffer, Pos + ElementSize, Count - 1, ElementType, [Value | Acc]).
+
+%% Slow path for compound elements (strings, tables, structs, etc.)
+read_compound_elements(_Buffer, _Pos, 0, _ElementType, Acc) ->
+    {ok, lists:reverse(Acc)};
+read_compound_elements(Buffer, Pos, Count, ElementType, Acc) ->
     {ElementSize, Value} = read_vector_element(Buffer, Pos, ElementType),
-    read_vector_elements(Buffer, Pos + ElementSize, Count - 1, ElementType, [Value | Acc]).
+    read_compound_elements(Buffer, Pos + ElementSize, Count - 1, ElementType, [Value | Acc]).
+
+%% Check if element type is primitive scalar (canonical + aliases)
+is_primitive_element(bool) -> true;
+is_primitive_element(int8) -> true;
+is_primitive_element(uint8) -> true;
+is_primitive_element(int16) -> true;
+is_primitive_element(uint16) -> true;
+is_primitive_element(int32) -> true;
+is_primitive_element(uint32) -> true;
+is_primitive_element(int64) -> true;
+is_primitive_element(uint64) -> true;
+is_primitive_element(float32) -> true;
+is_primitive_element(float64) -> true;
+%% Aliases (for tests that bypass schema parser)
+is_primitive_element(byte) -> true;
+is_primitive_element(ubyte) -> true;
+is_primitive_element(short) -> true;
+is_primitive_element(ushort) -> true;
+is_primitive_element(int) -> true;
+is_primitive_element(uint) -> true;
+is_primitive_element(long) -> true;
+is_primitive_element(ulong) -> true;
+is_primitive_element(float) -> true;
+is_primitive_element(double) -> true;
+is_primitive_element(_) -> false.
+
+%% Read scalar vector element - only 11 clauses
+read_scalar_element(Buffer, Pos, bool) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {1, Value =/= 0};
+read_scalar_element(Buffer, Pos, int8) ->
+    <<_:Pos/binary, Value:8/little-signed, _/binary>> = Buffer,
+    {1, Value};
+read_scalar_element(Buffer, Pos, uint8) ->
+    <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
+    {1, Value};
+read_scalar_element(Buffer, Pos, int16) ->
+    <<_:Pos/binary, Value:16/little-signed, _/binary>> = Buffer,
+    {2, Value};
+read_scalar_element(Buffer, Pos, uint16) ->
+    <<_:Pos/binary, Value:16/little-unsigned, _/binary>> = Buffer,
+    {2, Value};
+read_scalar_element(Buffer, Pos, int32) ->
+    <<_:Pos/binary, Value:32/little-signed, _/binary>> = Buffer,
+    {4, Value};
+read_scalar_element(Buffer, Pos, uint32) ->
+    <<_:Pos/binary, Value:32/little-unsigned, _/binary>> = Buffer,
+    {4, Value};
+read_scalar_element(Buffer, Pos, int64) ->
+    <<_:Pos/binary, Value:64/little-signed, _/binary>> = Buffer,
+    {8, Value};
+read_scalar_element(Buffer, Pos, uint64) ->
+    <<_:Pos/binary, Value:64/little-unsigned, _/binary>> = Buffer,
+    {8, Value};
+read_scalar_element(Buffer, Pos, float32) ->
+    <<_:Pos/binary, Value:32/little-float, _/binary>> = Buffer,
+    {4, Value};
+read_scalar_element(Buffer, Pos, float64) ->
+    <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
+    {8, Value}.
 
 %% 8-bit elements (canonical types first)
 read_vector_element(Buffer, Pos, bool) ->

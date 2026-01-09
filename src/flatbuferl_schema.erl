@@ -247,6 +247,7 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
     NormalizedType = normalize_type(Type),
     Id = maps:get(id, Attrs, 0),
     InlineSize = field_inline_size(NormalizedType, Defs),
+    ResolvedType = resolve_type(NormalizedType, Defs),
     #field_def{
         name = Name,
         id = Id,
@@ -256,12 +257,14 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
         deprecated = maps:get(deprecated, Attrs, false),
         inline_size = InlineSize,
         is_scalar = is_scalar_type(NormalizedType, Defs),
-        resolved_type = resolve_type(NormalizedType, Defs),
+        is_primitive = is_primitive_scalar(ResolvedType),
+        resolved_type = ResolvedType,
         layout_key = InlineSize * 65536 + Id
     };
 optimize_field_to_record({Name, Type}, Defs) ->
     NormalizedType = normalize_type(Type),
     InlineSize = field_inline_size(NormalizedType, Defs),
+    ResolvedType = resolve_type(NormalizedType, Defs),
     #field_def{
         name = Name,
         id = 0,
@@ -271,9 +274,24 @@ optimize_field_to_record({Name, Type}, Defs) ->
         deprecated = false,
         inline_size = InlineSize,
         is_scalar = is_scalar_type(NormalizedType, Defs),
-        resolved_type = resolve_type(NormalizedType, Defs),
+        is_primitive = is_primitive_scalar(ResolvedType),
+        resolved_type = ResolvedType,
         layout_key = InlineSize * 65536
     }.
+
+%% True only for the 11 canonical primitive scalar types
+is_primitive_scalar(bool) -> true;
+is_primitive_scalar(int8) -> true;
+is_primitive_scalar(uint8) -> true;
+is_primitive_scalar(int16) -> true;
+is_primitive_scalar(uint16) -> true;
+is_primitive_scalar(int32) -> true;
+is_primitive_scalar(uint32) -> true;
+is_primitive_scalar(int64) -> true;
+is_primitive_scalar(uint64) -> true;
+is_primitive_scalar(float32) -> true;
+is_primitive_scalar(float64) -> true;
+is_primitive_scalar(_) -> false.
 
 %% Precompute encoding layout for "all fields present" case
 %% This allows O(1) encoding when all fields have values
