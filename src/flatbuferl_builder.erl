@@ -231,6 +231,42 @@ adjust_slots_for_missing(PrecomputedSlots, PresentIds, AllFieldIds) ->
     ),
     Slots.
 
+%% Get layout for a nested table value using precomputed encode_layout
+%% Returns {Scalars, Refs, VTable, AllFields, BaseTableSize, Slots}
+layout_for_value(Value, TableDef, Defs) ->
+    #table_def{
+        scalars = ScalarDefs,
+        refs = RefDefs,
+        encode_layout = EncodeLayout
+    } = TableDef,
+    #encode_layout{
+        vtable = PrecomputedVTable,
+        table_size = PrecomputedTableSize,
+        slots = PrecomputedSlots,
+        all_field_ids = AllFieldIds,
+        max_id = MaxId
+    } = EncodeLayout,
+
+    Scalars = collect_field_values(Value, ScalarDefs, Defs, #{}),
+    Refs = collect_field_values(Value, RefDefs, Defs, #{}),
+    AllFields = merge_by_layout_key(Scalars, Refs),
+    PresentCount = length(AllFields),
+
+    case PresentCount == length(AllFieldIds) of
+        true ->
+            %% All fields present - use precomputed layout directly
+            Slots = maps:map(fun(_Id, {Offset, _Size}) -> Offset end, PrecomputedSlots),
+            {Scalars, Refs, PrecomputedVTable, AllFields, PrecomputedTableSize, Slots};
+        false ->
+            %% Some fields missing - adjust slots
+            PresentIds = [F#field.id || F <- AllFields],
+            AdjustedSlots = adjust_slots_for_missing(PrecomputedSlots, PresentIds, AllFieldIds),
+            RawSize = lists:sum([F#field.size || F <- AllFields]),
+            BaseTableSize = 4 + align_offset(RawSize, 4),
+            VTable = build_vtable_from_fields(AllFields, AdjustedSlots, BaseTableSize, MaxId),
+            {Scalars, Refs, VTable, AllFields, BaseTableSize, AdjustedSlots}
+    end.
+
 %% Standard layout: header | [pad] | vtable | soffset | table | ref_data
 encode_root_vtable_before(
     AllFields,
@@ -737,27 +773,6 @@ uint16_bytes(V) -> [V band 16#FF, (V bsr 8) band 16#FF].
 %% Get byte size of vtable
 vtable_size(VT) -> length(VT) * 2.
 
-build_vtable(Scalars, Refs, MaxId) ->
-    {VTable, _, _, _} = compute_table_layout(Scalars, Refs, MaxId),
-    VTable.
-
-%% Compute table layout info: {VTable, AllFields, BaseTableSize, Slots}
-%% Used to avoid duplicate computation in table vector encoding
-%% Note: MaxId is computed from actual fields being encoded, not schema MaxId
-compute_table_layout(Scalars, Refs, _SchemaMaxId) ->
-    AllFields = merge_by_layout_key(Scalars, Refs),
-    %% Compute max field ID from actual fields being encoded (#field{} records)
-    FieldMaxId =
-        case AllFields of
-            [] -> -1;
-            _ -> lists:max([F#field.id || F <- AllFields])
-        end,
-    RawSize = calc_backward_table_size(AllFields),
-    BaseTableSize = 4 + align_offset(RawSize, 4),
-    Slots = place_fields_backward(AllFields, BaseTableSize),
-    VTable = build_vtable_from_fields(AllFields, Slots, BaseTableSize, FieldMaxId),
-    {VTable, AllFields, BaseTableSize, Slots}.
-
 %% Build vtable from pre-merged fields with precomputed Slots map and TableSize
 build_vtable_from_fields(_AllFields, Slots, TableSize, MaxId) ->
     case MaxId of
@@ -886,10 +901,6 @@ merge_by_layout_key([A | As] = AllA, [B | Bs] = AllB) ->
         false -> [B | merge_by_layout_key(AllA, Bs)]
     end.
 
-%% Calculate raw data size for all fields using precomputed sizes
-calc_backward_table_size(Fields) ->
-    lists:sum([F#field.size || F <- Fields]).
-
 %% Place fields backward from end of table using precomputed sizes
 place_fields_backward(Fields, TableSize) ->
     {Slots, _} = lists:foldl(
@@ -914,16 +925,7 @@ align_down(Off, Align) ->
 %% Data Building
 %% =============================================================================
 
-%% Build table data with fields placed backward from end (like flatc)
-%% Used for nested tables where we don't have precomputed Slots
-build_table_data(Scalars, Refs, TablePos, Defs) ->
-    AllFields = merge_by_layout_key(Scalars, Refs),
-    RawSize = calc_backward_table_size(AllFields),
-    BaseTableSize = 4 + align_offset(RawSize, 4),
-    Slots = place_fields_backward(AllFields, BaseTableSize),
-    build_table_data2(AllFields, Slots, BaseTableSize, TablePos, Defs, #layout_cache{}).
-
-%% Version that accepts pre-merged AllFields with precomputed Slots and BaseTableSize
+%% Build table data with pre-merged AllFields, precomputed Slots and BaseTableSize
 build_table_data2(AllFields, Slots, BaseTableSize, TablePos, Defs, LayoutCache) ->
     %% Build field layout with positions from precomputed Slots
     FieldLayout = [F#field{offset = maps:get(F#field.id, Slots)} || F <- AllFields],
@@ -1017,16 +1019,12 @@ collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen, Cache) w
 ->
     %% For table vectors, collect vtables from elements and cache layouts
     case maps:get(ElemType, Defs, undefined) of
-        #table_def{scalars = ScalarDefs, refs = RefDefs, max_id = MaxId} ->
+        #table_def{} = TableDef ->
             lists:foldl(
                 fun(Value, {Acc, S, #layout_cache{tables = T} = C}) ->
                     CacheKey = {ElemType, Value},
-                    Scalars = collect_field_values(Value, ScalarDefs, Defs, #{}),
-                    Refs = collect_field_values(Value, RefDefs, Defs, #{}),
-                    {VT, AllFields, BaseTableSize, Slots} = compute_table_layout(
-                        Scalars, Refs, MaxId
-                    ),
-                    %% Cache the layout
+                    {Scalars, Refs, VT, AllFields, BaseTableSize, Slots} =
+                        layout_for_value(Value, TableDef, Defs),
                     NewT = T#{CacheKey => {Scalars, Refs, VT, AllFields, BaseTableSize, Slots}},
                     NewC = C#layout_cache{tables = NewT},
                     case maps:is_key(VT, S) of
@@ -1043,12 +1041,10 @@ collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen, Cache) w
 collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen, Cache) when is_atom(Type), is_map(Value) ->
     %% Nested table
     case maps:get(Type, Defs, undefined) of
-        #table_def{scalars = ScalarDefs, refs = RefDefs, max_id = MaxId} ->
+        #table_def{} = TableDef ->
             CacheKey = {Type, Value},
-            Scalars = collect_field_values(Value, ScalarDefs, Defs, #{}),
-            Refs = collect_field_values(Value, RefDefs, Defs, #{}),
-            {VT, AllFields, BaseTableSize, Slots} = compute_table_layout(Scalars, Refs, MaxId),
-            %% Cache the layout
+            {Scalars, Refs, VT, AllFields, BaseTableSize, Slots} =
+                layout_for_value(Value, TableDef, Defs),
             #layout_cache{tables = T} = Cache,
             NewCache = Cache#layout_cache{
                 tables = T#{CacheKey => {Scalars, Refs, VT, AllFields, BaseTableSize, Slots}}
@@ -1439,7 +1435,7 @@ encode_table_vector_with_sharing(TableType, Values, Defs, #layout_cache{tables =
     ReversedIndexedValues = lists:reverse(IndexedValues),
 
     %% Collect vtable info and layout for each element - use cached layouts when available
-    #table_def{scalars = ScalarDefs, refs = RefDefs, max_id = MaxId} = maps:get(TableType, Defs),
+    #table_def{} = TableDef = maps:get(TableType, Defs),
     ElemLayouts = lists:map(
         fun({OrigIdx, Value}) ->
             CacheKey = {TableType, Value},
@@ -1448,12 +1444,9 @@ encode_table_vector_with_sharing(TableType, Values, Defs, #layout_cache{tables =
                     %% Use cached layout
                     {OrigIdx, VTable, AllFields, BaseTableSize, Slots, Refs};
                 undefined ->
-                    %% Not cached - compute (rare case, shouldn't happen if cache is populated)
-                    Scalars = collect_field_values(Value, ScalarDefs, Defs, #{}),
-                    Refs = collect_field_values(Value, RefDefs, Defs, #{}),
-                    {VTable, AllFields, BaseTableSize, Slots} = compute_table_layout(
-                        Scalars, Refs, MaxId
-                    ),
+                    %% Not cached - use precomputed layout
+                    {_Scalars, Refs, VTable, AllFields, BaseTableSize, Slots} =
+                        layout_for_value(Value, TableDef, Defs),
                     {OrigIdx, VTable, AllFields, BaseTableSize, Slots, Refs}
             end
         end,
@@ -1684,16 +1677,15 @@ encode_ref_minimal_padding(Type, Value, Defs, LayoutCache) ->
 
 encode_nested_table(TableType, Map, Defs, _LayoutCache) ->
     %% Build a nested table - vtable first, then table (positive soffset, like flatc)
-    #table_def{scalars = ScalarDefs, refs = RefDefs, max_id = MaxId} = maps:get(TableType, Defs),
-    Scalars = collect_field_values(Map, ScalarDefs, Defs, #{}),
-    Refs = collect_field_values(Map, RefDefs, Defs, #{}),
+    #table_def{} = TableDef = maps:get(TableType, Defs),
+    {_Scalars, _Refs, VTable, AllFields, BaseTableSize, Slots} =
+        layout_for_value(Map, TableDef, Defs),
 
-    VTable = build_vtable(Scalars, Refs, MaxId),
     VTableSize = vtable_size(VTable),
 
     %% Layout: vtable | soffset | table_data | ref_data
     %% soffset is positive, pointing back to vtable start
-    {TableData, RefDataIo} = build_table_data(Scalars, Refs, VTableSize, Defs),
+    {TableData, RefDataIo} = build_table_data2(AllFields, Slots, BaseTableSize, VTableSize, Defs, #layout_cache{}),
 
     %% Positive = backward to vtable at start
     SOffset = VTableSize,
