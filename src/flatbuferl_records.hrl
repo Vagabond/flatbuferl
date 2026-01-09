@@ -46,8 +46,8 @@
     all_fields :: [#field_def{}],
     %% Field name -> field_def for O(1) lookup
     field_map :: #{atom() => #field_def{}},
-    %% Precomputed encoding layout
-    encode_layout :: #encode_layout{},
+    %% Precomputed encoding layout (undefined for tables built with raw schema, not compile)
+    encode_layout :: #encode_layout{} | undefined,
     %% Max field ID
     max_id :: integer()
 }).

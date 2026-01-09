@@ -167,7 +167,12 @@ deep_merge(_Base, Changes) ->
 %% - `{simple, Updates}' - all changes can be spliced, Updates contains offsets
 %% - `{complex, Changes}' - at least one change requires re-encoding
 %% - `{error, Reason}' - validation failed (bad field, type mismatch, etc.)
--type field_type() :: atom() | {enum, atom(), atom()}.
+-type field_type() ::
+    atom()
+    | {enum, atom(), atom()}
+    | {string_shrink, pos_integer()}
+    | {byte_vector_shrink, pos_integer()}
+    | {vector_shrink, atom(), pos_integer(), pos_integer()}.
 -type update_info() :: {
     Offset :: non_neg_integer(),
     Size :: pos_integer(),

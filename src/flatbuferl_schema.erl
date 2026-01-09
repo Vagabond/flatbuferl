@@ -241,8 +241,6 @@ process_def(Other, _Defs) ->
     Other.
 
 %% Convert field tuple to #field_def{} record with precomputed values
-optimize_field_to_record(#field_def{} = F, _Defs) ->
-    F;
 optimize_field_to_record({Name, Type, Attrs}, Defs) ->
     NormalizedType = normalize_type(Type),
     Id = maps:get(id, Attrs, 0),
