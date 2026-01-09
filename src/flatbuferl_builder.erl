@@ -1165,13 +1165,15 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
 
 %% Calculate padding needed for vector 8-byte alignment
 %% Vector data (after 4-byte length) must be 8-byte aligned for 8-byte elements
-calc_vector_alignment_padding(#vector_def{element_type = ElemType}, DataPos, Defs) ->
-    calc_vector_alignment_padding({vector, ElemType}, DataPos, Defs);
+calc_vector_alignment_padding(#vector_def{element_size = 8}, DataPos, _Defs) ->
+    %% Need (DataPos + 4) % 8 == 0, so DataPos % 8 == 4
+    (12 - (DataPos rem 8)) rem 8;
+calc_vector_alignment_padding(#vector_def{}, _DataPos, _Defs) ->
+    0;
 calc_vector_alignment_padding({vector, ElemType}, DataPos, Defs) ->
     ResolvedType = resolve_type(ElemType, Defs),
     case type_size(ResolvedType) of
         8 ->
-            %% Need (DataPos + 4) % 8 == 0, so DataPos % 8 == 4
             (12 - (DataPos rem 8)) rem 8;
         _ ->
             0
@@ -1292,11 +1294,16 @@ encode_ref({TypeName, Default}, Value, Defs, LayoutCache) when
 encode_ref(string, Bin, _Defs, _LayoutCache) when is_binary(Bin) ->
     %% Return iolist to preserve sub-binary references
     encode_string(Bin);
-%% Vector with enriched record - delegate to tuple form
-encode_ref(#vector_def{element_type = ElemType}, Bin, Defs, LayoutCache) when is_binary(Bin) ->
-    encode_ref({vector, ElemType}, Bin, Defs, LayoutCache);
-encode_ref(#vector_def{element_type = ElemType}, Values, Defs, LayoutCache) when is_list(Values) ->
-    encode_ref({vector, ElemType}, Values, Defs, LayoutCache);
+%% Vector with enriched record - use precomputed info
+encode_ref(#vector_def{element_type = ElemType} = VecDef, Bin, Defs, LayoutCache) when is_binary(Bin) ->
+    case ElemType of
+        T when T == ubyte; T == byte; T == int8; T == uint8 ->
+            encode_byte_vector(Bin);
+        _ ->
+            encode_vector(VecDef, binary_to_list(Bin), Defs, LayoutCache)
+    end;
+encode_ref(#vector_def{} = VecDef, Values, Defs, LayoutCache) when is_list(Values) ->
+    encode_vector(VecDef, Values, Defs, LayoutCache);
 encode_ref({vector, ElemType}, Bin, _Defs, _LayoutCache) when
     is_binary(Bin),
     (ElemType == ubyte orelse ElemType == byte orelse ElemType == int8 orelse ElemType == uint8)
@@ -1313,21 +1320,28 @@ encode_ref(TableType, Map, Defs, LayoutCache) when is_atom(TableType), is_map(Ma
     %% Nested table - build it inline
     encode_nested_table(TableType, Map, Defs, LayoutCache).
 
+%% Fast path: use precomputed vector_def info
+encode_vector(#vector_def{element_type = ElemType, is_primitive = true}, Values, _Defs, _LayoutCache) ->
+    Len = length(Values),
+    Elements = [encode_scalar(V, ElemType) || V <- Values],
+    ElementsSize = iolist_size(Elements),
+    TotalLen = 4 + ElementsSize,
+    PadLen = (4 - (TotalLen rem 4)) rem 4,
+    [<<Len:32/little>>, Elements, <<0:(PadLen * 8)>>];
+encode_vector(#vector_def{element_type = ElemType, is_primitive = false}, Values, Defs, LayoutCache) ->
+    encode_ref_vector(ElemType, Values, Defs, LayoutCache);
+%% Fallback: resolve type at runtime (for raw tuple types)
 encode_vector(ElemType, Values, Defs, LayoutCache) ->
     ResolvedType = resolve_type(ElemType, Defs),
     case is_scalar_type(ResolvedType) of
         true ->
-            %% Scalar vector: length + inline elements
             Len = length(Values),
             Elements = [encode_scalar(V, ResolvedType) || V <- Values],
-            %% Calculate size without flattening
             ElementsSize = iolist_size(Elements),
-            %% Pad to 4-byte boundary
             TotalLen = 4 + ElementsSize,
             PadLen = (4 - (TotalLen rem 4)) rem 4,
             [<<Len:32/little>>, Elements, <<0:(PadLen * 8)>>];
         false ->
-            %% Reference vector (e.g., strings, tables): length + offsets, then data
             encode_ref_vector(ElemType, Values, Defs, LayoutCache)
     end.
 
