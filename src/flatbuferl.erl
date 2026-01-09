@@ -555,27 +555,21 @@ get_bytes_internal(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
     end.
 
 get_field_bytes({table, TableOffset, Buffer}, FieldId, _Buffer) ->
-    %% Read vtable to find field offset
     <<_:TableOffset/binary, VTableSOffset:32/little-signed, _/binary>> = Buffer,
     VTableOffset = TableOffset - VTableSOffset,
     <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _/binary>> = Buffer,
-
     FieldOffsetPos = 4 + (FieldId * 2),
     case FieldOffsetPos < VTableSize of
         true ->
-            <<_:VTableOffset/binary, _:16, _:16, VTableRest/binary>> = Buffer,
-            FieldOffsetInVTable = FieldOffsetPos - 4,
-            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
+            FieldOffsetInBuffer = VTableOffset + FieldOffsetPos,
+            <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 ->
                     missing;
                 _ ->
-                    %% Field is at TableOffset + FieldOffset
-                    %% Read the uoffset to get actual data position
                     FieldPos = TableOffset + FieldOffset,
                     <<_:FieldPos/binary, DataOffset:32/little-unsigned, _/binary>> = Buffer,
                     DataPos = FieldPos + DataOffset,
-                    %% Return slice from DataPos to end (caller can use vtable to determine size)
                     <<_:DataPos/binary, Rest/binary>> = Buffer,
                     {ok, Rest}
             end;

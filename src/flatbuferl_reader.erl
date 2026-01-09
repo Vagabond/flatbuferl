@@ -231,33 +231,18 @@ read_scalar(Buffer, Pos, {enum, UnderlyingType}) ->
 -spec get_field(table_ref(), field_id(), atom() | tuple(), buffer()) ->
     {ok, term()} | missing | {error, term()}.
 get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
-    %% Read soffset to vtable
     <<_:TableOffset/binary, VTableSOffset:32/little-signed, _/binary>> = Buffer,
     VTableOffset = TableOffset - VTableSOffset,
-
-    %% Read vtable header
-    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _:16/little-unsigned,
-        VTableRest/binary>> = Buffer,
-
-    %% Calculate field offset position in vtable
-
-    %% 4 bytes header + 2 bytes per field
+    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _/binary>> = Buffer,
     FieldOffsetPos = 4 + (FieldId * 2),
-
     case FieldOffsetPos < VTableSize of
         true ->
-            %% Read field offset from vtable
-
-            %% Offset into VTableRest
-            FieldOffsetInVTable = FieldOffsetPos - 4,
-            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
-
+            FieldOffsetInBuffer = VTableOffset + FieldOffsetPos,
+            <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 ->
-                    %% Field not present, use default
                     missing;
                 _ ->
-                    %% Field is present at TableOffset + FieldOffset
                     FieldPos = TableOffset + FieldOffset,
                     case is_primitive_element(FieldType) of
                         true -> read_scalar(Buffer, FieldPos, FieldType);
@@ -265,7 +250,6 @@ get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
                     end
             end;
         false ->
-            %% Field ID beyond vtable - field not present
             missing
     end.
 
@@ -276,13 +260,12 @@ get_field({table, TableOffset, Buffer}, FieldId, FieldType, _) ->
 get_field_offset({table, TableOffset, Buffer}, FieldId, _) ->
     <<_:TableOffset/binary, VTableSOffset:32/little-signed, _/binary>> = Buffer,
     VTableOffset = TableOffset - VTableSOffset,
-    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _:16/little-unsigned,
-        VTableRest/binary>> = Buffer,
+    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _/binary>> = Buffer,
     FieldOffsetPos = 4 + (FieldId * 2),
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInVTable = FieldOffsetPos - 4,
-            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
+            FieldOffsetInBuffer = VTableOffset + FieldOffsetPos,
+            <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;
                 _ -> {ok, TableOffset + FieldOffset}
@@ -300,13 +283,12 @@ get_vector_info(TableRef, FieldId, #vector_def{element_type = ElementType}, Buff
 get_vector_info({table, TableOffset, Buffer}, FieldId, {vector, ElementType}, _) ->
     <<_:TableOffset/binary, VTableSOffset:32/little-signed, _/binary>> = Buffer,
     VTableOffset = TableOffset - VTableSOffset,
-    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _TableSize:16/little-unsigned,
-        VTableRest/binary>> = Buffer,
+    <<_:VTableOffset/binary, VTableSize:16/little-unsigned, _/binary>> = Buffer,
     FieldOffsetPos = 4 + (FieldId * 2),
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInVTable = FieldOffsetPos - 4,
-            <<_:FieldOffsetInVTable/binary, FieldOffset:16/little-unsigned, _/binary>> = VTableRest,
+            FieldOffsetInBuffer = VTableOffset + FieldOffsetPos,
+            <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 ->
                     missing;
