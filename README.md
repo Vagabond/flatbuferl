@@ -293,6 +293,30 @@ rebar3 compile
 rebar3 eunit
 ```
 
+## Performance
+
+  | Language   | Encode  | Full Decode | Partial Decode | Buffer Size |
+  |------------|---------|-------------|----------------|-------------|
+  | C++        | 0.40    | 0.03        | 0.03           | 180 bytes   |
+  | Rust       | 0.44    | 0.04        | 0.02           | 180 bytes   |
+  | Go         | 0.49    | 0.29        | 0.03           | 184 bytes   |
+  | Erlang     | 6.62    | 1.58        | 0.11           | 188 bytes   |
+  | JavaScript | 8.84    | 2.24        | 0.29           | 184 bytes   |
+  | Python     | 64.92   | 69.40       | 2.73           | 184 bytes   |
+
+### Relative Performance (vs C++)
+
+  | Language   | Encode  | Full Decode | Partial Decode |
+  |------------|---------|-------------|----------------|
+  | C++        | 1.0x    | 1.0x        | 1.0x           |
+  | Rust       | 1.1x    | 1.3x        | 0.7x           |
+  | Go         | 1.2x    | 9.7x        | 1.0x           |
+  | Erlang     | 16.5x   | 52.6x       | 3.6x           |
+  | JavaScript | 22.1x   | 74.7x       | 9.7x           |
+  | Python     | 162.3x  | 2313.3x     | 91.0x          |
+
+Take these numbers with a grain of salt. Benchmarking is hard.
+
 ## Acknowledgements
 
 Schema parser/lexer and test schemas adapted from [wooga/eflatbuffers](https://github.com/wooga/eflatbuffers) (MIT).
