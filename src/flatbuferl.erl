@@ -164,6 +164,33 @@ decode_fields(
     [#field_def{deprecated = true} | Rest], VTable, Defs, TableType, Buffer, Opts, skip, Acc
 ) ->
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, skip, Acc);
+%% Inline array field - read fixed-size array data directly
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = {array, _, _} = RT,
+            default = Def,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+            {ok, Value} -> Acc#{Name => Value};
+            missing when Def /= undefined -> Acc#{Name => Def};
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Primitive scalar - fast path with only 11 clause function
 decode_fields(
     [
@@ -213,10 +240,64 @@ decode_fields(
     Opts,
     DepOpt,
     Acc
-) when is_atom(Type) ->
+) when Type /= string, is_atom(Type), is_atom(RT) ->
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_ref_field(VTable, Id, RT, Buffer) of
             {ok, Value} -> Acc#{Name => convert_value(Value, Type, Defs, Buffer, Opts)};
+            missing when Def /= undefined -> Acc#{Name => Def};
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Non-deprecated string field - use fast string reader
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            type = string,
+            default = Def,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_string_field(VTable, Id, Buffer) of
+            {ok, Value} -> Acc#{Name => Value};
+            missing when Def /= undefined -> Acc#{Name => Def};
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Non-deprecated struct field - inline data, use fast struct reader
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = #struct_def{} = StructDef,
+            default = Def,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_struct_field(VTable, Id, StructDef, Buffer) of
+            {ok, Value} -> Acc#{Name => Value};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
         end,
@@ -251,24 +332,142 @@ decode_fields(
                 Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Other non-deprecated fields - use decode_field (reconstruct TableRef from VTable)
+%% Union type field - read discriminator and resolve to member name
 decode_fields(
     [
         #field_def{
-            name = Name, id = Id, type = Type, resolved_type = RT, default = Def, deprecated = false
+            name = Name,
+            id = Id,
+            type = {union_type, UnionName},
+            deprecated = false
         }
         | Rest
     ],
-    {TableOffset, _, _, Buffer} = VTable,
+    VTable,
     Defs,
     TableType,
-    _,
+    Buffer,
     Opts,
     DepOpt,
     Acc
 ) ->
-    TableRef = {table, TableOffset, Buffer},
-    Acc1 = decode_field(Name, Id, Type, RT, Def, TableRef, Defs, Buffer, Opts, Acc),
+    Acc1 =
+        case flatbuferl_reader:read_union_type_field(VTable, Id, Buffer) of
+            {ok, 0} -> Acc;
+            {ok, TypeIndex} ->
+                {union, Members, _} = maps:get(UnionName, Defs),
+                MemberType = lists:nth(TypeIndex, Members),
+                Acc#{Name => MemberType};
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Union value field - read table reference and convert
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            type = {union_value, UnionName},
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    TypeFieldId = Id - 1,
+    Acc1 =
+        case flatbuferl_reader:read_union_type_field(VTable, TypeFieldId, Buffer) of
+            {ok, 0} -> Acc;
+            {ok, TypeIndex} ->
+                case flatbuferl_reader:read_union_value_field(VTable, Id, Buffer) of
+                    {ok, TableRef} ->
+                        {union, Members, _} = maps:get(UnionName, Defs),
+                        MemberType = lists:nth(TypeIndex, Members),
+                        Acc#{Name => table_to_map(TableRef, Defs, MemberType, Buffer, Opts)};
+                    missing -> Acc
+                end;
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Vector of union types - read discriminator bytes and map to member names
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            type = {vector, {union_type, UnionName}},
+            resolved_type = RT,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+            {ok, TypeIndices} ->
+                {union, Members, _} = maps:get(UnionName, Defs),
+                TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
+                Acc#{Name => TypeNames};
+            missing ->
+                Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Vector of union values - decode each table using its type
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            type = {vector, {union_value, UnionName}},
+            resolved_type = RT,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    TypeFieldId = Id - 1,
+    TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
+    Acc1 =
+        case flatbuferl_reader:read_field(VTable, TypeFieldId, TypeVecDef, Buffer) of
+            {ok, TypeIndices} ->
+                case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+                    {ok, TableRefs} ->
+                        {union, Members, _} = maps:get(UnionName, Defs),
+                        DecodedValues = lists:zipwith(
+                            fun(TypeIdx, TableValueRef) ->
+                                MemberType = lists:nth(TypeIdx, Members),
+                                table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
+                            end,
+                            TypeIndices,
+                            TableRefs
+                        ),
+                        Acc#{Name => DecodedValues};
+                    missing ->
+                        Acc
+                end;
+            missing ->
+                Acc
+        end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Deprecated field with error option
 decode_fields(
@@ -302,130 +501,6 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, allow, Acc1).
-
-%% Union type field - output as <field>_type with the member name
-decode_field(
-    FieldName,
-    FieldId,
-    {union_type, UnionName},
-    _ResolvedType,
-    _Default,
-    TableRef,
-    Defs,
-    Buffer,
-    _Opts,
-    Acc
-) ->
-    case flatbuferl_reader:get_field(TableRef, FieldId, {union_type, UnionName}, Buffer) of
-        {ok, 0} ->
-            Acc;
-        {ok, TypeIndex} ->
-            {union, Members, _} = maps:get(UnionName, Defs),
-            MemberType = lists:nth(TypeIndex, Members),
-            Acc#{FieldName => MemberType};
-        missing ->
-            Acc
-    end;
-%% Union value field - output the nested table directly
-decode_field(
-    FieldName,
-    FieldId,
-    {union_value, UnionName},
-    ResolvedType,
-    _Default,
-    TableRef,
-    Defs,
-    Buffer,
-    Opts,
-    Acc
-) ->
-    TypeFieldId = FieldId - 1,
-    case flatbuferl_reader:get_field(TableRef, TypeFieldId, {union_type, UnionName}, Buffer) of
-        {ok, 0} ->
-            Acc;
-        {ok, TypeIndex} ->
-            case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-                {ok, TableValueRef} ->
-                    {union, Members, _} = maps:get(UnionName, Defs),
-                    MemberType = lists:nth(TypeIndex, Members),
-                    ConvertedValue = table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts),
-                    Acc#{FieldName => ConvertedValue};
-                missing ->
-                    Acc
-            end;
-        missing ->
-            Acc
-    end;
-%% Vector of union types - output as list of type names
-decode_field(
-    FieldName,
-    FieldId,
-    {vector, {union_type, UnionName}},
-    _ResolvedType,
-    _Default,
-    TableRef,
-    Defs,
-    Buffer,
-    _Opts,
-    Acc
-) ->
-    TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
-    case flatbuferl_reader:get_field(TableRef, FieldId, TypeVecDef, Buffer) of
-        {ok, TypeIndices} ->
-            {union, Members, _} = maps:get(UnionName, Defs),
-            TypeNames = [lists:nth(Idx, Members) || Idx <- TypeIndices, Idx > 0],
-            Acc#{FieldName => TypeNames};
-        missing ->
-            Acc
-    end;
-%% Vector of union values - decode each table using its type
-decode_field(
-    FieldName,
-    FieldId,
-    {vector, {union_value, UnionName}},
-    _ResolvedType,
-    _Default,
-    TableRef,
-    Defs,
-    Buffer,
-    Opts,
-    Acc
-) ->
-    TypeFieldId = FieldId - 1,
-    TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
-    ValueVecDef = #vector_def{
-        element_type = {union_value, UnionName}, is_primitive = false, element_size = 4
-    },
-    case flatbuferl_reader:get_field(TableRef, TypeFieldId, TypeVecDef, Buffer) of
-        {ok, TypeIndices} ->
-            case flatbuferl_reader:get_field(TableRef, FieldId, ValueVecDef, Buffer) of
-                {ok, TableRefs} ->
-                    {union, Members, _} = maps:get(UnionName, Defs),
-                    DecodedValues = lists:zipwith(
-                        fun(TypeIdx, TableValueRef) ->
-                            MemberType = lists:nth(TypeIdx, Members),
-                            table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
-                        end,
-                        TypeIndices,
-                        TableRefs
-                    ),
-                    Acc#{FieldName => DecodedValues};
-                missing ->
-                    Acc
-            end;
-        missing ->
-            Acc
-    end;
-%% Catch-all for other types (e.g., vectors of structs)
-decode_field(FieldName, FieldId, Type, ResolvedType, Default, TableRef, Defs, Buffer, Opts, Acc) ->
-    case flatbuferl_reader:get_field(TableRef, FieldId, ResolvedType, Buffer) of
-        {ok, Value} ->
-            Acc#{FieldName => convert_value(Value, Type, Defs, Buffer, Opts)};
-        missing when Default /= undefined ->
-            Acc#{FieldName => Default};
-        missing ->
-            Acc
-    end.
 
 convert_value({table, _, _} = TableRef, Type, Defs, Buffer, Opts) when is_atom(Type) ->
     %% Nested table - recursively convert
