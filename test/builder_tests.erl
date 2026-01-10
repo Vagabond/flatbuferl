@@ -599,3 +599,40 @@ string_dedup_flatc_compat_test() ->
     file:delete(TmpBin),
     file:delete(TmpSchema),
     file:delete(TmpJson).
+
+%% =============================================================================
+%% Fixed Array Tests
+%% =============================================================================
+
+binary_as_uint8_array_test() ->
+    %% Test that a binary can be used directly for [uint8:N] arrays
+    Schema = schema(
+        #{
+            'Hash' => {struct, [{data, {array, uint8, 32}}]},
+            test => table([field(hash, 'Hash')])
+        },
+        #{root_type => test}
+    ),
+    Bin = crypto:strong_rand_bytes(32),
+    Map = #{hash => #{data => Bin}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, hash), Buffer),
+    ?assertEqual(binary_to_list(Bin), maps:get(data, Struct)).
+
+binary_as_int8_array_test() ->
+    %% Test that a binary can be used directly for [int8:N] arrays
+    Schema = schema(
+        #{
+            'Data' => {struct, [{bytes, {array, int8, 16}}]},
+            test => table([field(data, 'Data')])
+        },
+        #{root_type => test}
+    ),
+    Bin = crypto:strong_rand_bytes(16),
+    Map = #{data => #{bytes => Bin}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, data), Buffer),
+    %% int8 array gets decoded as list of signed integers
+    ?assertEqual(16, length(maps:get(bytes, Struct))).

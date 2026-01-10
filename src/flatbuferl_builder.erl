@@ -1780,6 +1780,10 @@ encode_scalar(Map, #struct_def{fields = Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
+encode_scalar(Bin, {array, ElemType, Count})
+  when is_binary(Bin), byte_size(Bin) == Count,
+       (ElemType == uint8 orelse ElemType == int8) ->
+    Bin;
 encode_scalar(List, {array, ElemType, Count}) when is_list(List) ->
     encode_array(List, ElemType, Count);
 encode_scalar(TypeIndex, {union_type, _UnionName}) when is_integer(TypeIndex) ->
