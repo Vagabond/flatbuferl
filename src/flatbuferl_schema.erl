@@ -342,15 +342,21 @@ precompute_encode_layout(Scalars, Refs, MaxId) ->
     VTable = build_precomputed_vtable(MaxId, Slots, TableSize),
     %% Collect all field IDs for quick "all present" check
     AllFieldIds = [F#field_def.id || F <- AllFields],
+    %% Precompute offset-only slots for fast path
+    SlotOffsets = maps:map(fun(_Id, {Offset, _Size}) -> Offset end, Slots),
+    %% Check if any ref has id=0 (affects flatc sort order at runtime)
+    HasIdZeroRef = lists:any(fun(#field_def{id = Id}) -> Id == 0 end, Refs),
     #encode_layout{
         vtable = VTable,
         vtable_size = VTableSize,
         table_size = TableSize,
         slots = Slots,
+        slot_offsets = SlotOffsets,
         scalars_order = Scalars,
         refs_order = RefsInFlatcOrder,
         all_field_ids = AllFieldIds,
-        max_id = MaxId
+        max_id = MaxId,
+        has_id_zero_ref = HasIdZeroRef
     }.
 
 %% Sort refs in flatc order (precomputed at schema time)

@@ -31,13 +31,17 @@
     %% Map of field_id => {offset, size} for quick adjustment
     %% Offset is from start of table data (after soffset)
     slots :: #{non_neg_integer() => {non_neg_integer(), non_neg_integer()}},
+    %% Precomputed offset-only slots for fast path (field_id => offset)
+    slot_offsets :: #{non_neg_integer() => non_neg_integer()},
     %% Fields in encoding order (scalars by layout_key, then refs in flatc order)
     scalars_order :: [#field_def{}],
     refs_order :: [#field_def{}],
     %% All field IDs for quick "all present" check
     all_field_ids :: [non_neg_integer()],
     %% Max field ID (for vtable sizing)
-    max_id :: integer()
+    max_id :: integer(),
+    %% True if any ref has id=0 (affects flatc sort order)
+    has_id_zero_ref = false :: boolean()
 }).
 
 %% Table definition with precomputed layout

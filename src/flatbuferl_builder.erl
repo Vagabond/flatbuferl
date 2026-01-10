@@ -243,6 +243,7 @@ layout_for_value(Value, TableDef, Defs) ->
         vtable = PrecomputedVTable,
         table_size = PrecomputedTableSize,
         slots = PrecomputedSlots,
+        slot_offsets = PrecomputedSlotOffsets,
         all_field_ids = AllFieldIds,
         max_id = MaxId
     } = EncodeLayout,
@@ -255,8 +256,7 @@ layout_for_value(Value, TableDef, Defs) ->
     case PresentCount == length(AllFieldIds) of
         true ->
             %% All fields present - use precomputed layout directly
-            Slots = maps:map(fun(_Id, {Offset, _Size}) -> Offset end, PrecomputedSlots),
-            {Scalars, Refs, PrecomputedVTable, AllFields, PrecomputedTableSize, Slots};
+            {Scalars, Refs, PrecomputedVTable, AllFields, PrecomputedTableSize, PrecomputedSlotOffsets};
         false ->
             %% Some fields missing - adjust slots
             PresentIds = [F#field.id || F <- AllFields],
@@ -839,19 +839,22 @@ calc_table_size_with_padding(_AllFields, RawSize, Refs, HeaderSize, Defs, MaxId)
 %% Sort refs in flatc order:
 %% - If there's an id=0 ref: ascending order (1, 2, ..., N, 0)
 %% - If NO id=0 ref: descending order (N, N-1, ..., 1)
-sort_refs_flatc_order(Refs) ->
+%% Fast path when we know if there's an id=0 ref (from schema)
+sort_refs_flatc_order(Refs, false) ->
+    %% No id=0 ref: just sort descending (skip partition)
+    lists:sort(fun(#field{id = IdA}, #field{id = IdB}) -> IdA >= IdB end, Refs);
+sort_refs_flatc_order(Refs, true) ->
+    %% Has id=0 ref: need to partition
     {ZeroRefs, NonZeroRefs} = lists:partition(fun(#field{id = Id}) -> Id == 0 end, Refs),
-    case ZeroRefs of
-        [] ->
-            %% No id=0 ref: descending order
-            lists:sort(fun(#field{id = IdA}, #field{id = IdB}) -> IdA >= IdB end, NonZeroRefs);
-        _ ->
-            %% Has id=0 ref: ascending with 0 at end
-            SortedNonZero = lists:sort(
-                fun(#field{id = IdA}, #field{id = IdB}) -> IdA =< IdB end, NonZeroRefs
-            ),
-            SortedNonZero ++ ZeroRefs
-    end.
+    SortedNonZero = lists:sort(
+        fun(#field{id = IdA}, #field{id = IdB}) -> IdA =< IdB end, NonZeroRefs
+    ),
+    SortedNonZero ++ ZeroRefs.
+
+%% Fallback when we don't know - do the check
+sort_refs_flatc_order(Refs) ->
+    HasZero = lists:any(fun(#field{id = Id}) -> Id == 0 end, Refs),
+    sort_refs_flatc_order(Refs, HasZero).
 
 %% Find the offset of the first 8-byte field using precomputed Slots map
 %% Fields must be pre-sorted by layout_key
