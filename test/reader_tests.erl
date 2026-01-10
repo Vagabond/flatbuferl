@@ -210,8 +210,8 @@ alltypes_string_test() ->
 alltypes_enum_test() ->
     Buffer = alltypes_binary(),
     Root = flatbuferl_reader:get_root(Buffer),
-    %% Color.Green = 1
-    ?assertEqual({ok, 1}, flatbuferl_reader:get_field(Root, 12, {enum, int8}, Buffer)).
+    %% Color.Green = 1 (enums are just scalars at binary level)
+    ?assertEqual({ok, 1}, flatbuferl_reader:get_field(Root, 12, int8, Buffer)).
 
 %% =============================================================================
 %% Type Alias Tests

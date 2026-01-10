@@ -91,6 +91,34 @@
     is_table_element = false :: boolean()
 }).
 
+%% Enum definition (stored in Defs map)
+-record(enum_def, {
+    base_type :: atom(),
+    values :: [atom()],
+    %% atom -> index (0-based)
+    index_map :: #{atom() => non_neg_integer()},
+    %% index -> atom (for fast decode)
+    reverse_map :: #{non_neg_integer() => atom()}
+}).
+
+%% Resolved enum type (stored in field_def's resolved_type)
+-record(enum_resolved, {
+    base_type :: atom(),
+    %% atom -> index (for encode)
+    index_map :: #{atom() => non_neg_integer()},
+    %% index -> atom (for decode)
+    reverse_map :: #{non_neg_integer() => atom()}
+}).
+
+%% Union definition (stored in Defs map)
+-record(union_def, {
+    members :: [atom()],
+    %% atom -> index (1-based)
+    index_map :: #{atom() => pos_integer()},
+    %% index -> atom (for fast decode)
+    reverse_map :: #{pos_integer() => atom()}
+}).
+
 %% Union type field (stores the type index as uint8)
 -record(union_type_def, {
     name :: atom(),

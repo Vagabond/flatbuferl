@@ -218,7 +218,8 @@ preflight_enum_field_test() ->
 preflight_enum_invalid_value_test() ->
     Ctx = enum_ctx(),
     Result = flatbuferl_update:preflight(Ctx, #{color => 'Purple'}),
-    ?assertMatch({error, {invalid_enum_value, 'Color', 'Purple'}}, Result).
+    %% Error format changed: enum type name no longer included with precomputed enum_resolved
+    ?assertMatch({error, {invalid_enum_value, 'Purple'}}, Result).
 
 %% =============================================================================
 %% Update Tests (actual splice)

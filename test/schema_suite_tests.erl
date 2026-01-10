@@ -98,7 +98,8 @@ resolve_type(Type, Defs) when is_atom(Type) ->
         {struct, Fields} -> {struct, Fields};
         % Keep table types as atoms
         #table_def{} -> Type;
-        {{enum, Base}, Values} -> {enum, Base, Values};
+        #enum_def{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap} ->
+            #enum_resolved{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap};
         _ -> normalize_scalar_type(Type)
     end;
 resolve_type({vector, ElemType}, Defs) ->
@@ -113,8 +114,7 @@ resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
 resolve_type({union_type, UnionName}, Defs) ->
     case maps:get(UnionName, Defs, undefined) of
-        {union, _Members, IndexMap} ->
-            ReverseMap = maps:fold(fun(K, V, M) -> M#{V => K} end, #{}, IndexMap),
+        #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
             #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
         {union, Members} ->
             IndexMap = maps:from_list(lists:zip(Members, lists:seq(1, length(Members)))),
@@ -125,7 +125,7 @@ resolve_type({union_type, UnionName}, Defs) ->
     end;
 resolve_type({union_value, UnionName}, Defs) ->
     case maps:get(UnionName, Defs, undefined) of
-        {union, Members, IndexMap} ->
+        #union_def{index_map = IndexMap} ->
             #union_value_def{name = UnionName, index_map = IndexMap};
         {union, Members} ->
             IndexMap = maps:from_list(lists:zip(Members, lists:seq(1, length(Members)))),
@@ -261,12 +261,12 @@ test_cases() ->
 
         %% === test/schemas/ - enums ===
         {enum_field, "test/schemas/enum_field.fbs", enum_outer, no_file_id,
-            %% Green = 1
-            #{enum_field => 1}},
+            %% Green = 1, decoded as atom
+            #{enum_field => 'Green'}},
 
         {vector_of_enums, "test/schemas/vector_of_enums.fbs", vector_table, no_file_id,
-            %% Red, Green, Blue
-            #{enum_fields => [0, 1, 2]}},
+            %% Red, Green, Blue - decoded as atoms
+            #{enum_fields => ['Red', 'Green', 'Blue']}},
 
         %% === test/schemas/ - nested tables with complex data ===
         {error_schema, "test/schemas/error.fbs", root_table, no_file_id, #{
@@ -310,7 +310,7 @@ test_cases() ->
             f_float => 3.14,
             f_double => 2.718281828,
             f_string => <<"test string">>,
-            f_color => 1
+            f_color => 'Green'
         }},
 
         {vector_types, "test/vectors/test_vectors2.fbs", 'VectorTypes', <<"VEC2">>, #{

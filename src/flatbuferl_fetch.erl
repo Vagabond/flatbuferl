@@ -311,8 +311,8 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
             %% NONE type
             missing;
         {ok, TypeIndex} ->
-            {union, Members, _} = maps:get(UnionName, Defs),
-            MemberType = lists:nth(TypeIndex, Members),
+            #union_def{members = Members, reverse_map = ReverseMap} = maps:get(UnionName, Defs),
+            MemberType = maps:get(TypeIndex, ReverseMap),
             case Rest of
                 ['_type'] ->
                     {ok, MemberType};
@@ -488,8 +488,8 @@ traverse_union_vector(
             {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
                 ValVecInfo, ActualIndex, Buffer
             ),
-            {union, Members, _} = maps:get(UnionName, Defs),
-            MemberType = lists:nth(TypeIndex, Members),
+            #union_def{reverse_map = ReverseMap} = maps:get(UnionName, Defs),
+            MemberType = maps:get(TypeIndex, ReverseMap),
             continue_from_union_element(ValueRef, MemberType, Defs, Rest, Buffer);
         false ->
             missing
@@ -513,8 +513,8 @@ wildcard_over_union_vector(
 ) ->
     {ok, TypeIndex} = flatbuferl_reader:get_vector_element_at(TypeVecInfo, Idx, Buffer),
     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(ValVecInfo, Idx, Buffer),
-    {union, Members, _} = maps:get(UnionName, Defs),
-    MemberType = lists:nth(TypeIndex, Members),
+    #union_def{reverse_map = ReverseMap} = maps:get(UnionName, Defs),
+    MemberType = maps:get(TypeIndex, ReverseMap),
     %% Catch unknown_field errors - different union members have different fields
     Result =
         try

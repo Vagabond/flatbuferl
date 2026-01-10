@@ -20,7 +20,7 @@ table_with_defaults_test() ->
 
 enum_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("enum Color : byte { Red, Green, Blue }"),
-    {{enum, byte}, ['Red', 'Green', 'Blue'], IndexMap} = maps:get('Color', Defs),
+    #enum_def{base_type = byte, values = ['Red', 'Green', 'Blue'], index_map = IndexMap} = maps:get('Color', Defs),
     ?assertEqual(#{'Red' => 0, 'Green' => 1, 'Blue' => 2}, IndexMap).
 
 enum_default_test() ->
@@ -54,7 +54,7 @@ enum_default_roundtrip_test() ->
 
 union_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("union Animal { Dog, Cat }"),
-    {union, ['Dog', 'Cat'], IndexMap} = maps:get('Animal', Defs),
+    #union_def{members = ['Dog', 'Cat'], index_map = IndexMap} = maps:get('Animal', Defs),
     ?assertEqual(#{'Dog' => 1, 'Cat' => 2}, IndexMap).
 
 vector_field_test() ->

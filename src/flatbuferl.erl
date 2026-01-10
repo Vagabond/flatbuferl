@@ -253,6 +253,33 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Enum field - scalar with value conversion (must come before primitive scalar)
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = #enum_resolved{base_type = Base, reverse_map = ReverseMap},
+            default = Def,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_scalar_field(VTable, Id, Base, Buffer) of
+            {ok, Value} -> Acc#{Name => maps:get(Value, ReverseMap, Value)};
+            missing when Def /= undefined -> Acc#{Name => Def};
+            missing -> Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Primitive scalar - fast path with only 11 clause function
 decode_fields(
     [
@@ -463,7 +490,36 @@ decode_fields(
                 Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Vector of non-tables (scalars, strings, structs, enums) - return raw values
+%% Vector of enums - convert integers to atoms using reverse_map
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = #vector_def{element_type = #enum_resolved{reverse_map = ReverseMap}} = RT,
+            default = Def,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    Acc1 =
+        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+            {ok, Values} ->
+                Acc#{Name => [maps:get(V, ReverseMap, V) || V <- Values]};
+            missing when Def /= undefined -> Acc#{Name => Def};
+            missing ->
+                Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Vector of non-tables (scalars, strings, structs) - return raw values
 decode_fields(
     [
         #field_def{
@@ -681,7 +737,7 @@ resolve_for_reader({TypeName, Default}, Defs) when is_atom(TypeName), is_boolean
     resolve_for_reader(TypeName, Defs);
 resolve_for_reader(TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, Base}, _, _} -> {enum, Base};
+        #enum_def{base_type = Base} -> Base;
         _ -> TypeName
     end;
 resolve_for_reader(Type, _Defs) ->
@@ -704,21 +760,17 @@ convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_
     convert_enum_value(Value, TypeName, Defs);
 convert_enum_value(Value, {TypeName, Default}, Defs) when is_atom(TypeName), is_boolean(Default) ->
     convert_enum_value(Value, TypeName, Defs);
-%% Handle resolved enum type {enum, Base, IndexMap} from resolved_type
-convert_enum_value(Value, {enum, _Base, IndexMap}, _Defs) when
-    is_integer(Value), is_map(IndexMap)
+%% Handle resolved enum type #enum_resolved{} from resolved_type
+convert_enum_value(Value, #enum_resolved{reverse_map = ReverseMap}, _Defs) when
+    is_integer(Value)
 ->
-    %% Reverse lookup: find atom name for this integer value
-    case [Name || {Name, V} <- maps:to_list(IndexMap), V == Value] of
-        [Name] -> Name;
-        %% Unknown value, return as-is
-        [] -> Value
-    end;
+    %% O(1) lookup using precomputed reverse map
+    maps:get(Value, ReverseMap, Value);
 convert_enum_value(Value, TypeName, Defs) when is_atom(TypeName), is_integer(Value) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _Base}, Values, _} ->
-            %% Enum values are 0-indexed
-            lists:nth(Value + 1, Values);
+        #enum_def{reverse_map = ReverseMap} ->
+            %% O(1) lookup using precomputed reverse map
+            maps:get(Value, ReverseMap, Value);
         _ ->
             Value
     end;

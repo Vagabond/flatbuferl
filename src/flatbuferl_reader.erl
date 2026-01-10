@@ -222,10 +222,8 @@ read_scalar(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
 %% Enum - delegate to underlying type
-read_scalar(Buffer, Pos, {enum, UnderlyingType, _IndexMap}) ->
-    read_scalar(Buffer, Pos, UnderlyingType);
-read_scalar(Buffer, Pos, {enum, UnderlyingType}) ->
-    read_scalar(Buffer, Pos, UnderlyingType);
+read_scalar(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
+    read_scalar(Buffer, Pos, BaseType);
 %% Union type - ubyte discriminator
 read_scalar(Buffer, Pos, #union_type_def{}) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
@@ -353,10 +351,8 @@ read_value(Buffer, Pos, #vector_def{
     <<_:VectorPos/binary, Length:32/little-unsigned, _/binary>> = Buffer,
     read_compound_elements(Buffer, VectorPos + 4, Length, ElemType, ElemSize, []);
 %% Enum - read underlying scalar directly
-read_value(Buffer, Pos, {enum, UnderlyingType, _IndexMap}) ->
-    read_scalar(Buffer, Pos, UnderlyingType);
-read_value(Buffer, Pos, {enum, UnderlyingType}) ->
-    read_scalar(Buffer, Pos, UnderlyingType);
+read_value(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
+    read_scalar(Buffer, Pos, BaseType);
 %% Struct - read inline fixed-size data (enriched record format)
 read_value(Buffer, Pos, #struct_def{fields = Fields}) ->
     StructMap = read_struct_fields_fast(Buffer, Pos, Fields, #{}),
@@ -454,10 +450,8 @@ read_scalar_value(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     Value;
 %% Enum - delegate to underlying type
-read_scalar_value(Buffer, Pos, {enum, UnderlyingType, _IndexMap}) ->
-    read_scalar_value(Buffer, Pos, UnderlyingType);
-read_scalar_value(Buffer, Pos, {enum, UnderlyingType}) ->
-    read_scalar_value(Buffer, Pos, UnderlyingType);
+read_scalar_value(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
+    read_scalar_value(Buffer, Pos, BaseType);
 %% Union type - stored as uint8
 read_scalar_value(Buffer, Pos, #union_type_def{}) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
@@ -499,7 +493,7 @@ is_primitive_element(int64) -> true;
 is_primitive_element(uint64) -> true;
 is_primitive_element(float32) -> true;
 is_primitive_element(float64) -> true;
-is_primitive_element({enum, _, _}) -> true;
+is_primitive_element(#enum_resolved{}) -> true;
 is_primitive_element(_) -> false.
 
 %% =============================================================================
@@ -622,10 +616,8 @@ element_size(double) ->
     8;
 element_size(float64) ->
     8;
-element_size({enum, UnderlyingType}) ->
-    element_size(UnderlyingType);
-element_size({enum, UnderlyingType, _Values}) ->
-    element_size(UnderlyingType);
+element_size(#enum_resolved{base_type = BaseType}) ->
+    element_size(BaseType);
 element_size({array, ElemType, Count}) ->
     element_size(ElemType) * Count;
 element_size(#struct_def{total_size = TotalSize}) ->

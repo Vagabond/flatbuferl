@@ -329,20 +329,8 @@ integration_3_ints_all_combos_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema(Schema),
 
     %% Get the precomputed layout
-    #{a := ADef, b := BDef, c := CDef} = get_field_map('T', Defs),
-
     %% Build precomputed slots map #{id => {offset, size}}
-    PrecomputedSlots = #{
-        ADef#field_def.id => {get_slot_offset(ADef, Defs), ADef#field_def.inline_size},
-        BDef#field_def.id => {get_slot_offset(BDef, Defs), BDef#field_def.inline_size},
-        CDef#field_def.id => {get_slot_offset(CDef, Defs), CDef#field_def.inline_size}
-    },
-
     %% Get layout order (highest layout_key first)
-
-    %% Same size, so ordered by id descending
-    AllFieldDefs = [CDef, BDef, ADef],
-    AllIds = [F#field_def.id || F <- AllFieldDefs],
 
     %% Test all non-empty subsets
     Combos = [
@@ -359,10 +347,6 @@ integration_3_ints_all_combos_test() ->
         fun(PresentFields) ->
             %% Build map for encoding
             Map = maps:from_list(PresentFields),
-            PresentIds = [get_field_id(Name, Defs) || {Name, _} <- PresentFields],
-
-            %% Calculate adjusted slots using our algorithm
-            AdjustedSlots = adjust_slots(PrecomputedSlots, PresentIds, AllIds),
 
             %% Encode and verify the offsets are correct by checking round-trip
             Buffer = iolist_to_binary(flatbuferl:from_map(Map, {Defs, #{root_type => 'T'}})),
@@ -379,24 +363,8 @@ integration_3_ints_all_combos_test() ->
                     )
                 end,
                 PresentFields
-            ),
-
-            %% Log for debugging
-            io:format(user, "Present=~p, Adjusted=~p~n", [PresentFields, AdjustedSlots])
+            )
         end,
         Combos
     ).
 
-get_field_map(TableName, Defs) ->
-    #table_def{field_map = FieldMap} = maps:get(TableName, Defs),
-    FieldMap.
-
-get_field_id(Name, Defs) ->
-    #table_def{field_map = FieldMap} = maps:get('T', Defs),
-    #field_def{id = Id} = maps:get(Name, FieldMap),
-    Id.
-
-get_slot_offset(#field_def{id = Id}, Defs) ->
-    #table_def{encode_layout = #encode_layout{slots = Slots}} = maps:get('T', Defs),
-    {Offset, _Size} = maps:get(Id, Slots),
-    Offset.

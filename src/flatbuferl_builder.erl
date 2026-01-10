@@ -655,9 +655,7 @@ is_scalar_type({TypeName, Default}) when
 ->
     %% Bool with default value like {bool, true}
     is_scalar_type(TypeName);
-is_scalar_type({enum, _}) ->
-    true;
-is_scalar_type({enum, _, _}) ->
+is_scalar_type(#enum_resolved{}) ->
     true;
 %% Structs are inline fixed-size data
 is_scalar_type({struct, _}) ->
@@ -750,7 +748,8 @@ resolve_type({TypeName, Default}, Defs) when
     resolve_type(TypeName, Defs);
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
-        {{enum, Base}, Values} -> {enum, Base, Values};
+        #enum_def{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap} ->
+            #enum_resolved{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap};
         #struct_def{} = StructDef -> StructDef;
         {struct, Fields} -> {struct, Fields};
         _ -> Type
@@ -761,18 +760,17 @@ resolve_type({array, ElemType, Count}, Defs) ->
     {array, resolve_type(ElemType, Defs), Count};
 resolve_type({union_type, UnionName}, Defs) ->
     case maps:get(UnionName, Defs, undefined) of
-        {union, _Members, IndexMap} ->
-            ReverseMap = maps:fold(fun(K, V, M) -> M#{V => K} end, #{}, IndexMap),
+        #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
             #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
         _ ->
             #union_type_def{name = UnionName, index_map = #{}, reverse_map = #{}}
     end;
 resolve_type({union_value, UnionName}, Defs) ->
     case maps:get(UnionName, Defs, undefined) of
-        {union, _Members, IndexMap} ->
-            #union_value_def{name = UnionName, index_map = IndexMap};
+        #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
+            #union_value_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
         _ ->
-            #union_value_def{name = UnionName, index_map = #{}}
+            #union_value_def{name = UnionName, index_map = #{}, reverse_map = #{}}
     end;
 resolve_type(Type, _Defs) ->
     Type.
@@ -1762,15 +1760,20 @@ encode_scalar(Value, double) ->
     <<Value:64/little-float>>;
 encode_scalar(Value, float64) ->
     <<Value:64/little-float>>;
-encode_scalar(Value, {enum, Base}) ->
-    encode_scalar(Value, Base);
-encode_scalar(Value, {enum, Base, IndexMap}) when is_atom(Value), is_map(IndexMap) ->
+encode_scalar(Value, #enum_resolved{base_type = Base, index_map = IndexMap}) when is_atom(Value) ->
     %% O(1) lookup using precomputed index map from schema
     case maps:find(Value, IndexMap) of
         {ok, Index} -> encode_scalar(Index, Base);
         error -> error({unknown_enum_value, Value, maps:keys(IndexMap)})
     end;
-encode_scalar(Value, {enum, Base, _IndexMap}) when is_integer(Value) ->
+encode_scalar(Value, #enum_resolved{base_type = Base, index_map = IndexMap}) when is_binary(Value) ->
+    %% Binary from JSON - convert to atom and lookup
+    AtomValue = binary_to_existing_atom(Value, utf8),
+    case maps:find(AtomValue, IndexMap) of
+        {ok, Index} -> encode_scalar(Index, Base);
+        error -> error({unknown_enum_value, Value, maps:keys(IndexMap)})
+    end;
+encode_scalar(Value, #enum_resolved{base_type = Base}) when is_integer(Value) ->
     %% Already an integer, use directly
     encode_scalar(Value, Base);
 encode_scalar(Map, #struct_def{fields = Fields}) when is_map(Map) ->
@@ -1852,8 +1855,7 @@ type_size(float) -> 4;
 type_size(float32) -> 4;
 type_size(double) -> 8;
 type_size(float64) -> 8;
-type_size({enum, Base}) -> type_size(Base);
-type_size({enum, Base, _Values}) -> type_size(Base);
+type_size(#enum_resolved{base_type = Base}) -> type_size(Base);
 type_size(#struct_def{total_size = TotalSize}) -> TotalSize;
 type_size({struct, Fields}) -> calc_struct_size(Fields);
 type_size({array, ElemType, Count}) -> type_size(ElemType) * Count;

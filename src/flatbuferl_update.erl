@@ -61,7 +61,7 @@ encode_update(Type, Value, Size) ->
     BaseType = base_type(Type),
     encode_scalar(Value, BaseType, Size).
 
-base_type({enum, Base, _EnumName}) -> Base;
+base_type(#enum_resolved{base_type = Base}) -> Base;
 base_type(Type) -> Type.
 
 %% Encode a string to fit in OldAllocated bytes
@@ -123,21 +123,17 @@ encode_scalar(Value, Type, Size) when is_atom(Type) ->
     encode_scalar(Value, ubyte, Size).
 
 %% Convert enum atom to integer using the type definition
-enum_to_integer(Value, {enum, _Base, EnumName}, Defs) when is_atom(Value) ->
-    {{enum, _}, Values, _} = maps:get(EnumName, Defs),
-    enum_index(Value, Values, 0);
+enum_to_integer(Value, #enum_resolved{index_map = IndexMap}, _Defs) when is_atom(Value) ->
+    maps:get(Value, IndexMap, Value);
 enum_to_integer(Value, TypeName, Defs) when is_atom(TypeName), is_atom(Value) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _Base}, Values, _} ->
-            enum_index(Value, Values, 0);
+        #enum_def{index_map = IndexMap} ->
+            maps:get(Value, IndexMap, Value);
         _ ->
             Value
     end;
 enum_to_integer(Value, _Type, _Defs) ->
     Value.
-
-enum_index(Value, [Value | _], Index) -> Index;
-enum_index(Value, [_ | Rest], Index) -> enum_index(Value, Rest, Index + 1).
 
 %% Deep merge nested maps
 deep_merge(Base, Changes) when is_map(Base), is_map(Changes) ->
@@ -169,7 +165,7 @@ deep_merge(_Base, Changes) ->
 %% - `{error, Reason}' - validation failed (bad field, type mismatch, etc.)
 -type field_type() ::
     atom()
-    | {enum, atom(), atom()}
+    | #enum_resolved{}
     | {string_shrink, pos_integer()}
     | {byte_vector_shrink, pos_integer()}
     | {vector_shrink, atom(), pos_integer(), pos_integer()}.
@@ -317,8 +313,8 @@ traverse_for_update([FieldName | Rest], Buffer, Defs, TableType, TableRef) ->
                     %% NONE type
                     missing;
                 {ok, TypeIndex} ->
-                    {union, Members, _} = maps:get(UnionName, Defs),
-                    MemberType = lists:nth(TypeIndex, Members),
+                    #union_def{reverse_map = ReverseMap} = maps:get(UnionName, Defs),
+                    MemberType = maps:get(TypeIndex, ReverseMap),
                     case
                         flatbuferl_reader:get_field(
                             TableRef, FieldId, {union_value, UnionName}, Buffer
@@ -439,8 +435,8 @@ traverse_union_vector_for_update(TableRef, FieldId, UnionName, [Index | Rest], B
                                     %% NONE
                                     missing;
                                 _ ->
-                                    {union, Members, _} = maps:get(UnionName, Defs),
-                                    MemberType = lists:nth(TypeIndex, Members),
+                                    #union_def{reverse_map = ReverseMap2} = maps:get(UnionName, Defs),
+                                    MemberType = maps:get(TypeIndex, ReverseMap2),
                                     %% Get value ref
                                     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
                                         ValVecInfo, ActualIndex, Buffer
@@ -590,7 +586,8 @@ find_field([_ | Rest], Name) ->
 
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
-        {{enum, Base}, _, _} -> {enum, Base, Type};
+        #enum_def{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap} ->
+            #enum_resolved{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap};
         _ -> Type
     end;
 resolve_type(Type, _Defs) ->
@@ -639,7 +636,7 @@ is_fixed_size_type(double, _Defs) ->
     {true, 8};
 is_fixed_size_type(float64, _Defs) ->
     {true, 8};
-is_fixed_size_type({enum, Base, _EnumName}, Defs) ->
+is_fixed_size_type(#enum_resolved{base_type = Base}, Defs) ->
     is_fixed_size_type(Base, Defs);
 is_fixed_size_type(#struct_def{total_size = TotalSize}, _Defs) ->
     {true, TotalSize};
@@ -647,7 +644,7 @@ is_fixed_size_type({struct, Fields}, Defs) ->
     {true, struct_size(Fields, Defs)};
 is_fixed_size_type(TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, Base}, _, _} -> is_fixed_size_type(Base, Defs);
+        #enum_def{base_type = Base} -> is_fixed_size_type(Base, Defs);
         #struct_def{total_size = TotalSize} -> {true, TotalSize};
         {struct, Fields} -> {true, struct_size(Fields, Defs)};
         _ -> false
@@ -717,11 +714,10 @@ validate_value(Value, Type, _Defs) when
         is_number(Value) -> ok;
         true -> {error, {type_mismatch, Type, Value}}
     end;
-validate_value(Value, {enum, _Base, EnumName}, Defs) ->
-    {{enum, _}, Values, _} = maps:get(EnumName, Defs),
-    case lists:member(Value, Values) of
+validate_value(Value, #enum_resolved{index_map = IndexMap}, _Defs) ->
+    case maps:is_key(Value, IndexMap) of
         true -> ok;
-        false -> {error, {invalid_enum_value, EnumName, Value}}
+        false -> {error, {invalid_enum_value, Value}}
     end;
 validate_value(Value, #struct_def{fields = Fields}, Defs) when is_map(Value) ->
     validate_struct_value(Value, Fields, Defs);
@@ -729,8 +725,8 @@ validate_value(Value, {struct, Fields}, Defs) when is_map(Value) ->
     validate_struct_value(Value, Fields, Defs);
 validate_value(Value, TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
-        {{enum, _Base}, Values, _} ->
-            case lists:member(Value, Values) of
+        #enum_def{index_map = IndexMap} ->
+            case maps:is_key(Value, IndexMap) of
                 true -> ok;
                 false -> {error, {invalid_enum_value, TypeName, Value}}
             end;
