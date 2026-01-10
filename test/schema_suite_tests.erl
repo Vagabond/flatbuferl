@@ -31,8 +31,9 @@ field(Name, Type) -> field(Name, Type, #{}).
 field(Name, Type, Attrs) ->
     NormType = normalize_type(Type),
     Defs = maps:get(defs, Attrs, #{}),
-    ResolvedType = resolve_type(NormType, Defs),
+    ResolvedType0 = resolve_type(NormType, Defs),
     Id = maps:get(id, Attrs, 0),
+    ResolvedType = finalize_resolved_type(ResolvedType0, Id, Name),
     InlineSize = maps:get(inline_size, Attrs, type_size(NormType)),
     #field_def{
         name = Name,
@@ -47,6 +48,21 @@ field(Name, Type, Attrs) ->
         resolved_type = ResolvedType,
         layout_key = InlineSize * 65536 + Id
     }.
+
+%% Convert partial union_value to complete union_value_def
+finalize_resolved_type(#union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap}, FieldId, FieldName) ->
+    TypeName = list_to_atom(atom_to_list(FieldName) ++ "_type"),
+    TypeBinaryName = atom_to_binary(TypeName),
+    #union_value_def{
+        name = Name,
+        index_map = IndexMap,
+        reverse_map = ReverseMap,
+        type_field_id = FieldId - 1,
+        type_name = TypeName,
+        type_binary_name = TypeBinaryName
+    };
+finalize_resolved_type(Other, _FieldId, _FieldName) ->
+    Other.
 
 is_primitive_scalar(bool) -> true;
 is_primitive_scalar(int8) -> true;
@@ -134,13 +150,14 @@ resolve_type({union_type, UnionName}, Defs) ->
     end;
 resolve_type({union_value, UnionName}, Defs) ->
     case maps:get(UnionName, Defs, undefined) of
-        #union_def{index_map = IndexMap} ->
-            #union_value_def{name = UnionName, index_map = IndexMap};
+        #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
+            #union_value_partial{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
         {union, Members} ->
             IndexMap = maps:from_list(lists:zip(Members, lists:seq(1, length(Members)))),
-            #union_value_def{name = UnionName, index_map = IndexMap};
+            ReverseMap = maps:from_list(lists:zip(lists:seq(1, length(Members)), Members)),
+            #union_value_partial{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
         _ ->
-            #union_value_def{name = UnionName, index_map = #{}}
+            #union_value_partial{name = UnionName, index_map = #{}, reverse_map = #{}}
     end;
 resolve_type(Type, _Defs) ->
     Type.

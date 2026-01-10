@@ -490,6 +490,48 @@ decode_fields(
                 Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
+%% Vector of union values (partial - used in vector element types)
+decode_fields(
+    [
+        #field_def{
+            name = Name,
+            id = Id,
+            resolved_type = #vector_def{element_type = #union_value_partial{reverse_map = ReverseMap}} = RT,
+            deprecated = false
+        }
+        | Rest
+    ],
+    VTable,
+    Defs,
+    TableType,
+    Buffer,
+    Opts,
+    DepOpt,
+    Acc
+) ->
+    TypeFieldId = Id - 1,
+    TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
+    Acc1 =
+        case flatbuferl_reader:read_field(VTable, TypeFieldId, TypeVecDef, Buffer) of
+            {ok, TypeIndices} ->
+                case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+                    {ok, TableRefs} ->
+                        DecodedValues = lists:zipwith(
+                            fun(TypeIdx, TableValueRef) ->
+                                MemberType = maps:get(TypeIdx, ReverseMap),
+                                table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
+                            end,
+                            TypeIndices,
+                            TableRefs
+                        ),
+                        Acc#{Name => DecodedValues};
+                    missing ->
+                        Acc
+                end;
+            missing ->
+                Acc
+        end,
+    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Vector of enums - convert integers to atoms using reverse_map
 decode_fields(
     [

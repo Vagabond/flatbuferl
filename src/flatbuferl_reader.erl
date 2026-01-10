@@ -384,6 +384,10 @@ read_value(Buffer, Pos, #union_value_def{}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     NestedTablePos = Pos + TableOffset,
     {ok, {table, NestedTablePos, Buffer}};
+read_value(Buffer, Pos, #union_value_partial{}) ->
+    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+    NestedTablePos = Pos + TableOffset,
+    {ok, {table, NestedTablePos, Buffer}};
 %% Type with default value - extract just the type (used internally)
 read_value(Buffer, Pos, {Type, Default}) when is_atom(Type), is_number(Default) ->
     read_scalar(Buffer, Pos, Type);
@@ -478,6 +482,9 @@ read_compound_value(Buffer, Pos, {union_value, _UnionName}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     {table, Pos + TableOffset, Buffer};
 read_compound_value(Buffer, Pos, #union_value_def{}) ->
+    <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
+    {table, Pos + TableOffset, Buffer};
+read_compound_value(Buffer, Pos, #union_value_partial{}) ->
     <<_:Pos/binary, TableOffset:32/little-unsigned, _/binary>> = Buffer,
     {table, Pos + TableOffset, Buffer};
 read_compound_value(Buffer, Pos, TableName) when is_atom(TableName) ->
@@ -636,6 +643,8 @@ element_size(#union_type_def{}) ->
 element_size({union_value, _}) ->
     4;
 element_size(#union_value_def{}) ->
+    4;
+element_size(#union_value_partial{}) ->
     4;
 element_size(TableName) when is_atom(TableName) -> 4.
 

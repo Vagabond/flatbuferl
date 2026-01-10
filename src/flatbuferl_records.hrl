@@ -137,7 +137,15 @@
     reverse_map :: #{pos_integer() => atom()}
 }).
 
-%% Union value field (stores reference to the table)
+%% Union value field - partial (before field ID is known)
+%% Created by resolve_type, converted to union_value_def by finalize_resolved_type
+-record(union_value_partial, {
+    name :: atom(),
+    index_map :: #{atom() => pos_integer()},
+    reverse_map :: #{pos_integer() => atom()}
+}).
+
+%% Union value field - complete (stores reference to the table)
 -record(union_value_def, {
     name :: atom(),
     index_map :: #{atom() => pos_integer()},

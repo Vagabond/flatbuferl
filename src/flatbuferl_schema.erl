@@ -320,15 +320,20 @@ optimize_field_to_record({Name, Type}, Defs) ->
         layout_key = InlineSize * 65536
     }.
 
-%% Set type_field_id and type field names for union_value_def records
-finalize_resolved_type(#union_value_def{} = R, FieldId, FieldName) ->
+%% Convert partial union_value to complete union_value_def with field ID info
+finalize_resolved_type(#union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap}, FieldId, FieldName) ->
     TypeName = list_to_atom(atom_to_list(FieldName) ++ "_type"),
     TypeBinaryName = atom_to_binary(TypeName),
-    R#union_value_def{
+    #union_value_def{
+        name = Name,
+        index_map = IndexMap,
+        reverse_map = ReverseMap,
         type_field_id = FieldId - 1,
         type_name = TypeName,
         type_binary_name = TypeBinaryName
     };
+%% Vector elements with union_value_partial stay partial - builder handles them
+%% differently (computes type names from vector field name, not element)
 finalize_resolved_type(Other, _FieldId, _FieldName) ->
     Other.
 
@@ -548,8 +553,8 @@ resolve_type({union_type, UnionName}, Defs) ->
     #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
 resolve_type({union_value, UnionName}, Defs) ->
     #union_def{index_map = IndexMap, reverse_map = ReverseMap} = maps:get(UnionName, Defs),
-    %% type_field_id is set later in optimize_field_to_record when we know the field ID
-    #union_value_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
+    %% Partial record - finalize_resolved_type converts to union_value_def when field ID is known
+    #union_value_partial{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
 resolve_type(Type, _Defs) ->
     Type.
 

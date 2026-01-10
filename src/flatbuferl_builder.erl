@@ -502,7 +502,7 @@ collect_field(
             end;
         #vector_def{element_type = #union_type_def{index_map = IndexMap}} = VecType ->
             collect_union_type_vector(Map, Name, BinaryName, FieldId, VecType, IndexMap, InlineSize, LayoutKey);
-        #vector_def{element_type = #union_value_def{}} = VecType ->
+        #vector_def{element_type = #union_value_partial{}} = VecType ->
             %% For vectors, type name is based on the vector field name, not the union name
             TypeName = list_to_atom(atom_to_list(Name) ++ "_type"),
             TypeBinaryName = <<BinaryName/binary, "_type">>,
@@ -766,11 +766,12 @@ resolve_type({union_type, UnionName}, Defs) ->
             #union_type_def{name = UnionName, index_map = #{}, reverse_map = #{}}
     end;
 resolve_type({union_value, UnionName}, Defs) ->
+    %% Create partial - if this reaches encode, schema processing failed to finalize
     case maps:get(UnionName, Defs, undefined) of
         #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
-            #union_value_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
+            #union_value_partial{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
         _ ->
-            #union_value_def{name = UnionName, index_map = #{}, reverse_map = #{}}
+            #union_value_partial{name = UnionName, index_map = #{}, reverse_map = #{}}
     end;
 resolve_type(Type, _Defs) ->
     Type.
@@ -905,6 +906,25 @@ calc_ref_padding_for_refs(
         Pos,
         Defs
     );
+calc_ref_padding_for_refs(
+    [#field{type = #union_value_partial{}, value = #{type := MemberType, value := Value}} | _],
+    Pos,
+    Defs
+) ->
+    calc_ref_padding_for_refs(
+        [
+            #field{
+                id = 0,
+                type = MemberType,
+                value = Value,
+                size = 4,
+                is_scalar = false,
+                layout_key = 0
+            }
+        ],
+        Pos,
+        Defs
+    );
 calc_ref_padding_for_refs(_, _Pos, _Defs) ->
     0.
 
@@ -1009,6 +1029,27 @@ calc_ref_padding_cached(
         Defs,
         Cache
     );
+calc_ref_padding_cached(
+    [#field{type = #union_value_partial{}, value = #{type := MemberType, value := Value}} | _],
+    Pos,
+    Defs,
+    Cache
+) ->
+    calc_ref_padding_cached(
+        [
+            #field{
+                id = 0,
+                type = MemberType,
+                value = Value,
+                size = 4,
+                is_scalar = false,
+                layout_key = 0
+            }
+        ],
+        Pos,
+        Defs,
+        Cache
+    );
 calc_ref_padding_cached(_, _Pos, _Defs, _Cache) ->
     0.
 
@@ -1077,6 +1118,11 @@ collect_vtables_from_ref(
     #union_value_def{}, #{type := MemberType, value := Value}, Defs, VTAcc, Seen, Cache
 ) ->
     %% Union value - cache the member table layout
+    collect_vtables_from_ref(MemberType, Value, Defs, VTAcc, Seen, Cache);
+collect_vtables_from_ref(
+    #union_value_partial{}, #{type := MemberType, value := Value}, Defs, VTAcc, Seen, Cache
+) ->
+    %% Union value in vector - cache the member table layout
     collect_vtables_from_ref(MemberType, Value, Defs, VTAcc, Seen, Cache);
 collect_vtables_from_ref(_, _, _, VTAcc, Seen, Cache) ->
     {VTAcc, Seen, Cache}.
@@ -1202,6 +1248,11 @@ is_nested_table_type_cached(
 ) ->
     %% Union value - check the member type
     is_nested_table_type_cached(MemberType, Value, Defs, Cache);
+is_nested_table_type_cached(
+    #union_value_partial{}, #{type := MemberType, value := Value}, Defs, Cache
+) ->
+    %% Union value in vector - check the member type
+    is_nested_table_type_cached(MemberType, Value, Defs, Cache);
 is_nested_table_type_cached(_, _, _, _) ->
     false.
 
@@ -1318,6 +1369,9 @@ encode_ref({vector, ElemType}, Values, Defs, LayoutCache) when is_list(Values) -
     encode_vector(ElemType, Values, Defs, LayoutCache);
 encode_ref(#union_value_def{}, #{type := MemberType, value := Value}, Defs, LayoutCache) ->
     %% Union value - encode as the member table type
+    encode_nested_table(MemberType, Value, Defs, LayoutCache);
+encode_ref(#union_value_partial{}, #{type := MemberType, value := Value}, Defs, LayoutCache) ->
+    %% Union value in vector - encode as the member table type
     encode_nested_table(MemberType, Value, Defs, LayoutCache);
 encode_ref(TableType, Map, Defs, LayoutCache) when is_atom(TableType), is_map(Map) ->
     %% Nested table - build it inline
