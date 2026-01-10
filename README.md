@@ -300,7 +300,7 @@ rebar3 eunit
   | C++        | 0.40    | 0.03        | 0.03           | 180 bytes   |
   | Rust       | 0.44    | 0.04        | 0.02           | 180 bytes   |
   | Go         | 0.49    | 0.29        | 0.03           | 184 bytes   |
-  | Erlang     | 6.00    | 1.53        | 0.11           | 188 bytes   |
+  | Erlang     | 5.89    | 1.50        | 0.10           | 188 bytes   |
   | JavaScript | 8.84    | 2.24        | 0.29           | 184 bytes   |
   | Python     | 64.92   | 69.40       | 2.73           | 184 bytes   |
 
@@ -311,7 +311,7 @@ rebar3 eunit
   | C++        | 1.0x    | 1.0x        | 1.0x           |
   | Rust       | 1.1x    | 1.3x        | 0.7x           |
   | Go         | 1.2x    | 9.7x        | 1.0x           |
-  | Erlang     | 15.0x   | 51.0x       | 3.7x           |
+  | Erlang     | 14.7x   | 50.0x       | 3.3x           |
   | JavaScript | 22.1x   | 74.7x       | 9.7x           |
   | Python     | 162.3x  | 2313.3x     | 91.0x          |
 
