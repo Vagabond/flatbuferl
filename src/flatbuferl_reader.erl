@@ -362,7 +362,10 @@ read_value(Buffer, Pos, {struct, Fields}) ->
     {StructMap, _Size} = read_struct_fields(Buffer, Pos, Fields, #{}),
     {ok, StructMap};
 %% Array - read inline fixed-size array
-read_value(Buffer, Pos, {array, ElemType, Count}) ->
+read_value(Buffer, Pos, #array_def{total_size = TotalSize, as_binary = true}) ->
+    <<_:Pos/binary, Bin:TotalSize/binary, _/binary>> = Buffer,
+    {ok, Bin};
+read_value(Buffer, Pos, #array_def{element_type = ElemType, count = Count}) ->
     {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
     {ok, Elements};
 %% Union type - read the discriminator byte
@@ -618,8 +621,8 @@ element_size(float64) ->
     8;
 element_size(#enum_resolved{base_type = BaseType}) ->
     element_size(BaseType);
-element_size({array, ElemType, Count}) ->
-    element_size(ElemType) * Count;
+element_size(#array_def{total_size = TotalSize}) ->
+    TotalSize;
 element_size(#struct_def{total_size = TotalSize}) ->
     TotalSize;
 element_size({struct, Fields}) ->
@@ -672,7 +675,10 @@ read_struct_value(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
 %% Compound types
-read_struct_value(Buffer, Pos, {array, ElemType, Count}) ->
+read_struct_value(Buffer, Pos, #array_def{total_size = TotalSize, as_binary = true}) ->
+    <<_:Pos/binary, Bin:TotalSize/binary, _/binary>> = Buffer,
+    {ok, Bin};
+read_struct_value(Buffer, Pos, #array_def{element_type = ElemType, count = Count}) ->
     {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
     {ok, Elements};
 %% Non-canonical aliases (for tests that bypass schema parser)

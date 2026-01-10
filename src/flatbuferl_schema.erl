@@ -167,8 +167,9 @@ enrich_def({struct, Fields}) ->
         fun({Name, Type}, {Acc, Off, MaxAlignAcc}) ->
             Size = primitive_type_size(Type),
             AlignedOff = align_to(Off, Size),
+            ResolvedType = resolve_struct_field_type(Type),
             Field = #{name => Name, binary_name => atom_to_binary(Name),
-                      type => Type, offset => AlignedOff, size => Size},
+                      type => ResolvedType, offset => AlignedOff, size => Size},
             {[Field | Acc], AlignedOff + Size, max(MaxAlignAcc, Size)}
         end,
         {[], 0, 1},
@@ -178,6 +179,21 @@ enrich_def({struct, Fields}) ->
     #struct_def{fields = lists:reverse(EnrichedFields), total_size = TotalSize};
 enrich_def(Other) ->
     Other.
+
+%% Resolve types within struct fields (arrays need #array_def{})
+resolve_struct_field_type({array, ElemType, Count}) ->
+    AsBinary = ElemType == byte orelse ElemType == ubyte,
+    NormElem = normalize_scalar_type(ElemType),
+    ElemSize = primitive_type_size(ElemType),
+    #array_def{
+        element_type = NormElem,
+        count = Count,
+        element_size = ElemSize,
+        total_size = ElemSize * Count,
+        as_binary = AsBinary
+    };
+resolve_struct_field_type(Type) ->
+    normalize_scalar_type(Type).
 
 %% Normalize enum values: handles both implicit indices (atoms) and explicit indices ({Atom, Index} tuples)
 normalize_enum_values(Values) ->
@@ -517,7 +533,16 @@ resolve_type({vector, ElemType}, Defs) ->
         is_table_element = is_table_type(ResolvedElem, Defs)
     };
 resolve_type({array, ElemType, Count}, Defs) ->
-    {array, resolve_type(ElemType, Defs), Count};
+    ResolvedElem = resolve_type(ElemType, Defs),
+    AsBinary = ElemType == byte orelse ElemType == ubyte,
+    ElemSize = array_element_size(ResolvedElem, Defs),
+    #array_def{
+        element_type = ResolvedElem,
+        count = Count,
+        element_size = ElemSize,
+        total_size = ElemSize * Count,
+        as_binary = AsBinary
+    };
 resolve_type({union_type, UnionName}, Defs) ->
     #union_def{index_map = IndexMap, reverse_map = ReverseMap} = maps:get(UnionName, Defs),
     #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
@@ -548,6 +573,10 @@ vector_element_size(Type, Defs) when is_atom(Type) ->
     end;
 vector_element_size(_, _Defs) ->
     4.
+
+%% Array element size - same logic as vector
+array_element_size(Type, Defs) ->
+    vector_element_size(Type, Defs).
 
 %% Normalize scalar type aliases to canonical forms for faster pattern matching
 %% This eliminates guard conditions like `when Type == int; Type == int32`

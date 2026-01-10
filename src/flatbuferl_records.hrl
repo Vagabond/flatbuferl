@@ -91,6 +91,16 @@
     is_table_element = false :: boolean()
 }).
 
+%% Fixed-size array definition with precomputed info
+-record(array_def, {
+    element_type :: term(),
+    count :: pos_integer(),
+    element_size :: pos_integer(),
+    total_size :: pos_integer(),
+    %% True to return binary instead of list (for byte/ubyte arrays)
+    as_binary = false :: boolean()
+}).
+
 %% Enum definition (stored in Defs map)
 -record(enum_def, {
     base_type :: atom(),

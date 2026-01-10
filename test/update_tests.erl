@@ -98,7 +98,7 @@ preflight_type_mismatch_error_test() ->
 preflight_nested_struct_field_test() ->
     Ctx = nested_ctx(),
     Result = flatbuferl_update:preflight(Ctx, #{pos => #{x => 5.0}}),
-    ?assertMatch({simple, [{_, 4, float, [pos, x], 5.0}]}, Result).
+    ?assertMatch({simple, [{_, 4, float32, [pos, x], 5.0}]}, Result).
 
 preflight_nested_struct_multiple_test() ->
     Ctx = nested_ctx(),

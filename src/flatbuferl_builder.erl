@@ -661,7 +661,7 @@ is_scalar_type(#enum_resolved{}) ->
 is_scalar_type({struct, _}) ->
     true;
 %% Fixed arrays are inline fixed-size data
-is_scalar_type({array, _, _}) ->
+is_scalar_type(#array_def{}) ->
     true;
 %% Union type field is ubyte (record form only)
 is_scalar_type(#union_type_def{}) ->
@@ -756,8 +756,8 @@ resolve_type(Type, Defs) when is_atom(Type) ->
     end;
 resolve_type({vector, ElemType}, Defs) ->
     {vector, resolve_type(ElemType, Defs)};
-resolve_type({array, ElemType, Count}, Defs) ->
-    {array, resolve_type(ElemType, Defs), Count};
+resolve_type(#array_def{} = ArrayDef, _Defs) ->
+    ArrayDef;
 resolve_type({union_type, UnionName}, Defs) ->
     case maps:get(UnionName, Defs, undefined) of
         #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
@@ -1780,11 +1780,11 @@ encode_scalar(Map, #struct_def{fields = Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
     encode_struct(Map, Fields);
-encode_scalar(Bin, {array, ElemType, Count})
-  when is_binary(Bin), byte_size(Bin) == Count,
-       (ElemType == uint8 orelse ElemType == int8) ->
+%% Array - binary input for byte-sized elements
+encode_scalar(Bin, #array_def{element_size = 1, total_size = TotalSize})
+  when is_binary(Bin), byte_size(Bin) == TotalSize ->
     Bin;
-encode_scalar(List, {array, ElemType, Count}) when is_list(List) ->
+encode_scalar(List, #array_def{element_type = ElemType, count = Count}) when is_list(List) ->
     encode_array(List, ElemType, Count);
 encode_scalar(TypeIndex, {union_type, _UnionName}) when is_integer(TypeIndex) ->
     <<TypeIndex:8/unsigned>>;
@@ -1862,7 +1862,7 @@ type_size(float64) -> 8;
 type_size(#enum_resolved{base_type = Base}) -> type_size(Base);
 type_size(#struct_def{total_size = TotalSize}) -> TotalSize;
 type_size({struct, Fields}) -> calc_struct_size(Fields);
-type_size({array, ElemType, Count}) -> type_size(ElemType) * Count;
+type_size(#array_def{total_size = TotalSize}) -> TotalSize;
 %% Union type is ubyte (record form only)
 type_size(#union_type_def{}) -> 1;
 type_size(_) -> 4.

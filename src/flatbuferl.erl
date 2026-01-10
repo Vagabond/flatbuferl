@@ -170,7 +170,7 @@ decode_fields(
         #field_def{
             name = Name,
             id = Id,
-            resolved_type = {array, _, _} = RT,
+            resolved_type = #array_def{} = RT,
             default = Def,
             deprecated = false
         }

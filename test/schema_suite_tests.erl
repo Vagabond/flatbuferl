@@ -111,7 +111,16 @@ resolve_type({vector, ElemType}, Defs) ->
         element_size = ElemSize
     };
 resolve_type({array, ElemType, Count}, Defs) ->
-    {array, resolve_type(ElemType, Defs), Count};
+    ResolvedElem = resolve_type(ElemType, Defs),
+    AsBinary = ElemType == byte orelse ElemType == ubyte,
+    ElemSize = array_element_size(ResolvedElem),
+    #array_def{
+        element_type = ResolvedElem,
+        count = Count,
+        element_size = ElemSize,
+        total_size = ElemSize * Count,
+        as_binary = AsBinary
+    };
 resolve_type({union_type, UnionName}, Defs) ->
     case maps:get(UnionName, Defs, undefined) of
         #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
@@ -180,7 +189,31 @@ type_size({enum, _, _}) -> 1;
 type_size({union_type, _}) -> 1;
 type_size({union_value, _}) -> 4;
 type_size({array, T, N}) -> type_size(T) * N;
+type_size(#array_def{total_size = TotalSize}) -> TotalSize;
 type_size(_TableOrStruct) -> 4.
+
+array_element_size(byte) -> 1;
+array_element_size(ubyte) -> 1;
+array_element_size(int8) -> 1;
+array_element_size(uint8) -> 1;
+array_element_size(short) -> 2;
+array_element_size(ushort) -> 2;
+array_element_size(int16) -> 2;
+array_element_size(uint16) -> 2;
+array_element_size(int) -> 4;
+array_element_size(uint) -> 4;
+array_element_size(int32) -> 4;
+array_element_size(uint32) -> 4;
+array_element_size(long) -> 8;
+array_element_size(ulong) -> 8;
+array_element_size(int64) -> 8;
+array_element_size(uint64) -> 8;
+array_element_size(float) -> 4;
+array_element_size(float32) -> 4;
+array_element_size(double) -> 8;
+array_element_size(float64) -> 8;
+array_element_size(#struct_def{total_size = Size}) -> Size;
+array_element_size(_) -> 4.
 
 %% =============================================================================
 %% Test Case Definitions
@@ -971,7 +1004,8 @@ fixed_array_test_() ->
             ?assert(abs(F2 - 2.0) < 0.001),
             ?assert(abs(F3 - 3.0) < 0.001),
             ?assertEqual([10, 20, 30, 40], maps:get(ints, Result)),
-            ?assertEqual([-1, 127], maps:get(bytes, Result))
+            %% [byte:N] returns binary, -1 as unsigned is 255
+            ?assertEqual(<<255, 127>>, maps:get(bytes, Result))
         end},
         {"array validation - correct length", fun() ->
             {ok, Schema} = flatbuferl:parse_schema_file("test/schemas/array_table.fbs"),
