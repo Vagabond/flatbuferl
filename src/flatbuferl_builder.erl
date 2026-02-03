@@ -836,19 +836,19 @@ calc_table_size_with_padding(_AllFields, RawSize, Refs, HeaderSize, Defs, MaxId)
     BaseTableSize + RefPadding.
 
 %% Sort refs in flatc order:
-%% - If there's an id=0 ref: ascending order (1, 2, ..., N, 0)
-%% - If NO id=0 ref: descending order (N, N-1, ..., 1)
+%% flatc writes id=0 first (if present), then remaining fields in reverse of JSON order.
+%% To match flatc when JSON is descending, Erlang writes: id=0 first, then ascending.
 %% Fast path when we know if there's an id=0 ref (from schema)
 sort_refs_flatc_order(Refs, false) ->
-    %% No id=0 ref: just sort descending (skip partition)
-    lists:sort(fun(#field{id = IdA}, #field{id = IdB}) -> IdA >= IdB end, Refs);
+    %% No id=0 ref: ascending order
+    lists:sort(fun(#field{id = IdA}, #field{id = IdB}) -> IdA =< IdB end, Refs);
 sort_refs_flatc_order(Refs, true) ->
-    %% Has id=0 ref: need to partition
+    %% Has id=0 ref: id=0 first, then ascending (matches flatc with descending JSON)
     {ZeroRefs, NonZeroRefs} = lists:partition(fun(#field{id = Id}) -> Id == 0 end, Refs),
     SortedNonZero = lists:sort(
         fun(#field{id = IdA}, #field{id = IdB}) -> IdA =< IdB end, NonZeroRefs
     ),
-    SortedNonZero ++ ZeroRefs.
+    ZeroRefs ++ SortedNonZero.
 
 %% Fallback when we don't know - do the check
 sort_refs_flatc_order(Refs) ->
@@ -1137,12 +1137,9 @@ build_ref_data_with_vtable_sharing(RefFieldsOrdered, RefDataStart, SharedVTable,
         fun(
             #field{type = Type, value = Value, offset = FieldOff}, {DataAcc, PosAcc, VTPos, DataPos}
         ) ->
-            %% Only vectors with 8-byte elements need alignment padding
-            AlignPad = case Type of
-                #vector_def{element_size = 8} -> (12 - (DataPos rem 8)) rem 8;
-                _ -> 0
-            end,
-            PaddedPos = DataPos + AlignPad,
+            %% Note: FlatBuffers vectors don't require element alignment padding
+            %% (only the length field needs 4-byte alignment, which is implicit)
+            PaddedPos = DataPos,
 
             DataIo = encode_ref(Type, Value, Defs, LayoutCache),
             DataSize = iolist_size(DataIo),
@@ -1169,9 +1166,8 @@ build_ref_data_with_vtable_sharing(RefFieldsOrdered, RefDataStart, SharedVTable,
                         VTPos
                 end,
 
-            PadBin = <<0:(AlignPad * 8)>>,
             {
-                [DataIo, PadBin | DataAcc],
+                [DataIo | DataAcc],
                 PosAcc#{FieldOff => RefTargetPos},
                 NewVTPos,
                 PaddedPos + DataSize
@@ -1208,11 +1204,10 @@ build_ref_data(RefFields, RefDataStart, Defs, LayoutCache) ->
 encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFun) ->
     {DataIoList, Positions, _} = lists:foldl(
         fun(#field{type = Type, value = Value, offset = FieldOff}, {DataAcc, PosAcc, DataPos}) ->
-            %% Only vectors with 8-byte elements need alignment padding
-            AlignPad = case Type of
-                #vector_def{element_size = 8} -> (12 - (DataPos rem 8)) rem 8;
-                _ -> 0
-            end,
+            %% Calculate alignment padding needed before this ref:
+            %% 1. Vectors with 8-byte elements need data (at pos+4) to be 8-byte aligned
+            %% 2. Nested tables need soffset (at pos+vtable_size) to be 4-byte aligned
+            AlignPad = calc_ref_align_padding(Type, Value, DataPos, Defs, LayoutCache),
             PaddedPos = DataPos + AlignPad,
             DataIo = EncoderFun(Type, Value, Defs, LayoutCache),
             RefTargetPos =
@@ -1220,9 +1215,12 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
                     {true, VTableSize} -> PaddedPos + VTableSize;
                     false -> PaddedPos
                 end,
-            PadBin = <<0:(AlignPad * 8)>>,
+            DataIoWithPad = case AlignPad of
+                0 -> DataIo;
+                _ -> [<<0:(AlignPad * 8)>>, DataIo]
+            end,
             {
-                [DataIo, PadBin | DataAcc],
+                [DataIoWithPad | DataAcc],
                 PosAcc#{FieldOff => RefTargetPos},
                 PaddedPos + iolist_size(DataIo)
             }
@@ -1231,6 +1229,41 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
         RefFields
     ),
     {lists:reverse(DataIoList), Positions}.
+
+%% Calculate alignment padding needed before a ref
+calc_ref_align_padding(Type, Value, Pos, Defs, LayoutCache) ->
+    %% Check for nested table alignment (soffset at pos+vtable_size must be 4-byte aligned)
+    case is_nested_table_type_cached(Type, Value, Defs, LayoutCache) of
+        {true, VTableSize} ->
+            SOffsetPos = Pos + VTableSize,
+            (4 - (SOffsetPos rem 4)) rem 4;
+        false ->
+            %% Check for vector 8-byte element alignment
+            vector_8byte_align_padding(Type, Pos)
+    end.
+
+%% Calculate alignment padding needed for vectors with 8-byte elements
+%% Returns padding bytes needed so that vector data (starting at pos+4) is 8-byte aligned
+vector_8byte_align_padding(#vector_def{element_size = 8}, Pos) ->
+    %% For 8-byte elements, data at pos+4 must be 8-byte aligned
+    %% So pos mod 8 must equal 4
+    (4 - (Pos rem 8) + 8) rem 8;
+vector_8byte_align_padding(#vector_def{element_type = Type}, Pos) ->
+    case Type of
+        T when T == float64; T == int64; T == uint64 ->
+            (4 - (Pos rem 8) + 8) rem 8;
+        _ ->
+            0
+    end;
+vector_8byte_align_padding({vector, ElemType}, Pos) ->
+    case ElemType of
+        T when T == double; T == float64; T == long; T == int64; T == ulong; T == uint64 ->
+            (4 - (Pos rem 8) + 8) rem 8;
+        _ ->
+            0
+    end;
+vector_8byte_align_padding(_, _) ->
+    0.
 
 %% Check if type is a nested table (vtable is at START, need offset to point to soffset)
 %% Returns {true, VTableSize} or false

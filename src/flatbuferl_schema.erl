@@ -398,6 +398,9 @@ precompute_encode_layout(Scalars, Refs, MaxId) ->
     }.
 
 %% Sort refs in flatc order (precomputed at schema time)
+%% Note: Currently not used by builder (which sorts at runtime), but kept for consistency.
+%% flatc writes id=0 first (if present), then remaining in reverse of JSON order.
+%% To match flatc when JSON is descending, Erlang writes: id=0 first, then ascending.
 sort_refs_flatc_order([]) ->
     [];
 sort_refs_flatc_order(Refs) ->
@@ -406,18 +409,18 @@ sort_refs_flatc_order(Refs) ->
     ),
     case ZeroRefs of
         [] ->
-            %% No id=0 ref: descending order
+            %% No id=0 ref: ascending order
             lists:sort(
-                fun(#field_def{id = A}, #field_def{id = B}) -> A >= B end,
+                fun(#field_def{id = A}, #field_def{id = B}) -> A =< B end,
                 NonZeroRefs
             );
         _ ->
-            %% Has id=0 ref: ascending with 0 at end
+            %% Has id=0 ref: id=0 first, then ascending (matches flatc with descending JSON)
             Sorted = lists:sort(
                 fun(#field_def{id = A}, #field_def{id = B}) -> A =< B end,
                 NonZeroRefs
             ),
-            Sorted ++ ZeroRefs
+            ZeroRefs ++ Sorted
     end.
 
 %% Calculate slot offsets for all fields present

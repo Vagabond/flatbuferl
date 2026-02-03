@@ -518,7 +518,9 @@ test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
     {ok, Schema} = flatbuferl:parse_schema_file(SchemaPath),
 
     %% Encode sample data to JSON for flatc input
-    JsonBin = iolist_to_binary(json:encode(SampleData)),
+    %% Use schema field order to ensure flatc output matches Erlang encoder
+    %% (flatc processes fields in JSON key order, Erlang map iteration is not guaranteed)
+    JsonBin = iolist_to_binary(encode_sorted_json(SampleData, Schema)),
 
     TmpJson = "/tmp/flatbuferl_input.json",
     TmpBin = "/tmp/flatbuferl_input.bin",
@@ -559,6 +561,35 @@ test_binary_match(SchemaPath, RootType, FileId, SampleData) ->
 %% =============================================================================
 %% Helpers
 %% =============================================================================
+
+%% Encode map to JSON with keys sorted to match flatc field processing order.
+%% This is needed because Erlang map iteration order is not guaranteed.
+%% flatc writes id=0 first, then remaining fields in reverse of JSON order.
+%% The Erlang encoder writes id=0 first, then ascending.
+%% So JSON should be descending, which flatc reverses to ascending.
+encode_sorted_json(Value, Schema) ->
+    {Defs, SchemaOpts} = Schema,
+    RootType = maps:get(root_type, SchemaOpts),
+    #table_def{all_fields = AllFields} = maps:get(RootType, Defs),
+    %% Build field name -> id map for sorting
+    FieldOrder = maps:from_list([{F#field_def.name, F#field_def.id} || F <- AllFields]),
+    Encoder = fun
+        Enc(V, _) when is_map(V) ->
+            KVs = maps:to_list(V),
+            %% Sort descending by id (flatc will reverse to ascending)
+            Sorted = lists:sort(
+                fun({K1, _}, {K2, _}) ->
+                    Id1 = maps:get(K1, FieldOrder, 9999),
+                    Id2 = maps:get(K2, FieldOrder, 9999),
+                    Id1 >= Id2
+                end,
+                KVs
+            ),
+            json:encode_key_value_list(Sorted, Enc);
+        Enc(V, State) ->
+            json:encode_value(V, State)
+    end,
+    json:encode(Value, Encoder).
 
 verify_maps_equal(Expected, Actual) ->
     %% Verify all expected keys are present with correct values
