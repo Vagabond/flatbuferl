@@ -24,6 +24,8 @@ jobs:
       run: |
         apt-get update
         apt-get install -y flatbuffers-compiler
+    - name: Check formatting
+      run: rebar3 fmt --check
     - name: Compile
       run: rebar3 compile
     - name: Run xref
@@ -32,5 +34,3 @@ jobs:
       run: rebar3 dialyzer
     - name: Run tests
       run: rebar3 eunit
-    - name: Check formatting
-      run: rebar3 fmt --check
