@@ -1,0 +1,34 @@
+name: Erlang CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    container:
+      image: erlang:28.3.1
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install flatc
+      run: |
+        apt-get update
+        apt-get install -y flatbuffers-compiler
+    - name: Compile
+      run: rebar3 compile
+    - name: Run xref
+      run: rebar3 xref
+    - name: Run dialyzer
+      run: rebar3 dialyzer
+    - name: Run tests
+      run: rebar3 eunit
