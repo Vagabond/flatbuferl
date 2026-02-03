@@ -635,26 +635,26 @@ get_bytes(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root},
     end.
 
 get_bytes_internal(TableRef, Defs, TableType, [FieldName], Buffer) ->
-    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
-    case find_field(Fields, FieldName) of
-        {ok, FieldId, _Type, _Default} ->
+    #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
+    case maps:get(FieldName, FieldMap, undefined) of
+        #field_def{id = FieldId} ->
             get_field_bytes(TableRef, FieldId, Buffer);
-        error ->
+        undefined ->
             error({unknown_field, FieldName})
     end;
 get_bytes_internal(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
-    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
-    case find_field(Fields, FieldName) of
-        {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
+    #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
+    case maps:get(FieldName, FieldMap, undefined) of
+        #field_def{id = FieldId, resolved_type = NestedType} when is_atom(NestedType) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                 {ok, NestedTableRef} ->
                     get_bytes_internal(NestedTableRef, Defs, NestedType, Rest, Buffer);
                 missing ->
                     missing
             end;
-        {ok, _FieldId, Type, _Default} ->
+        #field_def{resolved_type = Type} ->
             error({not_a_table, FieldName, Type});
-        error ->
+        undefined ->
             error({unknown_field, FieldName})
     end.
 
@@ -719,46 +719,36 @@ get_internal(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Roo
     get_path(Root, Defs, RootType, Path, Buffer).
 
 get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
-    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
-    case find_field(Fields, FieldName) of
-        {ok, FieldId, Type, Default} ->
+    #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
+    case maps:get(FieldName, FieldMap, undefined) of
+        #field_def{id = FieldId, resolved_type = Type, default = Default} ->
             ReaderType = resolve_for_reader(Type, Defs),
             case flatbuferl_reader:get_field(TableRef, FieldId, ReaderType, Buffer) of
                 {ok, Value} ->
                     {ok, convert_enum_value(Value, Type, Defs)};
-                missing when Default =/= undefined ->
+                missing when Default /= undefined ->
                     {ok, Default};
                 missing ->
                     missing
             end;
-        error ->
+        undefined ->
             error({unknown_field, FieldName})
     end;
 get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
-    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
-    case find_field(Fields, FieldName) of
-        {ok, FieldId, NestedType, _Default} when is_atom(NestedType) ->
+    #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
+    case maps:get(FieldName, FieldMap, undefined) of
+        #field_def{id = FieldId, resolved_type = NestedType} when is_atom(NestedType) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                 {ok, NestedTableRef} ->
                     get_path(NestedTableRef, Defs, NestedType, Rest, Buffer);
                 missing ->
                     missing
             end;
-        {ok, _FieldId, Type, _Default} ->
+        #field_def{resolved_type = Type} ->
             error({not_a_table, FieldName, Type});
-        error ->
+        undefined ->
             error({unknown_field, FieldName})
     end.
-
-find_field([], _Name) ->
-    error;
-find_field(
-    [#field_def{name = Name, id = FieldId, resolved_type = ResolvedType, default = Default} | _],
-    Name
-) ->
-    {ok, FieldId, ResolvedType, Default};
-find_field([_ | Rest], Name) ->
-    find_field(Rest, Name).
 
 %% Resolve type name to reader-compatible type
 %% Handle types with defaults (unwrap first, but not type constructors)
