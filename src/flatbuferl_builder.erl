@@ -256,7 +256,8 @@ layout_for_value(Value, TableDef, Defs) ->
     case PresentCount == length(AllFieldIds) of
         true ->
             %% All fields present - use precomputed layout directly
-            {Scalars, Refs, PrecomputedVTable, AllFields, PrecomputedTableSize, PrecomputedSlotOffsets};
+            {Scalars, Refs, PrecomputedVTable, AllFields, PrecomputedTableSize,
+                PrecomputedSlotOffsets};
         false ->
             %% Some fields missing - adjust slots
             PresentIds = [F#field.id || F <- AllFields],
@@ -501,12 +502,24 @@ collect_field(
                     []
             end;
         #vector_def{element_type = #union_type_def{index_map = IndexMap}} = VecType ->
-            collect_union_type_vector(Map, Name, BinaryName, FieldId, VecType, IndexMap, InlineSize, LayoutKey);
+            collect_union_type_vector(
+                Map, Name, BinaryName, FieldId, VecType, IndexMap, InlineSize, LayoutKey
+            );
         #vector_def{element_type = #union_value_partial{}} = VecType ->
             %% For vectors, type name is based on the vector field name, not the union name
             TypeName = list_to_atom(atom_to_list(Name) ++ "_type"),
             TypeBinaryName = <<BinaryName/binary, "_type">>,
-            collect_union_value_vector(Map, Name, BinaryName, FieldId, VecType, TypeName, TypeBinaryName, InlineSize, LayoutKey);
+            collect_union_value_vector(
+                Map,
+                Name,
+                BinaryName,
+                FieldId,
+                VecType,
+                TypeName,
+                TypeBinaryName,
+                InlineSize,
+                LayoutKey
+            );
         _ ->
             case get_field_value(Map, Name, BinaryName) of
                 undefined ->
@@ -558,7 +571,9 @@ collect_union_type_vector(Map, Name, BinaryName, FieldId, VecType, IndexMap, Inl
     end.
 
 %% Helper for collecting union value vectors
-collect_union_value_vector(Map, Name, BinaryName, FieldId, VecType, TypeName, TypeBinaryName, InlineSize, LayoutKey) ->
+collect_union_value_vector(
+    Map, Name, BinaryName, FieldId, VecType, TypeName, TypeBinaryName, InlineSize, LayoutKey
+) ->
     case get_field_value(Map, Name, BinaryName) of
         undefined ->
             [];
@@ -1056,10 +1071,11 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
                     {true, VTableSize} -> PaddedPos + VTableSize;
                     false -> PaddedPos
                 end,
-            DataIoWithPad = case AlignPad of
-                0 -> DataIo;
-                _ -> [<<0:(AlignPad * 8)>>, DataIo]
-            end,
+            DataIoWithPad =
+                case AlignPad of
+                    0 -> DataIo;
+                    _ -> [<<0:(AlignPad * 8)>>, DataIo]
+                end,
             {
                 [DataIoWithPad | DataAcc],
                 PosAcc#{FieldOff => RefTargetPos},
@@ -1224,7 +1240,9 @@ encode_ref(string, Bin, _Defs, _LayoutCache) when is_binary(Bin) ->
     %% Return iolist to preserve sub-binary references
     encode_string(Bin);
 %% Vector with enriched record - use precomputed info
-encode_ref(#vector_def{element_type = ElemType} = VecDef, Bin, Defs, LayoutCache) when is_binary(Bin) ->
+encode_ref(#vector_def{element_type = ElemType} = VecDef, Bin, Defs, LayoutCache) when
+    is_binary(Bin)
+->
     case ElemType of
         T when T == ubyte; T == byte; T == int8; T == uint8 ->
             encode_byte_vector(Bin);
@@ -1252,14 +1270,18 @@ encode_ref(TableType, Map, Defs, LayoutCache) when is_atom(TableType), is_map(Ma
     encode_nested_table(TableType, Map, Defs, LayoutCache).
 
 %% Fast path: use precomputed vector_def info
-encode_vector(#vector_def{element_type = ElemType, is_primitive = true}, Values, _Defs, _LayoutCache) ->
+encode_vector(
+    #vector_def{element_type = ElemType, is_primitive = true}, Values, _Defs, _LayoutCache
+) ->
     Len = length(Values),
     Elements = [encode_scalar(V, ElemType) || V <- Values],
     ElementsSize = iolist_size(Elements),
     TotalLen = 4 + ElementsSize,
     PadLen = (4 - (TotalLen rem 4)) rem 4,
     [<<Len:32/little>>, Elements, <<0:(PadLen * 8)>>];
-encode_vector(#vector_def{element_type = ElemType, is_primitive = false}, Values, Defs, LayoutCache) ->
+encode_vector(
+    #vector_def{element_type = ElemType, is_primitive = false}, Values, Defs, LayoutCache
+) ->
     encode_ref_vector(ElemType, Values, Defs, LayoutCache);
 %% Fallback: resolve type at runtime (for raw tuple types)
 encode_vector(ElemType, Values, Defs, LayoutCache) ->
@@ -1633,7 +1655,9 @@ encode_nested_table(TableType, Map, Defs, _LayoutCache) ->
 
     %% Layout: vtable | soffset | table_data | ref_data
     %% soffset is positive, pointing back to vtable start
-    {TableData, RefDataIo} = build_table_data2(AllFields, Slots, BaseTableSize, VTableSize, Defs, #layout_cache{}),
+    {TableData, RefDataIo} = build_table_data2(
+        AllFields, Slots, BaseTableSize, VTableSize, Defs, #layout_cache{}
+    ),
 
     %% Positive = backward to vtable at start
     SOffset = VTableSize,
@@ -1694,7 +1718,9 @@ encode_scalar(Value, #enum_resolved{base_type = Base, index_map = IndexMap}) whe
         {ok, Index} -> encode_scalar(Index, Base);
         error -> error({unknown_enum_value, Value, maps:keys(IndexMap)})
     end;
-encode_scalar(Value, #enum_resolved{base_type = Base, index_map = IndexMap}) when is_binary(Value) ->
+encode_scalar(Value, #enum_resolved{base_type = Base, index_map = IndexMap}) when
+    is_binary(Value)
+->
     %% Binary from JSON - convert to atom and lookup
     AtomValue = binary_to_existing_atom(Value, utf8),
     case maps:find(AtomValue, IndexMap) of
@@ -1709,8 +1735,9 @@ encode_scalar(Map, #struct_def{fields = Fields, total_size = TotalSize}) when is
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
     encode_struct(Map, Fields, flatbuferl_reader:element_size({struct, Fields}));
 %% Array - binary input for byte-sized elements
-encode_scalar(Bin, #array_def{element_size = 1, total_size = TotalSize})
-  when is_binary(Bin), byte_size(Bin) == TotalSize ->
+encode_scalar(Bin, #array_def{element_size = 1, total_size = TotalSize}) when
+    is_binary(Bin), byte_size(Bin) == TotalSize
+->
     Bin;
 encode_scalar(List, #array_def{element_type = ElemType, count = Count}) when is_list(List) ->
     encode_array(List, ElemType, Count);
@@ -1731,7 +1758,16 @@ encode_array(List, ElemType, Count) ->
 encode_struct(Map, Fields, StructSize) ->
     {IoReversed, EndOff} = lists:foldl(
         fun
-            (#{name := Name, binary_name := BinaryName, type := Type, offset := FieldOff, size := Size}, {Acc, Off}) ->
+            (
+                #{
+                    name := Name,
+                    binary_name := BinaryName,
+                    type := Type,
+                    offset := FieldOff,
+                    size := Size
+                },
+                {Acc, Off}
+            ) ->
                 %% Enriched field - use precomputed offset and binary_name
                 Pad = FieldOff - Off,
                 Value = get_field_value(Map, Name, BinaryName),

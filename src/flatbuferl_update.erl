@@ -435,7 +435,9 @@ traverse_union_vector_for_update(TableRef, FieldId, UnionName, [Index | Rest], B
                                     %% NONE
                                     missing;
                                 _ ->
-                                    #union_def{reverse_map = ReverseMap2} = maps:get(UnionName, Defs),
+                                    #union_def{reverse_map = ReverseMap2} = maps:get(
+                                        UnionName, Defs
+                                    ),
                                     MemberType = maps:get(TypeIndex, ReverseMap2),
                                     %% Get value ref
                                     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
@@ -587,7 +589,8 @@ resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         #enum_def{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap} ->
             #enum_resolved{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap};
-        _ -> Type
+        _ ->
+            Type
     end;
 resolve_type(Type, _Defs) ->
     Type.

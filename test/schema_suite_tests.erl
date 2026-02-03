@@ -52,7 +52,11 @@ field(Name, Type, Attrs) ->
     }.
 
 %% Convert partial union_value to complete union_value_def
-finalize_resolved_type(#union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap}, FieldId, FieldName) ->
+finalize_resolved_type(
+    #union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap},
+    FieldId,
+    FieldName
+) ->
     TypeName = list_to_atom(atom_to_list(FieldName) ++ "_type"),
     TypeBinaryName = atom_to_binary(TypeName),
     TypeFieldId = FieldId - 1,
@@ -115,12 +119,15 @@ is_scalar_type(_, _) ->
 
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
-        {struct, Fields} -> {struct, Fields};
+        {struct, Fields} ->
+            {struct, Fields};
         % Keep table types as atoms
-        #table_def{} -> Type;
+        #table_def{} ->
+            Type;
         #enum_def{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap} ->
             #enum_resolved{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap};
-        _ -> normalize_scalar_type(Type)
+        _ ->
+            normalize_scalar_type(Type)
     end;
 resolve_type({vector, ElemType}, Defs) ->
     ResolvedElem = resolve_type(ElemType, Defs),
@@ -837,10 +844,11 @@ union_vector_test_() ->
                 'Event' => {union, ['Login', 'Logout']},
                 'Login' => {table, [{user, string}]},
                 'Logout' => {table, [{user, string}]},
-                'EventLog' => {table, [
-                    {events_type, {vector, {union_type, 'Event'}}},
-                    {events, {vector, {union_value, 'Event'}}, #{id => 1}}
-                ]}
+                'EventLog' =>
+                    {table, [
+                        {events_type, {vector, {union_type, 'Event'}}},
+                        {events, {vector, {union_value, 'Event'}}, #{id => 1}}
+                    ]}
             },
             #{root_type => 'EventLog'}
         }

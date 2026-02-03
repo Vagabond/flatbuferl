@@ -170,8 +170,13 @@ enrich_def({struct, Fields}) ->
             Size = primitive_type_size(Type),
             AlignedOff = align_to(Off, Size),
             ResolvedType = resolve_struct_field_type(Type),
-            Field = #{name => Name, binary_name => atom_to_binary(Name),
-                      type => ResolvedType, offset => AlignedOff, size => Size},
+            Field = #{
+                name => Name,
+                binary_name => atom_to_binary(Name),
+                type => ResolvedType,
+                offset => AlignedOff,
+                size => Size
+            },
             {[Field | Acc], AlignedOff + Size, max(MaxAlignAcc, Size)}
         end,
         {[], 0, 1},
@@ -203,7 +208,9 @@ normalize_enum_values(Values) ->
 
 normalize_enum_values([], _NextIdx, NamesAcc, PairsAcc) ->
     {lists:reverse(NamesAcc), lists:reverse(PairsAcc)};
-normalize_enum_values([{Name, Index} | Rest], _NextIdx, NamesAcc, PairsAcc) when is_atom(Name), is_integer(Index) ->
+normalize_enum_values([{Name, Index} | Rest], _NextIdx, NamesAcc, PairsAcc) when
+    is_atom(Name), is_integer(Index)
+->
     %% Explicit index
     normalize_enum_values(Rest, Index + 1, [Name | NamesAcc], [{Name, Index} | PairsAcc]);
 normalize_enum_values([Name | Rest], NextIdx, NamesAcc, PairsAcc) when is_atom(Name) ->
@@ -325,7 +332,11 @@ optimize_field_to_record({Name, Type}, Defs) ->
     }.
 
 %% Convert partial union_value to complete union_value_def with field ID info
-finalize_resolved_type(#union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap}, FieldId, FieldName) ->
+finalize_resolved_type(
+    #union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap},
+    FieldId,
+    FieldName
+) ->
     TypeName = list_to_atom(atom_to_list(FieldName) ++ "_type"),
     TypeBinaryName = atom_to_binary(TypeName),
     TypeFieldId = FieldId - 1,
@@ -367,7 +378,8 @@ is_table_type(Type, Defs) when is_atom(Type) ->
         {table, _} -> true;
         _ -> false
     end;
-is_table_type(_, _) -> false.
+is_table_type(_, _) ->
+    false.
 
 %% Precompute encoding layout for "all fields present" case
 %% This allows O(1) encoding when all fields have values
@@ -497,13 +509,22 @@ normalize_type(Type) ->
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         #enum_def{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap} ->
-            #enum_resolved{base_type = normalize_scalar_type(Base), index_map = IndexMap, reverse_map = ReverseMap};
-        #struct_def{} = StructDef -> StructDef;
-        {struct, Fields} -> {struct, Fields};
+            #enum_resolved{
+                base_type = normalize_scalar_type(Base),
+                index_map = IndexMap,
+                reverse_map = ReverseMap
+            };
+        #struct_def{} = StructDef ->
+            StructDef;
+        {struct, Fields} ->
+            {struct, Fields};
         % Keep table types as atoms for Defs lookup (both processed and unprocessed)
-        #table_def{} -> Type;
-        {table, _} -> Type;
-        _ -> normalize_scalar_type(Type)
+        #table_def{} ->
+            Type;
+        {table, _} ->
+            Type;
+        _ ->
+            normalize_scalar_type(Type)
     end;
 resolve_type({vector, ElemType}, Defs) ->
     ResolvedElem = resolve_type(ElemType, Defs),
