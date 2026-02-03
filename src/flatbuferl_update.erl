@@ -546,7 +546,7 @@ find_struct_field([{FieldName, Type} | Rest], Name, Offset) ->
         Name ->
             {ok, Offset, Type};
         _ ->
-            Size = type_size(Type),
+            Size = flatbuferl_reader:element_size(Type),
             find_struct_field(Rest, Name, Offset + Size)
     end;
 find_struct_field([{FieldName, Type, _Attrs} | Rest], Name, Offset) ->
@@ -554,7 +554,7 @@ find_struct_field([{FieldName, Type, _Attrs} | Rest], Name, Offset) ->
         Name ->
             {ok, Offset, Type};
         _ ->
-            Size = type_size(Type),
+            Size = flatbuferl_reader:element_size(Type),
             find_struct_field(Rest, Name, Offset + Size)
     end.
 
@@ -573,16 +573,15 @@ lookup_field_offset(TableRef, Buffer, Defs, TableType, FieldName) ->
             {error, {unknown_field, FieldName}}
     end.
 
+%% Field lookup - O(1) using precomputed field_map
 lookup_field_info(Defs, TableType, FieldName) ->
-    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
-    find_field(Fields, FieldName).
-
-find_field([], _Name) ->
-    error;
-find_field([#field_def{name = Name, id = FieldId, type = Type, default = Default} | _], Name) ->
-    {ok, FieldId, Type, Default};
-find_field([_ | Rest], Name) ->
-    find_field(Rest, Name).
+    #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
+    case maps:get(FieldName, FieldMap, undefined) of
+        #field_def{id = FieldId, type = Type, default = Default} ->
+            {ok, FieldId, Type, Default};
+        undefined ->
+            error
+    end.
 
 resolve_type(Type, Defs) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
@@ -640,48 +639,17 @@ is_fixed_size_type(#enum_resolved{base_type = Base}, Defs) ->
     is_fixed_size_type(Base, Defs);
 is_fixed_size_type(#struct_def{total_size = TotalSize}, _Defs) ->
     {true, TotalSize};
-is_fixed_size_type({struct, Fields}, Defs) ->
-    {true, struct_size(Fields, Defs)};
+is_fixed_size_type({struct, Fields}, _Defs) ->
+    {true, flatbuferl_reader:element_size({struct, Fields})};
 is_fixed_size_type(TypeName, Defs) when is_atom(TypeName) ->
     case maps:get(TypeName, Defs, undefined) of
         #enum_def{base_type = Base} -> is_fixed_size_type(Base, Defs);
         #struct_def{total_size = TotalSize} -> {true, TotalSize};
-        {struct, Fields} -> {true, struct_size(Fields, Defs)};
+        {struct, Fields} -> {true, flatbuferl_reader:element_size({struct, Fields})};
         _ -> false
     end;
 is_fixed_size_type(_, _Defs) ->
     false.
-
-type_size(bool) -> 1;
-type_size(byte) -> 1;
-type_size(ubyte) -> 1;
-type_size(int8) -> 1;
-type_size(uint8) -> 1;
-type_size(short) -> 2;
-type_size(ushort) -> 2;
-type_size(int16) -> 2;
-type_size(uint16) -> 2;
-type_size(int) -> 4;
-type_size(uint) -> 4;
-type_size(int32) -> 4;
-type_size(uint32) -> 4;
-type_size(float) -> 4;
-type_size(float32) -> 4;
-type_size(long) -> 8;
-type_size(ulong) -> 8;
-type_size(int64) -> 8;
-type_size(uint64) -> 8;
-type_size(double) -> 8;
-type_size(float64) -> 8;
-type_size(#struct_def{total_size = TotalSize}) -> TotalSize;
-type_size({struct, Fields}) -> struct_size(Fields, #{});
-type_size(_) -> 0.
-
-struct_size(Fields, _Defs) ->
-    lists:sum(
-        [type_size(Type) || {_, Type} <- Fields] ++
-            [type_size(Type) || {_, Type, _} <- Fields]
-    ).
 
 %% Validate value matches expected type
 validate_value(Value, bool, _Defs) when is_boolean(Value) -> ok;

@@ -99,8 +99,8 @@ encode_fast_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs) ->
             true ->
                 {PrecomputedVTable, PrecomputedVTable};
             false ->
-                NewVT = build_vtable_with_size(AllFields, Slots, TableSizeWithPadding, MaxId),
-                {NewVT, build_vtable_from_fields(AllFields, Slots, BaseTableSize, MaxId)}
+                NewVT = build_vtable(Slots, TableSizeWithPadding, MaxId),
+                {NewVT, build_vtable(Slots, BaseTableSize, MaxId)}
         end,
 
     {RefVTables, LayoutCache} = collect_ref_vtables(Refs, Defs),
@@ -162,9 +162,9 @@ encode_medium_path(Scalars, Refs, EncodeLayout, HeaderSize, FileId, Defs) ->
     TableSizeWithPadding = calc_table_size_with_padding(
         AllFields, RawTableSize, Refs, HeaderSize, Defs, MaxId
     ),
-    VTable = build_vtable_with_size(AllFields, AdjustedSlots, TableSizeWithPadding, MaxId),
+    VTable = build_vtable(AdjustedSlots, TableSizeWithPadding, MaxId),
     VTableSize = vtable_size(VTable),
-    VTableForComparison = build_vtable_from_fields(AllFields, AdjustedSlots, BaseTableSize, MaxId),
+    VTableForComparison = build_vtable(AdjustedSlots, BaseTableSize, MaxId),
     {RefVTables, LayoutCache} = collect_ref_vtables(Refs, Defs),
     case lists:member(VTableForComparison, RefVTables) of
         true ->
@@ -263,7 +263,7 @@ layout_for_value(Value, TableDef, Defs) ->
             AdjustedSlots = adjust_slots_for_missing(PrecomputedSlots, PresentIds, AllFieldIds),
             RawSize = lists:sum([F#field.size || F <- AllFields]),
             BaseTableSize = 4 + align_offset(RawSize, 4),
-            VTable = build_vtable_from_fields(AllFields, AdjustedSlots, BaseTableSize, MaxId),
+            VTable = build_vtable(AdjustedSlots, BaseTableSize, MaxId),
             {Scalars, Refs, VTable, AllFields, BaseTableSize, AdjustedSlots}
     end.
 
@@ -617,164 +617,35 @@ get_field_value(Map, Name) when is_atom(Name) ->
         Value -> Value
     end.
 
-%% Unwrap types with default values: {TypeName, DefaultValue} -> TypeName
-%% Only unwrap when TypeName is NOT a known type constructor
-is_scalar_type({TypeName, Default}) when
-    is_atom(TypeName),
-    is_atom(Default),
-    TypeName /= vector,
-    TypeName /= enum,
-    TypeName /= struct,
-    TypeName /= array,
-    TypeName /= union_type,
-    TypeName /= union_value
-->
-    %% Enum with default value like {'Color', 'Blue'}
-    is_scalar_type(TypeName);
-is_scalar_type({TypeName, Default}) when
-    is_atom(TypeName),
-    is_number(Default),
-    TypeName /= vector,
-    TypeName /= enum,
-    TypeName /= struct,
-    TypeName /= array,
-    TypeName /= union_type,
-    TypeName /= union_value
-->
-    %% Scalar with default value like {int, 100}
-    is_scalar_type(TypeName);
-is_scalar_type({TypeName, Default}) when
-    is_atom(TypeName),
-    is_boolean(Default),
-    TypeName /= vector,
-    TypeName /= enum,
-    TypeName /= struct,
-    TypeName /= array,
-    TypeName /= union_type,
-    TypeName /= union_value
-->
-    %% Bool with default value like {bool, true}
-    is_scalar_type(TypeName);
-is_scalar_type(#enum_resolved{}) ->
-    true;
-%% Structs are inline fixed-size data
-is_scalar_type({struct, _}) ->
-    true;
-%% Fixed arrays are inline fixed-size data
-is_scalar_type(#array_def{}) ->
-    true;
-%% Union type field is ubyte (record form only)
-is_scalar_type(#union_type_def{}) ->
-    true;
-is_scalar_type(bool) ->
-    true;
-is_scalar_type(byte) ->
-    true;
-is_scalar_type(ubyte) ->
-    true;
-is_scalar_type(int8) ->
-    true;
-is_scalar_type(uint8) ->
-    true;
-is_scalar_type(short) ->
-    true;
-is_scalar_type(ushort) ->
-    true;
-is_scalar_type(int16) ->
-    true;
-is_scalar_type(uint16) ->
-    true;
-is_scalar_type(int) ->
-    true;
-is_scalar_type(uint) ->
-    true;
-is_scalar_type(int32) ->
-    true;
-is_scalar_type(uint32) ->
-    true;
-is_scalar_type(long) ->
-    true;
-is_scalar_type(ulong) ->
-    true;
-is_scalar_type(int64) ->
-    true;
-is_scalar_type(uint64) ->
-    true;
-is_scalar_type(float) ->
-    true;
-is_scalar_type(float32) ->
-    true;
-is_scalar_type(double) ->
-    true;
-is_scalar_type(float64) ->
-    true;
-is_scalar_type(_) ->
-    false.
-
-%% Resolve type name to its definition (for enums and structs)
-%% Unwrap types with default values first (not type constructors)
-resolve_type({TypeName, Default}, Defs) when
-    is_atom(TypeName),
-    is_atom(Default),
-    TypeName /= vector,
-    TypeName /= enum,
-    TypeName /= struct,
-    TypeName /= array,
-    TypeName /= union_type,
-    TypeName /= union_value
-->
-    resolve_type(TypeName, Defs);
-resolve_type({TypeName, Default}, Defs) when
-    is_atom(TypeName),
-    is_number(Default),
-    TypeName /= vector,
-    TypeName /= enum,
-    TypeName /= struct,
-    TypeName /= array,
-    TypeName /= union_type,
-    TypeName /= union_value
-->
-    resolve_type(TypeName, Defs);
-resolve_type({TypeName, Default}, Defs) when
-    is_atom(TypeName),
-    is_boolean(Default),
-    TypeName /= vector,
-    TypeName /= enum,
-    TypeName /= struct,
-    TypeName /= array,
-    TypeName /= union_type,
-    TypeName /= union_value
-->
-    resolve_type(TypeName, Defs);
-resolve_type(Type, Defs) when is_atom(Type) ->
-    case maps:get(Type, Defs, undefined) of
-        #enum_def{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap} ->
-            #enum_resolved{base_type = Base, index_map = IndexMap, reverse_map = ReverseMap};
-        #struct_def{} = StructDef -> StructDef;
-        {struct, Fields} -> {struct, Fields};
-        _ -> Type
-    end;
-resolve_type({vector, ElemType}, Defs) ->
-    {vector, resolve_type(ElemType, Defs)};
-resolve_type(#array_def{} = ArrayDef, _Defs) ->
-    ArrayDef;
-resolve_type({union_type, UnionName}, Defs) ->
-    case maps:get(UnionName, Defs, undefined) of
-        #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
-            #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
-        _ ->
-            #union_type_def{name = UnionName, index_map = #{}, reverse_map = #{}}
-    end;
-resolve_type({union_value, UnionName}, Defs) ->
-    %% Create partial - if this reaches encode, schema processing failed to finalize
-    case maps:get(UnionName, Defs, undefined) of
-        #union_def{index_map = IndexMap, reverse_map = ReverseMap} ->
-            #union_value_partial{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
-        _ ->
-            #union_value_partial{name = UnionName, index_map = #{}, reverse_map = #{}}
-    end;
-resolve_type(Type, _Defs) ->
-    Type.
+%% Check if resolved type is scalar (inline, fixed-size data).
+%% Only called after resolve_type/2 so types are already resolved.
+is_scalar_type(#enum_resolved{}) -> true;
+is_scalar_type(#struct_def{}) -> true;
+is_scalar_type({struct, _}) -> true;
+is_scalar_type(#array_def{}) -> true;
+is_scalar_type(#union_type_def{}) -> true;
+is_scalar_type(bool) -> true;
+is_scalar_type(byte) -> true;
+is_scalar_type(ubyte) -> true;
+is_scalar_type(int8) -> true;
+is_scalar_type(uint8) -> true;
+is_scalar_type(short) -> true;
+is_scalar_type(ushort) -> true;
+is_scalar_type(int16) -> true;
+is_scalar_type(uint16) -> true;
+is_scalar_type(int) -> true;
+is_scalar_type(uint) -> true;
+is_scalar_type(int32) -> true;
+is_scalar_type(uint32) -> true;
+is_scalar_type(long) -> true;
+is_scalar_type(ulong) -> true;
+is_scalar_type(int64) -> true;
+is_scalar_type(uint64) -> true;
+is_scalar_type(float) -> true;
+is_scalar_type(float32) -> true;
+is_scalar_type(double) -> true;
+is_scalar_type(float64) -> true;
+is_scalar_type(_) -> false.
 
 %% =============================================================================
 %% VTable Building
@@ -783,37 +654,22 @@ resolve_type(Type, _Defs) ->
 %% VTables are lists of 2-byte lists: [[VTSizeLo, VTSizeHi], [TblSizeLo, TblSizeHi], [Slot0Lo, Slot0Hi], ...]
 %% Comparison works with ==, and they're valid iolists (nested lists flatten).
 
-%% Convert uint16 to little-endian 2-byte list
-uint16_bytes(X) when X < 256 -> [X, 0];
-uint16_bytes(V) -> [V band 16#FF, (V bsr 8) band 16#FF].
+%% Use schema's uint16_bytes for consistency
+-define(uint16_bytes(X), flatbuferl_schema:uint16_bytes(X)).
 
 %% Get byte size of vtable
 vtable_size(VT) -> length(VT) * 2.
 
-%% Build vtable from pre-merged fields with precomputed Slots map and TableSize
-build_vtable_from_fields(_AllFields, Slots, TableSize, MaxId) ->
+%% Build vtable from precomputed Slots map and TableSize
+build_vtable(Slots, TableSize, MaxId) ->
     case MaxId of
         -1 ->
-            [uint16_bytes(4), uint16_bytes(4)];
+            [?uint16_bytes(4), ?uint16_bytes(4)];
         _ ->
             NumSlots = MaxId + 1,
             VTableSize = 4 + (NumSlots * 2),
-            %% Convert Slots map to list of uint16_bytes
-            SlotsList = [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)],
-            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | SlotsList]
-    end.
-
-%% Build vtable with precomputed Slots map and table size (including ref padding)
-build_vtable_with_size(_AllFields, Slots, TableSize, MaxId) ->
-    case MaxId of
-        -1 ->
-            [uint16_bytes(4), uint16_bytes(4)];
-        _ ->
-            NumSlots = MaxId + 1,
-            VTableSize = 4 + (NumSlots * 2),
-            %% Convert Slots map to list of uint16_bytes
-            SlotsList = [uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)],
-            [uint16_bytes(VTableSize), uint16_bytes(TableSize) | SlotsList]
+            SlotsList = [?uint16_bytes(maps:get(Id, Slots, 0)) || Id <- lists:seq(0, NumSlots - 1)],
+            [?uint16_bytes(VTableSize), ?uint16_bytes(TableSize) | SlotsList]
     end.
 
 %% Calculate table size including padding for ref data alignment
@@ -1407,7 +1263,7 @@ encode_vector(#vector_def{element_type = ElemType, is_primitive = false}, Values
     encode_ref_vector(ElemType, Values, Defs, LayoutCache);
 %% Fallback: resolve type at runtime (for raw tuple types)
 encode_vector(ElemType, Values, Defs, LayoutCache) ->
-    ResolvedType = resolve_type(ElemType, Defs),
+    ResolvedType = flatbuferl_schema:resolve_type(ElemType, Defs),
     case is_scalar_type(ResolvedType) of
         true ->
             Len = length(Values),
@@ -1848,10 +1704,10 @@ encode_scalar(Value, #enum_resolved{base_type = Base, index_map = IndexMap}) whe
 encode_scalar(Value, #enum_resolved{base_type = Base}) when is_integer(Value) ->
     %% Already an integer, use directly
     encode_scalar(Value, Base);
-encode_scalar(Map, #struct_def{fields = Fields}) when is_map(Map) ->
-    encode_struct(Map, Fields);
+encode_scalar(Map, #struct_def{fields = Fields, total_size = TotalSize}) when is_map(Map) ->
+    encode_struct(Map, Fields, TotalSize);
 encode_scalar(Map, {struct, Fields}) when is_map(Map) ->
-    encode_struct(Map, Fields);
+    encode_struct(Map, Fields, flatbuferl_reader:element_size({struct, Fields}));
 %% Array - binary input for byte-sized elements
 encode_scalar(Bin, #array_def{element_size = 1, total_size = TotalSize})
   when is_binary(Bin), byte_size(Bin) == TotalSize ->
@@ -1871,7 +1727,8 @@ encode_array(List, ElemType, Count) ->
 
 %% Encode struct as inline data (returns iolist)
 %% Handles both enriched format (maps with precomputed offsets) and raw tuple format
-encode_struct(Map, Fields) ->
+%% StructSize is precomputed when available (from #struct_def.total_size)
+encode_struct(Map, Fields, StructSize) ->
     {IoReversed, EndOff} = lists:foldl(
         fun
             (#{name := Name, binary_name := BinaryName, type := Type, offset := FieldOff, size := Size}, {Acc, Off}) ->
@@ -1885,7 +1742,7 @@ encode_struct(Map, Fields) ->
                 end;
             ({Name, Type}, {Acc, Off}) ->
                 %% Raw tuple format
-                Size = type_size(Type),
+                Size = flatbuferl_reader:element_size(Type),
                 AlignedOff = align_offset(Off, Size),
                 Pad = AlignedOff - Off,
                 Value = get_field_value(Map, Name),
@@ -1899,7 +1756,6 @@ encode_struct(Map, Fields) ->
         Fields
     ),
     %% Pad to struct alignment
-    StructSize = calc_struct_size(Fields),
     TrailingPad = StructSize - EndOff,
     case TrailingPad of
         0 -> lists:reverse(IoReversed);
@@ -1909,55 +1765,6 @@ encode_struct(Map, Fields) ->
 %% =============================================================================
 %% Helpers
 %% =============================================================================
-
-type_size(bool) -> 1;
-type_size(byte) -> 1;
-type_size(ubyte) -> 1;
-type_size(int8) -> 1;
-type_size(uint8) -> 1;
-type_size(short) -> 2;
-type_size(ushort) -> 2;
-type_size(int16) -> 2;
-type_size(uint16) -> 2;
-type_size(int) -> 4;
-type_size(uint) -> 4;
-type_size(int32) -> 4;
-type_size(uint32) -> 4;
-type_size(long) -> 8;
-type_size(ulong) -> 8;
-type_size(int64) -> 8;
-type_size(uint64) -> 8;
-type_size(float) -> 4;
-type_size(float32) -> 4;
-type_size(double) -> 8;
-type_size(float64) -> 8;
-type_size(#enum_resolved{base_type = Base}) -> type_size(Base);
-type_size(#struct_def{total_size = TotalSize}) -> TotalSize;
-type_size({struct, Fields}) -> calc_struct_size(Fields);
-type_size(#array_def{total_size = TotalSize}) -> TotalSize;
-%% Union type is ubyte (record form only)
-type_size(#union_type_def{}) -> 1;
-type_size(_) -> 4.
-
-%% Calculate struct size with proper alignment
-%% Handles both enriched format (maps) and raw tuple format
-calc_struct_size(Fields) ->
-    {_, EndOffset, MaxAlign} = lists:foldl(
-        fun
-            (#{offset := FieldOff, size := Size}, {_, _, MaxAlignAcc}) ->
-                %% Enriched field - use precomputed values
-                {ok, FieldOff + Size, max(MaxAlignAcc, Size)};
-            ({_Name, Type}, {_, CurOffset, MaxAlignAcc}) ->
-                %% Raw tuple format
-                Size = type_size(Type),
-                Align = Size,
-                AlignedOffset = align_offset(CurOffset, Align),
-                {ok, AlignedOffset + Size, max(MaxAlignAcc, Align)}
-        end,
-        {ok, 0, 1},
-        Fields
-    ),
-    align_offset(EndOffset, MaxAlign).
 
 align_offset(Off, Align) ->
     case Off rem Align of

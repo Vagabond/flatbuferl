@@ -1,6 +1,8 @@
 %% @private
 -module(flatbuferl_schema).
 -export([parse/1, parse_file/1, process/1, validate/3]).
+%% Shared utilities used by builder
+-export([uint16_bytes/1, sort_refs_flatc_order/1, resolve_type/2]).
 
 -ifdef(TEST).
 -export([precompute_encode_layout/3]).

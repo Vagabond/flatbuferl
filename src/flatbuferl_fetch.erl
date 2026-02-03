@@ -781,25 +781,15 @@ extract_one(SubPath, TableRef, Defs, TableType, Buffer, _Context) when is_list(S
         missing -> undefined
     end.
 
-%% Field lookup helper
+%% Field lookup helper - O(1) using precomputed field_map
 lookup_field(Defs, TableType, FieldName) ->
-    #table_def{all_fields = Fields} = maps:get(TableType, Defs),
-    find_field(Fields, FieldName).
-
-find_field([], _Name) ->
-    error;
-find_field(
-    [
-        #field_def{
-            name = Name, id = FieldId, type = Type, resolved_type = ResolvedType, default = Default
-        }
-        | _
-    ],
-    Name
-) ->
-    {ok, FieldId, Type, ResolvedType, Default};
-find_field([_ | Rest], Name) ->
-    find_field(Rest, Name).
+    #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
+    case maps:get(FieldName, FieldMap, undefined) of
+        #field_def{id = FieldId, type = Type, resolved_type = ResolvedType, default = Default} ->
+            {ok, FieldId, Type, ResolvedType, Default};
+        undefined ->
+            error
+    end.
 
 %% Check if a type has a given field
 type_has_field(TypeName, FieldName, Defs) ->
