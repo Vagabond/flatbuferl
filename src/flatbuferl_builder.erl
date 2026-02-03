@@ -338,7 +338,7 @@ encode_root_vtable_after(
     FieldLayout = [F#field{offset = maps:get(F#field.id, PaddedSlots)} || F <- AllFields],
     SortedLayout = lists:sort(fun(A, B) -> A#field.offset =< B#field.offset end, FieldLayout),
 
-    %% Extract refs in flatc order with field offsets
+    %% Extract refs in flatc order with field offsets (ascending by id)
     RefFields = [F || F <- SortedLayout, not F#field.is_scalar],
     RefFieldsOrdered = sort_refs_flatc_order(RefFields),
 
@@ -828,32 +828,17 @@ calc_table_size_with_padding(_AllFields, RawSize, Refs, HeaderSize, Defs, MaxId)
     TablePosUnaligned = HeaderSize + VTableSize,
     TablePos = align_offset(TablePosUnaligned, 4),
 
-    %% Sort refs in flatc order
+    %% Sort refs in flatc order (ascending by field id)
     RefFieldsOrdered = sort_refs_flatc_order(Refs),
 
     %% Calculate ref padding
     RefPadding = calc_ref_padding_for_refs(RefFieldsOrdered, TablePos + BaseTableSize, Defs),
     BaseTableSize + RefPadding.
 
-%% Sort refs in flatc order:
-%% flatc writes id=0 first (if present), then remaining fields in reverse of JSON order.
-%% To match flatc when JSON is descending, Erlang writes: id=0 first, then ascending.
-%% Fast path when we know if there's an id=0 ref (from schema)
-sort_refs_flatc_order(Refs, false) ->
-    %% No id=0 ref: ascending order
-    lists:sort(fun(#field{id = IdA}, #field{id = IdB}) -> IdA =< IdB end, Refs);
-sort_refs_flatc_order(Refs, true) ->
-    %% Has id=0 ref: id=0 first, then ascending (matches flatc with descending JSON)
-    {ZeroRefs, NonZeroRefs} = lists:partition(fun(#field{id = Id}) -> Id == 0 end, Refs),
-    SortedNonZero = lists:sort(
-        fun(#field{id = IdA}, #field{id = IdB}) -> IdA =< IdB end, NonZeroRefs
-    ),
-    ZeroRefs ++ SortedNonZero.
-
-%% Fallback when we don't know - do the check
+%% Sort refs in flatc order: ascending by field id.
+%% flatc writes refs in reverse of JSON key order. With descending JSON, this becomes ascending.
 sort_refs_flatc_order(Refs) ->
-    HasZero = lists:any(fun(#field{id = Id}) -> Id == 0 end, Refs),
-    sort_refs_flatc_order(Refs, HasZero).
+    lists:sort(fun(#field{id = IdA}, #field{id = IdB}) -> IdA =< IdB end, Refs).
 
 %% Find the offset of the first 8-byte field using precomputed Slots map
 %% Fields must be pre-sorted by layout_key
@@ -969,7 +954,7 @@ build_table_data2(AllFields, Slots, BaseTableSize, TablePos, Defs, LayoutCache) 
     FieldLayout = [F#field{offset = maps:get(F#field.id, Slots)} || F <- AllFields],
     SortedLayout = lists:sort(fun(A, B) -> A#field.offset =< B#field.offset end, FieldLayout),
 
-    %% Extract refs from sorted layout (has offsets) and sort in flatc order
+    %% Extract refs from sorted layout (has offsets) and sort in flatc order (ascending by id)
     RefFields = [F || F <- SortedLayout, not F#field.is_scalar],
     RefFieldsOrdered = sort_refs_flatc_order(RefFields),
 
@@ -1784,7 +1769,7 @@ encode_ref_minimal_padding(Type, Value, Defs, LayoutCache) ->
 
 encode_nested_table(TableType, Map, Defs, _LayoutCache) ->
     %% Build a nested table - vtable first, then table (positive soffset, like flatc)
-    #table_def{} = TableDef = maps:get(TableType, Defs),
+    TableDef = maps:get(TableType, Defs),
     {_Scalars, _Refs, VTable, AllFields, BaseTableSize, Slots} =
         layout_for_value(Map, TableDef, Defs),
 

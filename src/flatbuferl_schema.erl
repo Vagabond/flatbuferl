@@ -382,8 +382,6 @@ precompute_encode_layout(Scalars, Refs, MaxId) ->
     AllFieldIds = [F#field_def.id || F <- AllFields],
     %% Precompute offset-only slots for fast path
     SlotOffsets = maps:map(fun(_Id, {Offset, _Size}) -> Offset end, Slots),
-    %% Check if any ref has id=0 (affects flatc sort order at runtime)
-    HasIdZeroRef = lists:any(fun(#field_def{id = Id}) -> Id == 0 end, Refs),
     #encode_layout{
         vtable = VTable,
         vtable_size = VTableSize,
@@ -393,35 +391,15 @@ precompute_encode_layout(Scalars, Refs, MaxId) ->
         scalars_order = Scalars,
         refs_order = RefsInFlatcOrder,
         all_field_ids = AllFieldIds,
-        max_id = MaxId,
-        has_id_zero_ref = HasIdZeroRef
+        max_id = MaxId
     }.
 
-%% Sort refs in flatc order (precomputed at schema time)
-%% Note: Currently not used by builder (which sorts at runtime), but kept for consistency.
-%% flatc writes id=0 first (if present), then remaining in reverse of JSON order.
-%% To match flatc when JSON is descending, Erlang writes: id=0 first, then ascending.
+%% Sort refs in flatc order: ascending by field id.
+%% flatc writes refs in reverse of JSON key order. With descending JSON, this becomes ascending.
 sort_refs_flatc_order([]) ->
     [];
 sort_refs_flatc_order(Refs) ->
-    {ZeroRefs, NonZeroRefs} = lists:partition(
-        fun(#field_def{id = Id}) -> Id == 0 end, Refs
-    ),
-    case ZeroRefs of
-        [] ->
-            %% No id=0 ref: ascending order
-            lists:sort(
-                fun(#field_def{id = A}, #field_def{id = B}) -> A =< B end,
-                NonZeroRefs
-            );
-        _ ->
-            %% Has id=0 ref: id=0 first, then ascending (matches flatc with descending JSON)
-            Sorted = lists:sort(
-                fun(#field_def{id = A}, #field_def{id = B}) -> A =< B end,
-                NonZeroRefs
-            ),
-            ZeroRefs ++ Sorted
-    end.
+    lists:sort(fun(#field_def{id = A}, #field_def{id = B}) -> A =< B end, Refs).
 
 %% Calculate slot offsets for all fields present
 %% Returns {SlotsMap, TableSize} where SlotsMap is #{id => {offset, size}}

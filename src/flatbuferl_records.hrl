@@ -39,9 +39,7 @@
     %% All field IDs for quick "all present" check
     all_field_ids :: [non_neg_integer()],
     %% Max field ID (for vtable sizing)
-    max_id :: integer(),
-    %% True if any ref has id=0 (affects flatc sort order)
-    has_id_zero_ref = false :: boolean()
+    max_id :: integer()
 }).
 
 %% Table definition with precomputed layout
