@@ -169,7 +169,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #array_def{} = RT,
             default = Def,
             deprecated = false
@@ -185,7 +185,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
             {ok, Value} -> Acc#{Name => Value};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
@@ -196,7 +196,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #union_type_def{reverse_map = ReverseMap},
             deprecated = false,
             is_primitive = true
@@ -213,7 +213,7 @@ decode_fields(
 ) ->
     %% Use precomputed reverse map (index -> atom) for decoding
     Acc1 =
-        case flatbuferl_reader:read_union_type_field(VTable, Id, Buffer) of
+        case flatbuferl_reader:read_union_type_field(VTable, VTS, Buffer) of
             {ok, 0} -> Acc;
             {ok, TypeIndex} ->
                 MemberType = maps:get(TypeIndex, ReverseMap),
@@ -221,13 +221,13 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Union value field - use precomputed type_field_id and reverse_map
+%% Union value field - use precomputed vtable slot offsets and reverse_map
 decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
-            resolved_type = #union_value_def{reverse_map = ReverseMap, type_field_id = TypeFieldId},
+            vtable_slot_offset = VTS,
+            resolved_type = #union_value_def{reverse_map = ReverseMap, type_vtable_slot_offset = TypeVTS},
             deprecated = false
         }
         | Rest
@@ -241,10 +241,10 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_union_type_field(VTable, TypeFieldId, Buffer) of
+        case flatbuferl_reader:read_union_type_field(VTable, TypeVTS, Buffer) of
             {ok, 0} -> Acc;
             {ok, TypeIndex} ->
-                case flatbuferl_reader:read_union_value_field(VTable, Id, Buffer) of
+                case flatbuferl_reader:read_union_value_field(VTable, VTS, Buffer) of
                     {ok, TableRef} ->
                         MemberType = maps:get(TypeIndex, ReverseMap),
                         Acc#{Name => table_to_map(TableRef, Defs, MemberType, Buffer, Opts)};
@@ -258,7 +258,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #enum_resolved{base_type = Base, reverse_map = ReverseMap},
             default = Def,
             deprecated = false
@@ -274,7 +274,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_scalar_field(VTable, Id, Base, Buffer) of
+        case flatbuferl_reader:read_scalar_field(VTable, VTS, Base, Buffer) of
             {ok, Value} -> Acc#{Name => maps:get(Value, ReverseMap, Value)};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
@@ -285,7 +285,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = RT,
             default = Def,
             deprecated = false,
@@ -302,7 +302,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_scalar_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_scalar_field(VTable, VTS, RT, Buffer) of
             {ok, Value} -> Acc#{Name => Value};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
@@ -313,7 +313,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             type = Type,
             resolved_type = RT,
             default = Def,
@@ -331,7 +331,7 @@ decode_fields(
     Acc
 ) when Type /= string, is_atom(Type), is_atom(RT) ->
     Acc1 =
-        case flatbuferl_reader:read_ref_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_ref_field(VTable, VTS, RT, Buffer) of
             {ok, TableRef} -> Acc#{Name => table_to_map(TableRef, Defs, Type, Buffer, Opts)};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
@@ -342,7 +342,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             type = string,
             default = Def,
             deprecated = false
@@ -358,7 +358,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_string_field(VTable, Id, Buffer) of
+        case flatbuferl_reader:read_string_field(VTable, VTS, Buffer) of
             {ok, Value} -> Acc#{Name => Value};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
@@ -369,7 +369,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #struct_def{} = StructDef,
             default = Def,
             deprecated = false
@@ -385,7 +385,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_struct_field(VTable, Id, StructDef, Buffer) of
+        case flatbuferl_reader:read_struct_field(VTable, VTS, StructDef, Buffer) of
             {ok, Value} -> Acc#{Name => Value};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing -> Acc
@@ -396,7 +396,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #vector_def{element_type = ElemType, is_table_element = true} = RT,
             default = Def,
             deprecated = false
@@ -412,7 +412,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
             {ok, TableRefs} ->
                 Acc#{Name => [table_to_map(V, Defs, ElemType, Buffer, Opts) || V <- TableRefs]};
             missing when Def /= undefined -> Acc#{Name => Def};
@@ -425,7 +425,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #vector_def{element_type = #union_type_def{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
@@ -440,7 +440,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
             {ok, TypeIndices} ->
                 TypeNames = [maps:get(Idx, ReverseMap) || Idx <- TypeIndices, Idx > 0],
                 Acc#{Name => TypeNames};
@@ -453,7 +453,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #vector_def{element_type = #union_value_def{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
@@ -467,12 +467,12 @@ decode_fields(
     DepOpt,
     Acc
 ) ->
-    TypeFieldId = Id - 1,
+    TypeVTS = VTS - 2,  %% Type field is immediately before value field
     TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, TypeFieldId, TypeVecDef, Buffer) of
+        case flatbuferl_reader:read_field(VTable, TypeVTS, TypeVecDef, Buffer) of
             {ok, TypeIndices} ->
-                case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+                case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
                     {ok, TableRefs} ->
                         DecodedValues = lists:zipwith(
                             fun(TypeIdx, TableValueRef) ->
@@ -495,7 +495,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #vector_def{element_type = #union_value_partial{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
@@ -509,12 +509,12 @@ decode_fields(
     DepOpt,
     Acc
 ) ->
-    TypeFieldId = Id - 1,
+    TypeVTS = VTS - 2,  %% Type field is immediately before value field
     TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, TypeFieldId, TypeVecDef, Buffer) of
+        case flatbuferl_reader:read_field(VTable, TypeVTS, TypeVecDef, Buffer) of
             {ok, TypeIndices} ->
-                case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+                case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
                     {ok, TableRefs} ->
                         DecodedValues = lists:zipwith(
                             fun(TypeIdx, TableValueRef) ->
@@ -537,7 +537,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #vector_def{element_type = #enum_resolved{reverse_map = ReverseMap}} = RT,
             default = Def,
             deprecated = false
@@ -553,7 +553,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
             {ok, Values} ->
                 Acc#{Name => [maps:get(V, ReverseMap, V) || V <- Values]};
             missing when Def /= undefined -> Acc#{Name => Def};
@@ -566,7 +566,7 @@ decode_fields(
     [
         #field_def{
             name = Name,
-            id = Id,
+            vtable_slot_offset = VTS,
             resolved_type = #vector_def{is_table_element = false} = RT,
             default = Def,
             deprecated = false
@@ -582,7 +582,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
             {ok, Value} -> Acc#{Name => Value};
             missing when Def /= undefined -> Acc#{Name => Def};
             missing ->
@@ -591,7 +591,7 @@ decode_fields(
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Deprecated field with error option
 decode_fields(
-    [#field_def{name = Name, id = Id, resolved_type = RT, deprecated = true} | Rest],
+    [#field_def{name = Name, vtable_slot_offset = VTS, resolved_type = RT, deprecated = true} | Rest],
     VTable,
     Defs,
     TableType,
@@ -600,13 +600,13 @@ decode_fields(
     error,
     Acc
 ) ->
-    case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+    case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
         {ok, _} -> error({deprecated_field_present, TableType, Name});
         missing -> decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, error, Acc)
     end;
 %% Deprecated field with allow option
 decode_fields(
-    [#field_def{name = Name, id = Id, resolved_type = RT, deprecated = true} | Rest],
+    [#field_def{name = Name, vtable_slot_offset = VTS, resolved_type = RT, deprecated = true} | Rest],
     VTable,
     Defs,
     TableType,
@@ -616,7 +616,7 @@ decode_fields(
     Acc
 ) ->
     Acc1 =
-        case flatbuferl_reader:read_field(VTable, Id, RT, Buffer) of
+        case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
             {ok, Value} -> Acc#{Name => Value};
             missing -> Acc
         end,

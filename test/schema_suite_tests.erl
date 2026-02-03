@@ -37,7 +37,9 @@ field(Name, Type, Attrs) ->
     InlineSize = maps:get(inline_size, Attrs, type_size(NormType)),
     #field_def{
         name = Name,
+        binary_name = atom_to_binary(Name),
         id = Id,
+        vtable_slot_offset = Id * 2,
         type = NormType,
         default = extract_default(Type),
         required = maps:get(required, Attrs, false),
@@ -53,11 +55,13 @@ field(Name, Type, Attrs) ->
 finalize_resolved_type(#union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap}, FieldId, FieldName) ->
     TypeName = list_to_atom(atom_to_list(FieldName) ++ "_type"),
     TypeBinaryName = atom_to_binary(TypeName),
+    TypeFieldId = FieldId - 1,
     #union_value_def{
         name = Name,
         index_map = IndexMap,
         reverse_map = ReverseMap,
-        type_field_id = FieldId - 1,
+        type_field_id = TypeFieldId,
+        type_vtable_slot_offset = TypeFieldId * 2,
         type_name = TypeName,
         type_binary_name = TypeBinaryName
     };

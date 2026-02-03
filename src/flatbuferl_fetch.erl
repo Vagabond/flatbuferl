@@ -791,16 +791,12 @@ lookup_field(Defs, TableType, FieldName) ->
             error
     end.
 
-%% Check if a type has a given field
+%% Check if a type has a given field (O(1) using field_map)
 type_has_field(TypeName, FieldName, Defs) ->
     case maps:get(TypeName, Defs, undefined) of
-        #table_def{all_fields = Fields} -> field_exists(Fields, FieldName);
+        #table_def{field_map = FieldMap} -> maps:is_key(FieldName, FieldMap);
         _ -> false
     end.
-
-field_exists([], _Name) -> false;
-field_exists([#field_def{name = Name} | _], Name) -> true;
-field_exists([_ | Rest], Name) -> field_exists(Rest, Name).
 
 %% Check if any union member has a given field
 any_union_member_has_field(Members, FieldName, Defs) ->
