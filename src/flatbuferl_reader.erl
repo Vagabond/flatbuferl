@@ -52,13 +52,14 @@ read_vtable({table, TableOffset, Buffer}) ->
 
 %% Read a non-primitive field using pre-read vtable
 %% Caller (decode_fields) already dispatched primitives to read_scalar_field
--spec read_field(vtable(), field_id(), atom() | tuple(), buffer()) ->
+%% VTableSlotOffset is precomputed as FieldId * 2
+-spec read_field(vtable(), non_neg_integer(), atom() | tuple(), buffer()) ->
     {ok, term()} | missing.
-read_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, FieldType, _) ->
-    FieldOffsetPos = 4 + (FieldId * 2),
+read_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, FieldType, _) ->
+    FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInBuffer = VTableStart + (FieldId * 2),
+            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;
@@ -69,13 +70,14 @@ read_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, FieldType, _
     end.
 
 %% Fast path for scalar fields - only 11 canonical types
--spec read_scalar_field(vtable(), field_id(), atom(), buffer()) ->
+%% VTableSlotOffset is precomputed as FieldId * 2
+-spec read_scalar_field(vtable(), non_neg_integer(), atom(), buffer()) ->
     {ok, term()} | missing.
-read_scalar_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, ScalarType, _) ->
-    FieldOffsetPos = 4 + (FieldId * 2),
+read_scalar_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, ScalarType, _) ->
+    FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInBuffer = VTableStart + (FieldId * 2),
+            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;
@@ -86,13 +88,14 @@ read_scalar_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, Scala
     end.
 
 %% Fast path for reference fields (nested tables) - skip primitive check
--spec read_ref_field(vtable(), field_id(), atom(), buffer()) ->
+%% VTableSlotOffset is precomputed as FieldId * 2
+-spec read_ref_field(vtable(), non_neg_integer(), atom(), buffer()) ->
     {ok, {table, non_neg_integer(), buffer()}} | missing.
-read_ref_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, _Type, _) ->
-    FieldOffsetPos = 4 + (FieldId * 2),
+read_ref_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, _Type, _) ->
+    FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInBuffer = VTableStart + (FieldId * 2),
+            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;
@@ -106,13 +109,14 @@ read_ref_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, _Type, _
     end.
 
 %% Fast path for union type field (uint8 discriminator)
--spec read_union_type_field(vtable(), field_id(), buffer()) ->
+%% VTableSlotOffset is precomputed as FieldId * 2
+-spec read_union_type_field(vtable(), non_neg_integer(), buffer()) ->
     {ok, non_neg_integer()} | missing.
-read_union_type_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, _) ->
-    FieldOffsetPos = 4 + (FieldId * 2),
+read_union_type_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, _) ->
+    FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInBuffer = VTableStart + (FieldId * 2),
+            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;
@@ -126,13 +130,14 @@ read_union_type_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, _
     end.
 
 %% Fast path for union value field (table offset)
--spec read_union_value_field(vtable(), field_id(), buffer()) ->
+%% VTableSlotOffset is precomputed as FieldId * 2
+-spec read_union_value_field(vtable(), non_neg_integer(), buffer()) ->
     {ok, {table, non_neg_integer(), buffer()}} | missing.
-read_union_value_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, _) ->
-    FieldOffsetPos = 4 + (FieldId * 2),
+read_union_value_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, _) ->
+    FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInBuffer = VTableStart + (FieldId * 2),
+            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;
@@ -146,13 +151,14 @@ read_union_value_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, 
     end.
 
 %% Fast path for string fields
--spec read_string_field(vtable(), field_id(), buffer()) ->
+%% VTableSlotOffset is precomputed as FieldId * 2
+-spec read_string_field(vtable(), non_neg_integer(), buffer()) ->
     {ok, binary()} | missing.
-read_string_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, _) ->
-    FieldOffsetPos = 4 + (FieldId * 2),
+read_string_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, _) ->
+    FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInBuffer = VTableStart + (FieldId * 2),
+            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;
@@ -168,13 +174,14 @@ read_string_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, _) ->
     end.
 
 %% Fast path for inline struct fields - reads struct data directly
--spec read_struct_field(vtable(), field_id(), #struct_def{}, buffer()) ->
+%% VTableSlotOffset is precomputed as FieldId * 2
+-spec read_struct_field(vtable(), non_neg_integer(), #struct_def{}, buffer()) ->
     {ok, map()} | missing.
-read_struct_field({TableOffset, VTableSize, VTableStart, Buffer}, FieldId, #struct_def{fields = Fields}, _) ->
-    FieldOffsetPos = 4 + (FieldId * 2),
+read_struct_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, #struct_def{fields = Fields}, _) ->
+    FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
-            FieldOffsetInBuffer = VTableStart + (FieldId * 2),
+            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
                 0 -> missing;

@@ -2,7 +2,7 @@
 -module(flatbuferl_schema).
 -export([parse/1, parse_file/1, process/1, validate/3]).
 %% Shared utilities used by builder
--export([uint16_bytes/1, sort_refs_flatc_order/1, resolve_type/2]).
+-export([uint16_bytes/1, resolve_type/2]).
 
 -ifdef(TEST).
 -export([precompute_encode_layout/3]).
@@ -292,6 +292,7 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
         name = Name,
         binary_name = atom_to_binary(Name),
         id = Id,
+        vtable_slot_offset = Id * 2,
         type = NormalizedType,
         default = extract_default(Type),
         required = maps:get(required, Attrs, false),
@@ -311,6 +312,7 @@ optimize_field_to_record({Name, Type}, Defs) ->
         name = Name,
         binary_name = atom_to_binary(Name),
         id = 0,
+        vtable_slot_offset = 0,
         type = NormalizedType,
         default = extract_default(Type),
         required = false,
@@ -326,11 +328,13 @@ optimize_field_to_record({Name, Type}, Defs) ->
 finalize_resolved_type(#union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap}, FieldId, FieldName) ->
     TypeName = list_to_atom(atom_to_list(FieldName) ++ "_type"),
     TypeBinaryName = atom_to_binary(TypeName),
+    TypeFieldId = FieldId - 1,
     #union_value_def{
         name = Name,
         index_map = IndexMap,
         reverse_map = ReverseMap,
-        type_field_id = FieldId - 1,
+        type_field_id = TypeFieldId,
+        type_vtable_slot_offset = TypeFieldId * 2,
         type_name = TypeName,
         type_binary_name = TypeBinaryName
     };
@@ -373,8 +377,6 @@ precompute_encode_layout(Scalars, Refs, MaxId) ->
         fun(#field_def{layout_key = A}, #field_def{layout_key = B}) -> A > B end,
         Scalars ++ Refs
     ),
-    %% Sort refs in flatc order (done once at schema time, not per encode!)
-    RefsInFlatcOrder = sort_refs_flatc_order(Refs),
     %% Calculate table layout for all fields present
     {Slots, TableSize} = calc_all_present_layout(AllFields),
     %% Build vtable bytes
@@ -390,18 +392,9 @@ precompute_encode_layout(Scalars, Refs, MaxId) ->
         table_size = TableSize,
         slots = Slots,
         slot_offsets = SlotOffsets,
-        scalars_order = Scalars,
-        refs_order = RefsInFlatcOrder,
         all_field_ids = AllFieldIds,
         max_id = MaxId
     }.
-
-%% Sort refs in flatc order: ascending by field id.
-%% flatc writes refs in reverse of JSON key order. With descending JSON, this becomes ascending.
-sort_refs_flatc_order([]) ->
-    [];
-sort_refs_flatc_order(Refs) ->
-    lists:sort(fun(#field_def{id = A}, #field_def{id = B}) -> A =< B end, Refs).
 
 %% Calculate slot offsets for all fields present
 %% Returns {SlotsMap, TableSize} where SlotsMap is #{id => {offset, size}}

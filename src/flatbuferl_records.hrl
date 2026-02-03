@@ -8,6 +8,8 @@
     %% Precomputed binary name for fast map lookup during encode
     binary_name :: binary(),
     id :: non_neg_integer(),
+    %% Precomputed vtable slot offset (id * 2) for fast field reads
+    vtable_slot_offset :: non_neg_integer(),
     type :: term(),
     resolved_type :: term(),
     default :: term(),
@@ -33,9 +35,6 @@
     slots :: #{non_neg_integer() => {non_neg_integer(), non_neg_integer()}},
     %% Precomputed offset-only slots for fast path (field_id => offset)
     slot_offsets :: #{non_neg_integer() => non_neg_integer()},
-    %% Fields in encoding order (scalars by layout_key, then refs in flatc order)
-    scalars_order :: [#field_def{}],
-    refs_order :: [#field_def{}],
     %% All field IDs for quick "all present" check
     all_field_ids :: [non_neg_integer()],
     %% Max field ID (for vtable sizing)
@@ -151,6 +150,8 @@
     reverse_map :: #{pos_integer() => atom()},
     %% Precomputed type field ID (value_field_id - 1)
     type_field_id :: non_neg_integer(),
+    %% Precomputed vtable slot offset for type field (type_field_id * 2)
+    type_vtable_slot_offset :: non_neg_integer(),
     %% Precomputed type field name (e.g., foo_type for union field foo) for encode
     type_name :: atom(),
     type_binary_name :: binary()
