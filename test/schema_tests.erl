@@ -20,7 +20,9 @@ table_with_defaults_test() ->
 
 enum_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("enum Color : byte { Red, Green, Blue }"),
-    #enum_def{base_type = byte, values = ['Red', 'Green', 'Blue'], index_map = IndexMap} = maps:get('Color', Defs),
+    #enum_def{base_type = byte, values = ['Red', 'Green', 'Blue'], index_map = IndexMap} = maps:get(
+        'Color', Defs
+    ),
     ?assertEqual(#{'Red' => 0, 'Green' => 1, 'Blue' => 2}, IndexMap).
 
 enum_default_test() ->

@@ -98,7 +98,8 @@ read_ref_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset,
             FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
-                0 -> missing;
+                0 ->
+                    missing;
                 _ ->
                     FieldPos = TableOffset + FieldOffset,
                     <<_:FieldPos/binary, NestedOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -119,7 +120,8 @@ read_union_type_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlot
             FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
-                0 -> missing;
+                0 ->
+                    missing;
                 _ ->
                     FieldPos = TableOffset + FieldOffset,
                     <<_:FieldPos/binary, TypeIndex:8/little-unsigned, _/binary>> = Buffer,
@@ -140,7 +142,8 @@ read_union_value_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlo
             FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
-                0 -> missing;
+                0 ->
+                    missing;
                 _ ->
                     FieldPos = TableOffset + FieldOffset,
                     <<_:FieldPos/binary, NestedOffset:32/little-unsigned, _/binary>> = Buffer,
@@ -161,12 +164,14 @@ read_string_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffs
             FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
-                0 -> missing;
+                0 ->
+                    missing;
                 _ ->
                     FieldPos = TableOffset + FieldOffset,
                     <<_:FieldPos/binary, StringOffset:32/little-unsigned, _/binary>> = Buffer,
                     StringPos = FieldPos + StringOffset,
-                    <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary, _/binary>> = Buffer,
+                    <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary,
+                        _/binary>> = Buffer,
                     {ok, StringData}
             end;
         false ->
@@ -177,14 +182,20 @@ read_string_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffs
 %% VTableSlotOffset is precomputed as FieldId * 2
 -spec read_struct_field(vtable(), non_neg_integer(), #struct_def{}, buffer()) ->
     {ok, map()} | missing.
-read_struct_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffset, #struct_def{fields = Fields}, _) ->
+read_struct_field(
+    {TableOffset, VTableSize, VTableStart, Buffer},
+    VTableSlotOffset,
+    #struct_def{fields = Fields},
+    _
+) ->
     FieldOffsetPos = 4 + VTableSlotOffset,
     case FieldOffsetPos < VTableSize of
         true ->
             FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
             <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
             case FieldOffset of
-                0 -> missing;
+                0 ->
+                    missing;
                 _ ->
                     FieldPos = TableOffset + FieldOffset,
                     StructMap = read_struct_fields_fast(Buffer, FieldPos, Fields, #{}),

@@ -214,11 +214,13 @@ decode_fields(
     %% Use precomputed reverse map (index -> atom) for decoding
     Acc1 =
         case flatbuferl_reader:read_union_type_field(VTable, VTS, Buffer) of
-            {ok, 0} -> Acc;
+            {ok, 0} ->
+                Acc;
             {ok, TypeIndex} ->
                 MemberType = maps:get(TypeIndex, ReverseMap),
                 Acc#{Name => MemberType};
-            missing -> Acc
+            missing ->
+                Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Union value field - use precomputed vtable slot offsets and reverse_map
@@ -227,7 +229,9 @@ decode_fields(
         #field_def{
             name = Name,
             vtable_slot_offset = VTS,
-            resolved_type = #union_value_def{reverse_map = ReverseMap, type_vtable_slot_offset = TypeVTS},
+            resolved_type = #union_value_def{
+                reverse_map = ReverseMap, type_vtable_slot_offset = TypeVTS
+            },
             deprecated = false
         }
         | Rest
@@ -242,15 +246,18 @@ decode_fields(
 ) ->
     Acc1 =
         case flatbuferl_reader:read_union_type_field(VTable, TypeVTS, Buffer) of
-            {ok, 0} -> Acc;
+            {ok, 0} ->
+                Acc;
             {ok, TypeIndex} ->
                 case flatbuferl_reader:read_union_value_field(VTable, VTS, Buffer) of
                     {ok, TableRef} ->
                         MemberType = maps:get(TypeIndex, ReverseMap),
                         Acc#{Name => table_to_map(TableRef, Defs, MemberType, Buffer, Opts)};
-                    missing -> Acc
+                    missing ->
+                        Acc
                 end;
-            missing -> Acc
+            missing ->
+                Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Enum field - scalar with value conversion (must come before primitive scalar)
@@ -426,7 +433,8 @@ decode_fields(
         #field_def{
             name = Name,
             vtable_slot_offset = VTS,
-            resolved_type = #vector_def{element_type = #union_type_def{reverse_map = ReverseMap}} = RT,
+            resolved_type =
+                #vector_def{element_type = #union_type_def{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
         | Rest
@@ -454,7 +462,8 @@ decode_fields(
         #field_def{
             name = Name,
             vtable_slot_offset = VTS,
-            resolved_type = #vector_def{element_type = #union_value_def{reverse_map = ReverseMap}} = RT,
+            resolved_type =
+                #vector_def{element_type = #union_value_def{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
         | Rest
@@ -467,7 +476,8 @@ decode_fields(
     DepOpt,
     Acc
 ) ->
-    TypeVTS = VTS - 2,  %% Type field is immediately before value field
+    %% Type field is immediately before value field
+    TypeVTS = VTS - 2,
     TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
     Acc1 =
         case flatbuferl_reader:read_field(VTable, TypeVTS, TypeVecDef, Buffer) of
@@ -496,7 +506,8 @@ decode_fields(
         #field_def{
             name = Name,
             vtable_slot_offset = VTS,
-            resolved_type = #vector_def{element_type = #union_value_partial{reverse_map = ReverseMap}} = RT,
+            resolved_type =
+                #vector_def{element_type = #union_value_partial{reverse_map = ReverseMap}} = RT,
             deprecated = false
         }
         | Rest
@@ -509,7 +520,8 @@ decode_fields(
     DepOpt,
     Acc
 ) ->
-    TypeVTS = VTS - 2,  %% Type field is immediately before value field
+    %% Type field is immediately before value field
+    TypeVTS = VTS - 2,
     TypeVecDef = #vector_def{element_type = uint8, is_primitive = true, element_size = 1},
     Acc1 =
         case flatbuferl_reader:read_field(VTable, TypeVTS, TypeVecDef, Buffer) of
@@ -538,7 +550,8 @@ decode_fields(
         #field_def{
             name = Name,
             vtable_slot_offset = VTS,
-            resolved_type = #vector_def{element_type = #enum_resolved{reverse_map = ReverseMap}} = RT,
+            resolved_type =
+                #vector_def{element_type = #enum_resolved{reverse_map = ReverseMap}} = RT,
             default = Def,
             deprecated = false
         }
@@ -585,13 +598,15 @@ decode_fields(
         case flatbuferl_reader:read_field(VTable, VTS, RT, Buffer) of
             {ok, Value} -> Acc#{Name => Value};
             missing when Def /= undefined -> Acc#{Name => Def};
-            missing ->
-                Acc
+            missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Deprecated field with error option
 decode_fields(
-    [#field_def{name = Name, vtable_slot_offset = VTS, resolved_type = RT, deprecated = true} | Rest],
+    [
+        #field_def{name = Name, vtable_slot_offset = VTS, resolved_type = RT, deprecated = true}
+        | Rest
+    ],
     VTable,
     Defs,
     TableType,
@@ -606,7 +621,10 @@ decode_fields(
     end;
 %% Deprecated field with allow option
 decode_fields(
-    [#field_def{name = Name, vtable_slot_offset = VTS, resolved_type = RT, deprecated = true} | Rest],
+    [
+        #field_def{name = Name, vtable_slot_offset = VTS, resolved_type = RT, deprecated = true}
+        | Rest
+    ],
     VTable,
     Defs,
     TableType,
