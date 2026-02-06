@@ -1,0 +1,5 @@
+// Base schema to be included
+table SharedType {
+  shared_value:int;
+  shared_name:string;
+}

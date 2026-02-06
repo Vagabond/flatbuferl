@@ -371,33 +371,6 @@ decode_fields(
             missing -> Acc
         end,
     decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
-%% Non-deprecated struct field - inline data, use fast struct reader
-decode_fields(
-    [
-        #field_def{
-            name = Name,
-            vtable_slot_offset = VTS,
-            resolved_type = #struct_def{} = StructDef,
-            default = Def,
-            deprecated = false
-        }
-        | Rest
-    ],
-    VTable,
-    Defs,
-    TableType,
-    Buffer,
-    Opts,
-    DepOpt,
-    Acc
-) ->
-    Acc1 =
-        case flatbuferl_reader:read_struct_field(VTable, VTS, StructDef, Buffer) of
-            {ok, Value} -> Acc#{Name => Value};
-            missing when Def /= undefined -> Acc#{Name => Def};
-            missing -> Acc
-        end,
-    decode_fields(Rest, VTable, Defs, TableType, Buffer, Opts, DepOpt, Acc1);
 %% Vector of tables - use precomputed is_table_element flag
 decode_fields(
     [

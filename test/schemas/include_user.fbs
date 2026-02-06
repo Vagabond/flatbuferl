@@ -1,0 +1,8 @@
+// Schema that uses include
+include "include_base.fbs";
+
+table IncludeUser {
+  local_field:string;
+  shared:SharedType;
+}
+root_type IncludeUser;

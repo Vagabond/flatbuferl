@@ -1,0 +1,6 @@
+// Schema with required fields for testing error handling
+table RequiredTest {
+  required_name:string (required);
+  optional_value:int;
+}
+root_type RequiredTest;

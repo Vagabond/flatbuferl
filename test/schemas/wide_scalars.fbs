@@ -1,0 +1,10 @@
+// Schema focusing on 64-bit types and floats
+table WideScalars {
+  big_signed:long;
+  big_unsigned:ulong;
+  precise_float:double;
+  int64_explicit:int64;
+  uint64_explicit:uint64;
+  float64_explicit:float64;
+}
+root_type WideScalars;
