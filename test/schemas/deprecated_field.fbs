@@ -1,0 +1,7 @@
+// Schema with deprecated fields for testing deprecated handling
+table DeprecatedTest {
+  current_field:string;
+  old_field:int (deprecated);
+  another_current:float;
+}
+root_type DeprecatedTest;

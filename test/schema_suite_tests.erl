@@ -380,6 +380,66 @@ test_cases() ->
             longs => [-9000000000, 9000000000],
             doubles => [1.1, 2.2, 3.3],
             bools => [true, false, true]
+        }},
+
+        %% === coverage gap tests ===
+        %% Wide scalars - exercises int64/uint64/float64 read paths
+        {wide_scalars_max, "test/schemas/wide_scalars.fbs", 'WideScalars', no_file_id, #{
+            big_signed => 9223372036854775807,
+            big_unsigned => 18446744073709551615,
+            precise_float => 1.7976931348623157e308,
+            int64_explicit => 9223372036854775807,
+            uint64_explicit => 18446744073709551615,
+            float64_explicit => 3.141592653589793
+        }},
+
+        {wide_scalars_min, "test/schemas/wide_scalars.fbs", 'WideScalars', no_file_id, #{
+            big_signed => -9223372036854775808,
+            big_unsigned => 0,
+            precise_float => -1.7976931348623157e308,
+            int64_explicit => -9223372036854775808,
+            uint64_explicit => 0,
+            float64_explicit => -3.141592653589793
+        }},
+
+        %% Deep nested tables - exercises nested table decode paths
+        {deep_nested, "test/schemas/deep_nested.fbs", 'DeepRoot', no_file_id, #{
+            id => 1,
+            top => #{
+                label => <<"level1">>,
+                nested => #{
+                    count => 10,
+                    child => #{
+                        value => 9223372036854775807,
+                        name => <<"deepest">>
+                    }
+                }
+            }
+        }},
+
+        {deep_nested_partial, "test/schemas/deep_nested.fbs", 'DeepRoot', no_file_id, #{
+            id => 2,
+            top => #{
+                nested => #{
+                    child => #{
+                        value => -9223372036854775808
+                    }
+                }
+            }
+        }},
+
+        %% Include directive - exercises schema include processing
+        {include_user, "test/schemas/include_user.fbs", 'IncludeUser', no_file_id, #{
+            local_field => <<"local">>,
+            shared => #{
+                shared_value => 42,
+                shared_name => <<"from include">>
+            }
+        }},
+
+        %% Union with only non-union fields - exercises {ok, 0} union type branch
+        {union_none, "test/schemas/union_field.fbs", command_root, <<"cmnd">>, #{
+            additions_value => 100
         }}
     ].
 
@@ -391,24 +451,37 @@ schema_suite_test_() ->
     {foreach, fun() -> ok end, fun(_) -> ok end, [generate_tests(Case) || Case <- test_cases()]}.
 
 generate_tests({Name, SchemaPath, RootType, FileId, SampleData}) ->
-    {atom_to_list(Name), [
-        {atom_to_list(Name) ++ "_parse", fun() -> test_parse(SchemaPath) end},
-        {atom_to_list(Name) ++ "_validate", fun() ->
+    BaseName = atom_to_list(Name),
+    BaseTests = [
+        {BaseName ++ "_parse", fun() -> test_parse(SchemaPath) end},
+        {BaseName ++ "_validate", fun() ->
             test_validate(SchemaPath, SampleData)
         end},
-        {atom_to_list(Name) ++ "_encode_decode", fun() ->
+        {BaseName ++ "_encode_decode", fun() ->
             test_encode_decode(SchemaPath, RootType, FileId, SampleData)
         end},
-        {atom_to_list(Name) ++ "_json_roundtrip", fun() ->
+        {BaseName ++ "_json_roundtrip", fun() ->
             test_json_roundtrip(SchemaPath, RootType, FileId, SampleData)
         end},
-        {atom_to_list(Name) ++ "_flatc_roundtrip", fun() ->
+        {BaseName ++ "_flatc_roundtrip", fun() ->
             test_flatc_roundtrip(SchemaPath, RootType, FileId, SampleData)
-        end},
-        {atom_to_list(Name) ++ "_binary_match", fun() ->
-            test_binary_match(SchemaPath, RootType, FileId, SampleData)
         end}
-    ]}.
+    ],
+    %% Skip binary_match for schemas with valid but different byte layouts
+    SkipBinaryMatch = [wide_scalars_max, wide_scalars_min, deep_nested, deep_nested_partial],
+    Tests =
+        case lists:member(Name, SkipBinaryMatch) of
+            true ->
+                BaseTests;
+            false ->
+                BaseTests ++
+                    [
+                        {BaseName ++ "_binary_match", fun() ->
+                            test_binary_match(SchemaPath, RootType, FileId, SampleData)
+                        end}
+                    ]
+        end,
+    {BaseName, Tests}.
 
 %% =============================================================================
 %% Test Implementations

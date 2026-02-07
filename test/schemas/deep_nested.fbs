@@ -1,0 +1,21 @@
+// Schema with deeply nested tables
+table Level3 {
+  value:long;
+  name:string;
+}
+
+table Level2 {
+  child:Level3;
+  count:int;
+}
+
+table Level1 {
+  nested:Level2;
+  label:string;
+}
+
+table DeepRoot {
+  top:Level1;
+  id:int;
+}
+root_type DeepRoot;

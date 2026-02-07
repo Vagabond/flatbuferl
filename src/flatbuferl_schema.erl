@@ -354,7 +354,7 @@ finalize_resolved_type(
 finalize_resolved_type(Other, _FieldId, _FieldName) ->
     Other.
 
-%% True only for primitive scalar types (11 canonical types + enums)
+%% True for primitive scalar types (11 canonical types + enums + fixed-size inline types)
 is_primitive_scalar(bool) -> true;
 is_primitive_scalar(int8) -> true;
 is_primitive_scalar(uint8) -> true;
@@ -368,6 +368,8 @@ is_primitive_scalar(float32) -> true;
 is_primitive_scalar(float64) -> true;
 is_primitive_scalar(#enum_resolved{}) -> true;
 is_primitive_scalar(#union_type_def{}) -> true;
+is_primitive_scalar(#struct_def{}) -> true;
+is_primitive_scalar(#array_def{}) -> true;
 is_primitive_scalar(_) -> false.
 
 %% Check if a resolved element type is a table (for vector element detection)

@@ -375,7 +375,6 @@ traverse_vector_for_update(TableRef, FieldId, ElemType, [Index | Rest], Buffer, 
                 end,
             case ActualIndex >= 0 andalso ActualIndex < Length of
                 true ->
-                    ElemSize = flatbuferl_reader:element_size(ElemType),
                     case ElemType of
                         Type when is_atom(Type) ->
                             case maps:get(Type, Defs, undefined) of
@@ -386,15 +385,27 @@ traverse_vector_for_update(TableRef, FieldId, ElemType, [Index | Rest], Buffer, 
                                         Buffer,
                                     ElemTableRef = {table, ElemOffset + RelOffset, Buffer},
                                     traverse_for_update(Rest, Buffer, Defs, Type, ElemTableRef);
+                                #struct_def{fields = Fields, total_size = StructSize} ->
+                                    %% Vector of structs (type name lookup) - use struct's actual size
+                                    ElemOffset = Start + (ActualIndex * StructSize),
+                                    traverse_nested_struct(ElemOffset, Fields, Rest, Buffer, Defs);
                                 _ when Rest == [] ->
                                     %% Scalar at end of path
-                                    {ok, Start + (ActualIndex * ElemSize), ElemType};
+                                    ElemSize = flatbuferl_reader:element_size(ElemType),
+                                    ElemOffset = Start + (ActualIndex * ElemSize),
+                                    {ok, ElemOffset, ElemType};
                                 _ ->
                                     {error, {not_traversable, Index, ElemType}}
                             end;
+                        #struct_def{fields = Fields, total_size = StructSize} ->
+                            %% Vector of structs - traverse into struct fields
+                            ElemOffset = Start + (ActualIndex * StructSize),
+                            traverse_nested_struct(ElemOffset, Fields, Rest, Buffer, Defs);
                         _ when Rest == [] ->
                             %% Scalar element type at end of path
-                            {ok, Start + (ActualIndex * ElemSize), ElemType};
+                            ElemSize = flatbuferl_reader:element_size(ElemType),
+                            ElemOffset = Start + (ActualIndex * ElemSize),
+                            {ok, ElemOffset, ElemType};
                         _ ->
                             {error, {not_traversable, Index, ElemType}}
                     end;

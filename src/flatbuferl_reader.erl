@@ -15,7 +15,6 @@
     read_scalar_field/4,
     read_ref_field/4,
     read_string_field/3,
-    read_struct_field/4,
     read_union_type_field/3,
     read_union_value_field/3
 ]).
@@ -178,33 +177,6 @@ read_string_field({TableOffset, VTableSize, VTableStart, Buffer}, VTableSlotOffs
             missing
     end.
 
-%% Fast path for inline struct fields - reads struct data directly
-%% VTableSlotOffset is precomputed as FieldId * 2
--spec read_struct_field(vtable(), non_neg_integer(), #struct_def{}, buffer()) ->
-    {ok, map()} | missing.
-read_struct_field(
-    {TableOffset, VTableSize, VTableStart, Buffer},
-    VTableSlotOffset,
-    #struct_def{fields = Fields},
-    _
-) ->
-    FieldOffsetPos = 4 + VTableSlotOffset,
-    case FieldOffsetPos < VTableSize of
-        true ->
-            FieldOffsetInBuffer = VTableStart + VTableSlotOffset,
-            <<_:FieldOffsetInBuffer/binary, FieldOffset:16/little-unsigned, _/binary>> = Buffer,
-            case FieldOffset of
-                0 ->
-                    missing;
-                _ ->
-                    FieldPos = TableOffset + FieldOffset,
-                    StructMap = read_struct_fields_fast(Buffer, FieldPos, Fields, #{}),
-                    {ok, StructMap}
-            end;
-        false ->
-            missing
-    end.
-
 %% Read scalar value - only canonical types (11 clauses)
 read_scalar(Buffer, Pos, bool) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
@@ -245,7 +217,18 @@ read_scalar(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
 %% Union type - ubyte discriminator
 read_scalar(Buffer, Pos, #union_type_def{}) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
-    {ok, Value}.
+    {ok, Value};
+%% Struct - inline fixed-size data
+read_scalar(Buffer, Pos, #struct_def{fields = Fields}) ->
+    StructMap = read_struct_fields_fast(Buffer, Pos, Fields, #{}),
+    {ok, StructMap};
+%% Array - inline fixed-size data
+read_scalar(Buffer, Pos, #array_def{total_size = TotalSize, as_binary = true}) ->
+    <<_:Pos/binary, Bin:TotalSize/binary, _/binary>> = Buffer,
+    {ok, Bin};
+read_scalar(Buffer, Pos, #array_def{element_type = ElemType, count = Count}) ->
+    {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
+    {ok, Elements}.
 
 %% Low-level field access by ID and type
 -spec get_field(table_ref(), field_id(), atom() | tuple(), buffer()) ->
@@ -480,7 +463,23 @@ read_scalar_value(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
 %% Union type - stored as uint8
 read_scalar_value(Buffer, Pos, #union_type_def{}) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
-    Value.
+    Value;
+%% Struct - inline fixed-size data, read fields directly
+read_scalar_value(Buffer, Pos, #struct_def{fields = Fields}) ->
+    read_struct_fields_fast(Buffer, Pos, Fields, #{});
+%% Array - inline fixed-size data
+read_scalar_value(Buffer, Pos, #array_def{total_size = TotalSize, as_binary = true}) ->
+    <<_:Pos/binary, Bin:TotalSize/binary, _/binary>> = Buffer,
+    Bin;
+read_scalar_value(Buffer, Pos, #array_def{element_type = ElemType, count = Count}) ->
+    ElemSize = element_size(ElemType),
+    read_array_inline(Buffer, Pos, ElemType, ElemSize, Count, []).
+
+read_array_inline(_Buffer, _Pos, _ElemType, _ElemSize, 0, Acc) ->
+    lists:reverse(Acc);
+read_array_inline(Buffer, Pos, ElemType, ElemSize, Count, Acc) ->
+    {ok, Value} = read_struct_value(Buffer, Pos, ElemType),
+    read_array_inline(Buffer, Pos + ElemSize, ElemType, ElemSize, Count - 1, [Value | Acc]).
 
 %% Read compound vector element value
 read_compound_value(Buffer, Pos, string) ->

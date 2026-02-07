@@ -506,3 +506,573 @@ fetch_undefined_for_missing_vector_test() ->
     Ctx = flatbuferl:new(Buffer, Schema),
     ?assertEqual([], flatbuferl_fetch:fetch(Ctx, [counts, '*'])),
     ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [counts, 0])).
+
+%% =============================================================================
+%% Struct Fetch Tests (exercises struct field reading paths)
+%% =============================================================================
+
+struct_field_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "struct Vec3 { x: float; y: float; z: float; }\n"
+        "table Entity { pos: Vec3; name: string; }\n"
+        "root_type Entity;\n"
+    ),
+    Data = #{pos => #{x => 1.5, y => 2.5, z => 3.5}, name => <<"test">>},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_struct_field_x_test() ->
+    Ctx = struct_field_ctx(),
+    X = flatbuferl_fetch:fetch(Ctx, [pos, x]),
+    ?assert(abs(X - 1.5) < 0.01).
+
+fetch_struct_field_y_test() ->
+    Ctx = struct_field_ctx(),
+    Y = flatbuferl_fetch:fetch(Ctx, [pos, y]),
+    ?assert(abs(Y - 2.5) < 0.01).
+
+fetch_struct_field_z_test() ->
+    Ctx = struct_field_ctx(),
+    Z = flatbuferl_fetch:fetch(Ctx, [pos, z]),
+    ?assert(abs(Z - 3.5) < 0.01).
+
+fetch_struct_full_test() ->
+    Ctx = struct_field_ctx(),
+    Pos = flatbuferl_fetch:fetch(Ctx, [pos]),
+    ?assert(abs(maps:get(x, Pos) - 1.5) < 0.01),
+    ?assert(abs(maps:get(y, Pos) - 2.5) < 0.01),
+    ?assert(abs(maps:get(z, Pos) - 3.5) < 0.01).
+
+%% =============================================================================
+%% Missing Struct Field Tests
+%% =============================================================================
+
+missing_struct_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "struct Vec3 { x: float; y: float; z: float; }\n"
+        "table Entity { pos: Vec3; name: string; }\n"
+        "root_type Entity;\n"
+    ),
+    %% Create entity without pos field
+    Data = #{name => <<"no_position">>},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_missing_struct_test() ->
+    Ctx = missing_struct_ctx(),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [pos])).
+
+fetch_missing_struct_field_test() ->
+    Ctx = missing_struct_ctx(),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [pos, x])).
+
+%% =============================================================================
+%% Long/Double Field Tests (exercises 64-bit types)
+%% =============================================================================
+
+large_types_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Data { big_int: long; big_uint: ulong; big_float: double; }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{
+        big_int => -9223372036854775808,
+        big_uint => 18446744073709551615,
+        big_float => 3.141592653589793
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_long_test() ->
+    Ctx = large_types_ctx(),
+    ?assertEqual(-9223372036854775808, flatbuferl_fetch:fetch(Ctx, [big_int])).
+
+fetch_ulong_test() ->
+    Ctx = large_types_ctx(),
+    ?assertEqual(18446744073709551615, flatbuferl_fetch:fetch(Ctx, [big_uint])).
+
+fetch_double_test() ->
+    Ctx = large_types_ctx(),
+    D = flatbuferl_fetch:fetch(Ctx, [big_float]),
+    ?assert(abs(D - 3.141592653589793) < 0.0000001).
+
+%% =============================================================================
+%% Error Path Tests (exercises error handling branches)
+%% =============================================================================
+
+fetch_unknown_field_error_test() ->
+    Ctx = struct_field_ctx(),
+    ?assertError({unknown_field, nonexistent}, flatbuferl_fetch:fetch(Ctx, [nonexistent])).
+
+fetch_unknown_nested_field_returns_undefined_test() ->
+    Ctx = struct_field_ctx(),
+    %% pos exists but 'w' doesn't exist in Vec3 - fetch returns undefined
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [pos, w])).
+
+fetch_cannot_traverse_scalar_test() ->
+    Ctx = large_types_ctx(),
+    %% big_int is a scalar, can't traverse into it
+    ?assertError({not_a_table, big_int, long}, flatbuferl_fetch:fetch(Ctx, [big_int, foo])).
+
+%% =============================================================================
+%% Sparse VTable Tests (fields missing from buffer)
+%% =============================================================================
+
+sparse_vtable_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Data { a: int (id: 0); b: int (id: 5); c: int (id: 10); }\n"
+        "root_type Data;\n"
+    ),
+    %% Only set 'a', leave b and c missing - vtable will be small
+    Data = #{a => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_sparse_present_field_test() ->
+    Ctx = sparse_vtable_ctx(),
+    ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])).
+
+fetch_sparse_missing_field_test() ->
+    Ctx = sparse_vtable_ctx(),
+    %% b has id:5, should be missing
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [b])).
+
+fetch_sparse_high_id_missing_test() ->
+    Ctx = sparse_vtable_ctx(),
+    %% c has id:10, vtable likely too small to even have slot
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [c])).
+
+%% =============================================================================
+%% Vector Out of Bounds Tests
+%% =============================================================================
+
+vector_oob_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Data { items: [int]; }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{items => [1, 2, 3]},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_vector_oob_positive_test() ->
+    Ctx = vector_oob_ctx(),
+    %% Index 10 is out of bounds for 3-element vector
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [items, 10])).
+
+fetch_vector_oob_negative_test() ->
+    Ctx = vector_oob_ctx(),
+    %% Index -10 is out of bounds
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [items, -10])).
+
+%% =============================================================================
+%% Empty Vector Tests
+%% =============================================================================
+
+empty_vector_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Data { items: [int]; name: string; }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{items => [], name => <<"test">>},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_empty_vector_wildcard_test() ->
+    Ctx = empty_vector_ctx(),
+    ?assertEqual([], flatbuferl_fetch:fetch(Ctx, [items, '*'])).
+
+fetch_empty_vector_size_test() ->
+    Ctx = empty_vector_ctx(),
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [items, '_size'])).
+
+fetch_empty_vector_index_test() ->
+    Ctx = empty_vector_ctx(),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [items, 0])).
+
+%% =============================================================================
+%% Union Vector Tests
+%% =============================================================================
+
+union_vector_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Sword { damage: int; }\n"
+        "table Shield { defense: int; }\n"
+        "union Equipment { Sword, Shield }\n"
+        "table Player { items: [Equipment]; }\n"
+        "root_type Player;\n"
+    ),
+    Data = #{
+        items => [#{damage => 50}, #{defense => 30}],
+        items_type => ['Sword', 'Shield']
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_union_vector_element_test() ->
+    Ctx = union_vector_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [items, 0]),
+    %% Fetch returns just the map contents, not a tuple
+    ?assertEqual(50, maps:get(damage, Result)).
+
+fetch_union_vector_second_element_test() ->
+    Ctx = union_vector_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [items, 1]),
+    ?assertEqual(30, maps:get(defense, Result)).
+
+fetch_union_vector_element_type_test() ->
+    Ctx = union_vector_fetch_ctx(),
+    %% Can get type separately with '_type'
+    ?assertEqual('Sword', flatbuferl_fetch:fetch(Ctx, [items, 0, '_type'])),
+    ?assertEqual('Shield', flatbuferl_fetch:fetch(Ctx, [items, 1, '_type'])).
+
+fetch_union_vector_wildcard_test() ->
+    Ctx = union_vector_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [items, '*']),
+    ?assertEqual(2, length(Result)).
+
+%% =============================================================================
+%% Table Vector Tests
+%% =============================================================================
+
+table_vector_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Item { name: string; value: int; }\n"
+        "table Inventory { items: [Item]; }\n"
+        "root_type Inventory;\n"
+    ),
+    Data = #{
+        items => [
+            #{name => <<"Sword">>, value => 100},
+            #{name => <<"Shield">>, value => 50}
+        ]
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_table_vector_element_test() ->
+    Ctx = table_vector_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [items, 0]),
+    ?assertEqual(<<"Sword">>, maps:get(name, Result)).
+
+fetch_table_vector_field_test() ->
+    Ctx = table_vector_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [items, 0, value]),
+    ?assertEqual(100, Result).
+
+fetch_table_vector_negative_index_test() ->
+    Ctx = table_vector_fetch_ctx(),
+    %% -1 is last element
+    Result = flatbuferl_fetch:fetch(Ctx, [items, -1, name]),
+    ?assertEqual(<<"Shield">>, Result).
+
+%% =============================================================================
+%% Nested Struct Tests
+%% =============================================================================
+
+nested_struct_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "struct Vec3 { x: float; y: float; z: float; }\n"
+        "table Entity { pos: Vec3; name: string; }\n"
+        "root_type Entity;\n"
+    ),
+    Data = #{pos => #{x => 1.0, y => 2.0, z => 3.0}, name => <<"test">>},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_nested_struct_field_test() ->
+    Ctx = nested_struct_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [pos, x]),
+    ?assert(abs(Result - 1.0) < 0.001).
+
+fetch_nested_struct_all_test() ->
+    Ctx = nested_struct_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [pos]),
+    ?assertEqual(3, map_size(Result)).
+
+%% =============================================================================
+%% Missing Nested Table Tests
+%% =============================================================================
+
+missing_nested_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Inner { x: int; y: int; }\n"
+        "table Outer { inner: Inner; name: string; }\n"
+        "root_type Outer;\n"
+    ),
+    %% Create without inner table
+    Data = #{name => <<"test">>},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_missing_nested_table_test() ->
+    Ctx = missing_nested_fetch_ctx(),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [inner])).
+
+fetch_missing_nested_table_field_test() ->
+    Ctx = missing_nested_fetch_ctx(),
+    %% Traversing into missing nested table
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [inner, x])).
+
+%% =============================================================================
+%% Array Type Tests
+%% =============================================================================
+
+array_type_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "struct Point { coords: [float:3]; }\n"
+        "table Data { pt: Point; }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{pt => #{coords => [1.0, 2.0, 3.0]}},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_array_field_test() ->
+    Ctx = array_type_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [pt, coords]),
+    ?assertEqual(3, length(Result)),
+    [X, Y, Z] = Result,
+    ?assert(abs(X - 1.0) < 0.001),
+    ?assert(abs(Y - 2.0) < 0.001),
+    ?assert(abs(Z - 3.0) < 0.001).
+
+%% =============================================================================
+%% Byte Array (Binary) Tests
+%% =============================================================================
+
+byte_array_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "struct Hash { data: [byte:4]; }\n"
+        "table Doc { hash: Hash; }\n"
+        "root_type Doc;\n"
+    ),
+    Data = #{hash => #{data => <<1, 2, 3, 4>>}},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_byte_array_test() ->
+    Ctx = byte_array_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [hash, data]),
+    ?assertEqual(<<1, 2, 3, 4>>, Result).
+
+%% =============================================================================
+%% Default Value Tests
+%% =============================================================================
+
+default_value_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Monster { hp: int = 100; mana: int = 50; name: string; }\n"
+        "root_type Monster;\n"
+    ),
+    %% Only set name, rely on defaults for hp/mana
+    Data = #{name => <<"Goblin">>},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_unset_field_with_default_test() ->
+    Ctx = default_value_fetch_ctx(),
+    %% hp wasn't set but has default 100 - fetch returns the default
+    ?assertEqual(100, flatbuferl_fetch:fetch(Ctx, [hp])).
+
+fetch_set_field_test() ->
+    Ctx = default_value_fetch_ctx(),
+    %% name was set
+    ?assertEqual(<<"Goblin">>, flatbuferl_fetch:fetch(Ctx, [name])).
+
+%% =============================================================================
+%% Enum Field Tests
+%% =============================================================================
+
+enum_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "enum Color : byte { Red = 0, Green = 1, Blue = 2 }\n"
+        "table Item { color: Color; value: int; }\n"
+        "root_type Item;\n"
+    ),
+    Data = #{color => 'Green', value => 100},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_enum_field_test() ->
+    Ctx = enum_fetch_ctx(),
+    %% Fetch returns raw enum value (1), not the symbolic name
+    Result = flatbuferl_fetch:fetch(Ctx, [color]),
+    ?assertEqual(1, Result).
+
+%% =============================================================================
+%% Deeply Nested Tests
+%% =============================================================================
+
+deeply_nested_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Inner { value: int; }\n"
+        "table Middle { inner: Inner; }\n"
+        "table Outer { middle: Middle; }\n"
+        "root_type Outer;\n"
+    ),
+    Data = #{middle => #{inner => #{value => 42}}},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_deeply_nested_test() ->
+    Ctx = deeply_nested_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [middle, inner, value]),
+    ?assertEqual(42, Result).
+
+%% =============================================================================
+%% Vector of Vectors Test
+%% =============================================================================
+
+nested_vector_fetch_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Row { values: [int]; }\n"
+        "table Matrix { rows: [Row]; }\n"
+        "root_type Matrix;\n"
+    ),
+    Data = #{
+        rows => [
+            #{values => [1, 2, 3]},
+            #{values => [4, 5, 6]}
+        ]
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_nested_vector_element_test() ->
+    Ctx = nested_vector_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [rows, 0, values, 1]),
+    ?assertEqual(2, Result).
+
+fetch_nested_vector_size_test() ->
+    Ctx = nested_vector_fetch_ctx(),
+    Result = flatbuferl_fetch:fetch(Ctx, [rows, '_size']),
+    ?assertEqual(2, Result).
+
+%% =============================================================================
+%% Additional Missing Field Tests
+%% =============================================================================
+
+sparse_with_many_missing_ctx() ->
+    {ok, Schema} = flatbuferl:parse_schema(
+        "table Data { a: int (id: 0); b: int (id: 3); c: int (id: 7); d: int (id: 15); }\n"
+        "root_type Data;\n"
+    ),
+    %% Only set 'a', all others will be missing from vtable
+    Data = #{a => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, Schema)),
+    flatbuferl:new(Buffer, Schema).
+
+fetch_sparse_many_missing_test() ->
+    Ctx = sparse_with_many_missing_ctx(),
+    ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [b])),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [c])),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [d])).
+
+%% =============================================================================
+%% VTable Too Small Tests (Schema Evolution)
+%% =============================================================================
+
+%% Tests the case where a buffer was created with an older schema
+%% and is read with a newer schema that has more fields.
+vtable_too_small_test() ->
+    %% Create buffer with minimal schema (only field id:0)
+    {ok, OldSchema} = flatbuferl:parse_schema(
+        "table Data { a: int (id: 0); }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{a => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, OldSchema)),
+
+    %% Read with extended schema (has field id:5 which doesn't exist in vtable)
+    {ok, NewSchema} = flatbuferl:parse_schema(
+        "table Data { a: int (id: 0); b: int (id: 5); }\n"
+        "root_type Data;\n"
+    ),
+    Ctx = flatbuferl:new(Buffer, NewSchema),
+
+    %% Field 'a' exists and has value
+    ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
+    %% Field 'b' has id:5 which is beyond vtable size - returns undefined
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [b])).
+
+%% Similar test for nested table reference fields
+vtable_too_small_ref_test() ->
+    {ok, OldSchema} = flatbuferl:parse_schema(
+        "table Inner { x: int; }\n"
+        "table Data { a: int (id: 0); }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{a => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, OldSchema)),
+
+    {ok, NewSchema} = flatbuferl:parse_schema(
+        "table Inner { x: int; }\n"
+        "table Data { a: int (id: 0); inner: Inner (id: 5); }\n"
+        "root_type Data;\n"
+    ),
+    Ctx = flatbuferl:new(Buffer, NewSchema),
+
+    ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [inner])).
+
+%% Test vtable too small for struct field
+vtable_too_small_struct_test() ->
+    {ok, OldSchema} = flatbuferl:parse_schema(
+        "struct Vec3 { x: float; y: float; z: float; }\n"
+        "table Data { a: int (id: 0); }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{a => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, OldSchema)),
+
+    {ok, NewSchema} = flatbuferl:parse_schema(
+        "struct Vec3 { x: float; y: float; z: float; }\n"
+        "table Data { a: int (id: 0); pos: Vec3 (id: 5); }\n"
+        "root_type Data;\n"
+    ),
+    Ctx = flatbuferl:new(Buffer, NewSchema),
+
+    ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [pos])).
+
+%% Test vtable too small for union type field
+vtable_too_small_union_test() ->
+    {ok, OldSchema} = flatbuferl:parse_schema(
+        "table Sword { damage: int; }\n"
+        "union Weapon { Sword }\n"
+        "table Data { a: int (id: 0); }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{a => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, OldSchema)),
+
+    {ok, NewSchema} = flatbuferl:parse_schema(
+        "table Sword { damage: int; }\n"
+        "union Weapon { Sword }\n"
+        "table Data { a: int (id: 0); weapon: Weapon (id: 6); }\n"
+        "root_type Data;\n"
+    ),
+    Ctx = flatbuferl:new(Buffer, NewSchema),
+
+    ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [weapon])).
+
+%% Test vtable too small for vector field
+vtable_too_small_vector_test() ->
+    {ok, OldSchema} = flatbuferl:parse_schema(
+        "table Data { a: int (id: 0); }\n"
+        "root_type Data;\n"
+    ),
+    Data = #{a => 42},
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, OldSchema)),
+
+    {ok, NewSchema} = flatbuferl:parse_schema(
+        "table Data { a: int (id: 0); items: [int] (id: 5); }\n"
+        "root_type Data;\n"
+    ),
+    Ctx = flatbuferl:new(Buffer, NewSchema),
+
+    ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
+    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [items])).
