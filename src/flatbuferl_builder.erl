@@ -331,11 +331,22 @@ encode_root_vtable_after(
     LayoutCache
 ) ->
     %% Root table starts right after header (no vtable before it)
-    TablePos = HeaderSize,
+    %% Adjust for 8-byte field alignment (same as encode_root_vtable_before)
+    PaddedSlots = place_fields_backward(AllFields, TableSizeWithPadding),
+    First8ByteOffset = find_first_8byte_field_offset(AllFields, PaddedSlots),
+    TablePos4 = HeaderSize,
+    TablePos = case First8ByteOffset of
+        none -> TablePos4;
+        Offset ->
+            case (TablePos4 + Offset) rem 8 of
+                0 -> TablePos4;
+                _ -> TablePos4 + 4
+            end
+    end,
+    PreTablePad = TablePos - HeaderSize,
     RefDataStart = TablePos + TableSizeWithPadding,
 
     %% Build field layout - need slots with TableSizeWithPadding for this path
-    PaddedSlots = place_fields_backward(AllFields, TableSizeWithPadding),
     FieldLayout = [F#field{offset = maps:get(F#field.id, PaddedSlots)} || F <- AllFields],
     SortedLayout = lists:sort(fun(A, B) -> A#field.offset =< B#field.offset end, FieldLayout),
 
@@ -363,6 +374,7 @@ encode_root_vtable_after(
     [
         <<TablePos:32/little-unsigned>>,
         file_id_bin(FileId),
+        <<0:(PreTablePad * 8)>>,
         <<SOffset:32/little-signed>>,
         TableData,
         <<0:(TablePadding * 8)>>,
@@ -1085,15 +1097,49 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
 %% Calculate alignment padding needed before a ref
 calc_ref_align_padding(Type, Value, Pos, Defs, LayoutCache) ->
     %% Check for nested table alignment.
-    %% Nested table blobs have their vtable internally padded to 4 bytes,
-    %% so we only need the blob start (Pos) to be 4-byte aligned.
     case is_nested_table_type_cached(Type, Value, Defs, LayoutCache) of
-        {true, _VTableSize} ->
-            (4 - (Pos rem 4)) rem 4;
+        {true, PVS} ->
+            %% Compute exact blob_start alignment for 8-byte field support.
+            %% For tables with 8-byte fields: need (blob_start + PVS + First8Off) % 8 == 0
+            case nested_table_first_8byte_info(Type, Value, Defs) of
+                none ->
+                    %% No 8-byte fields — just 4-byte align
+                    (4 - (Pos rem 4)) rem 4;
+                First8Off ->
+                    %% Target: Pos % 8 == (8 - (PVS + First8Off) % 8) % 8
+                    Target = (8 - ((PVS + First8Off) rem 8)) rem 8,
+                    (Target - (Pos rem 8) + 8) rem 8
+            end;
         false ->
             %% Check for vector 8-byte element alignment
             vector_8byte_align_padding(Type, Pos)
     end.
+
+%% Find the first 8-byte field offset in a nested table, computing layout if needed.
+%% Returns the offset or 'none' if no 8-byte fields.
+nested_table_first_8byte_info(Type, Value, Defs) when is_atom(Type) ->
+    case maps:get(Type, Defs, undefined) of
+        #table_def{scalars = ScalarDefs} = TableDef ->
+            Has8 = lists:any(
+                fun(#field_def{inline_size = S}) -> S == 8 end,
+                ScalarDefs
+            ),
+            case Has8 of
+                false -> none;
+                true ->
+                    {_, _, _, AllFields, _BTS, Slots} =
+                        layout_for_value(Value, TableDef, Defs),
+                    find_first_8byte_field_offset(AllFields, Slots)
+            end;
+        _ ->
+            none
+    end;
+nested_table_first_8byte_info(#union_value_def{}, #{type := MemberType, value := Val}, Defs) ->
+    nested_table_first_8byte_info(MemberType, Val, Defs);
+nested_table_first_8byte_info(#union_value_partial{}, #{type := MemberType, value := Val}, Defs) ->
+    nested_table_first_8byte_info(MemberType, Val, Defs);
+nested_table_first_8byte_info(_, _, _) ->
+    none.
 
 %% Calculate alignment padding needed for vectors with 8-byte elements
 %% Returns padding bytes needed so that vector data (starting at pos+4) is 8-byte aligned
