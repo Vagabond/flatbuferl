@@ -726,20 +726,17 @@ find_first_8byte_field_offset(AllFields, Slots) ->
     end.
 
 %% Calculate ref padding for field list (without offsets)
-%% Ensure nested table's SOFFSET is 4-byte aligned (not just vtable start)
-%% Position of soffset = Pos + VTableSize, which must be 4-byte aligned
+%% Nested table blobs have vtables internally padded to 4 bytes,
+%% so we only need Pos (blob start) to be 4-byte aligned.
 calc_ref_padding_for_refs([], _Pos, _Defs) ->
     0;
 calc_ref_padding_for_refs([#field{type = Type, value = Value} | _], Pos, Defs) when
     is_atom(Type), is_map(Value)
 ->
     case maps:get(Type, Defs, undefined) of
-        #table_def{max_id = MaxId} ->
-            %% Calculate nested vtable size using precomputed MaxId
-            VTableSize = calc_vtable_size(MaxId),
-            %% Pad to make (Pos + VTableSize) 4-byte aligned
-            SOffsetPos = Pos + VTableSize,
-            (4 - (SOffsetPos rem 4)) rem 4;
+        #table_def{} ->
+            %% Pad to make Pos (blob start) 4-byte aligned
+            (4 - (Pos rem 4)) rem 4;
         _ ->
             0
     end;
@@ -848,19 +845,17 @@ build_table_data2(AllFields, Slots, BaseTableSize, TablePos, Defs, LayoutCache) 
     end.
 
 %% Calculate padding needed before ref data (using layout cache)
-%% Ensure nested table's SOFFSET is 4-byte aligned (Pos + VTableSize must be 4-byte aligned)
+%% Nested table blobs have vtables internally padded to 4 bytes,
+%% so we only need Pos (blob start) to be 4-byte aligned.
 calc_ref_padding_cached([], _Pos, _Defs, _Cache) ->
     0;
 calc_ref_padding_cached([#field{type = Type, value = Value} | _], Pos, Defs, #layout_cache{}) when
     is_atom(Type), is_map(Value)
 ->
     case maps:get(Type, Defs, undefined) of
-        #table_def{max_id = MaxId} ->
-            %% VTable size only depends on MaxId, no need to check cache
-            VTableSize = calc_vtable_size(MaxId),
-            %% Pad to make (Pos + VTableSize) 4-byte aligned
-            SOffsetPos = Pos + VTableSize,
-            (4 - (SOffsetPos rem 4)) rem 4;
+        #table_def{} ->
+            %% Pad to make Pos (blob start) 4-byte aligned
+            (4 - (Pos rem 4)) rem 4;
         _ ->
             0
     end;
@@ -1089,11 +1084,12 @@ encode_refs_with_positions(RefFields, RefDataStart, Defs, LayoutCache, EncoderFu
 
 %% Calculate alignment padding needed before a ref
 calc_ref_align_padding(Type, Value, Pos, Defs, LayoutCache) ->
-    %% Check for nested table alignment (soffset at pos+vtable_size must be 4-byte aligned)
+    %% Check for nested table alignment.
+    %% Nested table blobs have their vtable internally padded to 4 bytes,
+    %% so we only need the blob start (Pos) to be 4-byte aligned.
     case is_nested_table_type_cached(Type, Value, Defs, LayoutCache) of
-        {true, VTableSize} ->
-            SOffsetPos = Pos + VTableSize,
-            (4 - (SOffsetPos rem 4)) rem 4;
+        {true, _VTableSize} ->
+            (4 - (Pos rem 4)) rem 4;
         false ->
             %% Check for vector 8-byte element alignment
             vector_8byte_align_padding(Type, Pos)
@@ -1123,13 +1119,16 @@ vector_8byte_align_padding(_, _) ->
     0.
 
 %% Check if type is a nested table (vtable is at START, need offset to point to soffset)
-%% Returns {true, VTableSize} or false
-%% VTable size only depends on MaxId (from schema), not field values
+%% Returns {true, PaddedVTableSize} or false
+%% VTable size only depends on MaxId (from schema), not field values.
+%% Returns the padded vtable size (aligned to 4 bytes) since encode_nested_table
+%% pads the vtable to ensure the soffset is 4-byte aligned relative to blob start.
 is_nested_table_type_cached(Type, _Value, Defs, _Cache) when is_atom(Type) ->
     case maps:get(Type, Defs, undefined) of
         #table_def{max_id = MaxId} ->
             VTableSize = calc_vtable_size(MaxId),
-            {true, VTableSize};
+            PaddedVTableSize = align_offset(VTableSize, 4),
+            {true, PaddedVTableSize};
         _ ->
             false
     end;
@@ -1652,17 +1651,27 @@ encode_nested_table(TableType, Map, Defs, _LayoutCache) ->
         layout_for_value(Map, TableDef, Defs),
 
     VTableSize = vtable_size(VTable),
+    %% Pad vtable to 4-byte boundary so that soffset is 4-byte aligned
+    %% relative to the blob start. This is critical for nested-nested tables:
+    %% the outer code ensures blob_start is 4-byte aligned, and padding the
+    %% vtable ensures soffset (at blob_start + PaddedVTableSize) is also
+    %% 4-byte aligned. Inner ref padding then uses correct local coordinates.
+    VTablePad = (4 - (VTableSize rem 4)) rem 4,
+    PaddedVTableSize = VTableSize + VTablePad,
 
-    %% Layout: vtable | soffset | table_data | ref_data
+    %% Layout: vtable | vtable_pad | soffset | table_data | ref_data
     %% soffset is positive, pointing back to vtable start
     {TableData, RefDataIo} = build_table_data2(
-        AllFields, Slots, BaseTableSize, VTableSize, Defs, #layout_cache{}
+        AllFields, Slots, BaseTableSize, PaddedVTableSize, Defs, #layout_cache{}
     ),
 
-    %% Positive = backward to vtable at start
-    SOffset = VTableSize,
+    %% Positive = backward to vtable at start (includes pad)
+    SOffset = PaddedVTableSize,
 
-    [VTable, <<SOffset:32/little-signed>>, TableData, RefDataIo].
+    case VTablePad of
+        0 -> [VTable, <<SOffset:32/little-signed>>, TableData, RefDataIo];
+        _ -> [VTable, <<0:(VTablePad * 8)>>, <<SOffset:32/little-signed>>, TableData, RefDataIo]
+    end.
 
 %% =============================================================================
 %% Scalar Encoding
