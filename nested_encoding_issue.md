@@ -1,206 +1,155 @@
 # FlatBuffer Scalar Alignment Bug in flatbuferl
 
+## Status: RESOLVED (2026-03-20)
+
 ## Summary
 
-`flatbuferl_builder.erl` caps field alignment at 4 bytes, causing 8-byte scalar fields (`long`, `ulong`, `int64`, `uint64`, `double`, `float64`) to be placed at 4-byte-aligned positions instead of 8-byte-aligned positions. This violates the FlatBuffer specification and causes the Rust FlatBuffer verifier to reject the output.
+`flatbuferl_builder.erl` was missing 8-byte absolute alignment adjustments for two code paths: the vtable-sharing root path (`encode_root_vtable_after`) and nested tables (via `calc_ref_align_padding`). This caused 8-byte scalar fields (`long`, `ulong`, `int64`, `uint64`, `double`, `float64`) to land at 4-byte-aligned absolute buffer positions instead of 8-byte-aligned positions. This violates the FlatBuffer specification and causes the Rust FlatBuffer verifier to reject the output.
 
-The bug is invisible within the Erlang ecosystem (encode→decode roundtrips work fine because flatbuferl's reader tolerates misalignment) but manifests immediately when buffers cross language boundaries to Rust, C++, or any other implementation with strict verification.
+The bug is invisible within the Erlang ecosystem (encode/decode roundtrips work fine because flatbuferl's reader tolerates misalignment) but manifests immediately when buffers cross language boundaries to Rust, C++, or any other implementation with strict verification.
 
-## Root Cause
+## Root Cause Analysis
 
-**File:** `src/flatbuferl_builder.erl`
-**Function:** `place_fields_backward/2` (line 796)
-**The bug:** Line 799
+### How FlatBuffers alignment actually works
+
+The FlatBuffer spec requires 8-byte scalars to be at 8-byte-aligned **absolute buffer positions** (not table-relative). The reference compiler (`flatc`) achieves this through two mechanisms:
+
+1. **Table-relative placement uses `min(Size, 4)`** — fields within a table are placed with at most 4-byte relative alignment. This is intentional and matches flatc.
+
+2. **Table absolute position is adjusted** — the table's start position in the buffer is shifted (by 0 or 4 bytes) to ensure the first 8-byte field lands on an 8-byte boundary. Since all 8-byte fields placed with `min(Size, 4)` have the same residue mod 8, fixing the first one fixes all of them.
+
+### Initial misdiagnosis
+
+The original analysis (below, kept for reference) identified `min(Size, 4)` in `place_fields_backward` as the bug. This was incorrect — `min(Size, 4)` is the correct table-relative alignment, matching `flatc`. Changing it to 8 produces correct alignment but different byte layouts from `flatc`, breaking binary-match tests and producing unnecessarily padded tables.
+
+### Actual bugs
+
+The root table's vtable-before path (`encode_root_vtable_before`) already had the absolute position adjustment. Two other paths were missing it:
+
+| # | Path | Function | Issue |
+|---|------|----------|-------|
+| 1 | Root vtable-after (vtable sharing) | `encode_root_vtable_after` | `TablePos = HeaderSize` with no 8-byte adjustment |
+| 2 | Nested tables | `calc_ref_align_padding` | Blob start padded to 4-byte only, not accounting for 8-byte fields |
+
+## Resolution
+
+### Fix 1: `encode_root_vtable_after` (~line 333)
+
+Added the same `find_first_8byte_field_offset` + table position adjustment that `encode_root_vtable_before` already had. When the table has 8-byte fields, `TablePos` is shifted by +4 when needed, and padding bytes are emitted between the header and soffset.
 
 ```erlang
-place_fields_backward(Fields, TableSize) ->
-    {Slots, _} = lists:foldl(
-        fun(#field{id = Id, size = Size}, {Acc, EndPos}) ->
-            Align = min(Size, 4),    %% <-- BUG: caps alignment at 4
-            StartPos = EndPos - Size,
-            AlignedStart = align_down(StartPos, Align),
-            {Acc#{Id => AlignedStart}, AlignedStart}
-        end,
-        {#{}, TableSize},
-        Fields
-    ),
-    Slots.
+%% Root table starts right after header (no vtable before it)
+TablePos4 = HeaderSize,
+
+%% If table has 8-byte fields, ensure they're 8-byte aligned in the buffer
+PaddedSlots = place_fields_backward(AllFields, TableSizeWithPadding),
+First8ByteOffset = find_first_8byte_field_offset(AllFields, PaddedSlots),
+TablePos =
+    case First8ByteOffset of
+        none ->
+            TablePos4;
+        Offset ->
+            case (TablePos4 + Offset) rem 8 of
+                0 -> TablePos4;
+                _ -> TablePos4 + 4
+            end
+    end,
+PreTablePad = TablePos - HeaderSize,
 ```
 
-The `min(Size, 4)` expression limits alignment to 4 bytes. For 8-byte fields (Size=8), this produces `Align = 4` instead of the correct `Align = 8`. The field is then placed at a 4-byte boundary which may not be an 8-byte boundary.
+### Fix 2: `calc_ref_align_padding` (~line 1101)
 
-### Why root tables sometimes work
-
-The root table path (`encode_root_vtable_before`, lines 284-298) has a separate alignment adjustment:
+For nested tables with 8-byte fields, the blob start alignment is now computed precisely so that `blob_start + PaddedVTableSize + first_8byte_field_offset` is 8-byte aligned. This uses a new helper `nested_table_first_8byte_offset/3` that calls `layout_for_value` to get the actual field layout for the specific value being encoded.
 
 ```erlang
-First8ByteOffset = find_first_8byte_field_offset(AllFields, Slots),
-TablePos = case First8ByteOffset of
-    none -> TablePos4;
-    Offset ->
-        case (TablePos4 + Offset) rem 8 of
-            0 -> TablePos4;
-            _ -> TablePos4 + 4
-        end
-end,
+calc_ref_align_padding(Type, Value, Pos, Defs, LayoutCache) ->
+    case is_nested_table_type_cached(Type, Value, Defs, LayoutCache) of
+        {true, PaddedVTableSize} ->
+            %% If nested table has 8-byte fields, align blob start so that
+            %% (blob_start + PaddedVTableSize + first_8byte_offset) is 8-byte aligned
+            case nested_table_first_8byte_offset(Type, Value, Defs) of
+                none ->
+                    (4 - (Pos rem 4)) rem 4;
+                First8ByteOffset ->
+                    NeededMod = (8 - ((PaddedVTableSize + First8ByteOffset) rem 8)) rem 8,
+                    (NeededMod - (Pos rem 8) + 8) rem 8
+            end;
+        false ->
+            vector_8byte_align_padding(Type, Pos)
+    end.
 ```
 
-This adjusts the **table start position** to ensure the *first* 8-byte field lands on an 8-byte boundary. However, it only fixes the first 8-byte field — if there are multiple 8-byte fields and the spacing between them is not a multiple of 8 (due to intervening fields of other sizes), subsequent 8-byte fields will be misaligned.
+The key insight: `NeededMod` is the required value of `blob_start rem 8`. When `PaddedVTableSize + First8ByteOffset` is already 0 mod 8, `NeededMod` is 0 (blob needs 8-byte alignment). When it's 4 mod 8, `NeededMod` is 4 (blob needs to be at 4 mod 8). This handles all cases precisely.
 
-### Why nested tables always fail
+### What was NOT changed (and why)
 
-The nested table path (`encode_nested_table`, line 1647) does NOT have the `find_first_8byte_field_offset` adjustment at all. Nested tables are laid out with `place_fields_backward` only, which caps at 4-byte alignment. Any nested table containing a `long`, `ulong`, `double`, etc. will produce misaligned output.
+- **`min(Size, 4)` in `place_fields_backward`, `calc_all_present_layout`, and `adjust_slots_for_missing`** — This is correct. `flatc` uses the same table-relative alignment. Changing it produces valid buffers but breaks binary-match tests against `flatc` and adds unnecessary table padding.
 
-### Why `encode_root_vtable_after` (vtable-sharing path) also fails
+- **`BaseTableSize` calculations** — Unchanged. The formula `4 + align_offset(RawSize, 4)` matches `flatc`.
 
-The vtable-sharing path (line 321) calls `place_fields_backward` for field layout and has no 8-byte alignment adjustment. Root tables that take this path will also misalign 8-byte fields.
+- **`encode_nested_table` vtable padding** — Kept at 4-byte alignment. The vtable padding must agree with `is_nested_table_type_cached` (which returns the padded vtable size for uoffset calculations). Adjusting vtable padding would require a coordinated change to both functions; adjusting blob start is simpler and equally correct.
 
-## Reproduction
+- **Vtable format, field ordering, soffset encoding** — All correct already.
 
-### Test case: `game_state.fbs` (existing schema)
+### Approaches that were tried and rejected
 
-The test file `test/complex_schemas/game_state.fbs` defines a `GameData` table with 21 reference fields followed by two `long` fields:
+1. **Changing `min(Size, 4)` to 8-byte table-relative alignment** — Produces valid buffers but different layouts from `flatc`. Breaks `all_scalars_binary_match` and `all_types_binary_match` tests. Also requires changing `BaseTableSize` to `align_offset(4 + RawSize, 8)` to prevent backward placement from pushing small fields into the soffset area. Too invasive for no benefit since `flatc` itself uses `min(Size, 4)`.
 
-```flatbuffers
-table GameData {
-  workers:Workers;            // ref (4 bytes in table)
-  trophies:int;               // 4 bytes
-  academyTechnologies:[Technology];  // ref
-  arsenalTechnologies:[Technology];  // ref
-  ships:[Ship];               // ref
-  // ... 16 more ref fields ...
-  nextPirateAttack:long;      // 8 bytes -- MISALIGNED
-  // ... more refs ...
-  lastPvpAttackTime:long;     // 8 bytes -- MISALIGNED
-  // ...
-}
-```
+2. **Adding vtable padding in `encode_nested_table`** — Would require `is_nested_table_type_cached` to return the matching padded vtable size, but that function doesn't have access to the specific value's field layout. Mismatch between the two causes incorrect uoffsets.
 
-The `place_fields_backward` layout (working backward from TableSize):
-1. All 21 ref fields occupy 84 bytes (21 × 4), each 4-byte aligned ✓
-2. `trophies` (int) occupies 4 bytes, 4-byte aligned ✓
-3. `fortressLevel` (byte) occupies 1 byte + 3 padding ✓
-4. soffset occupies 4 bytes (offset 0-3 of table data)
-5. Table data starts at 4 bytes into the table object
+3. **Simple 8-byte blob alignment** — Padding blob start to 8 unconditionally doesn't work when `PaddedVTableSize + First8ByteOffset` is 4 mod 8 (the blob needs to be at 4 mod 8, not 0 mod 8).
 
-Total before first `long`: 4 (soffset) + 4 (byte+pad) + 4 (int) + 84 (refs) = 96 bytes.
+## Reproduction (historical)
 
-If the table starts at an 8-byte-aligned position (e.g., byte 80), then `nextPirateAttack` is at absolute byte 80 + 96 = 176, which IS 8-byte aligned (176 % 8 = 0). But the backward layout places fields starting from the END of the table, and the actual position depends on the exact field ordering computed by `place_fields_backward`.
+### Test case: `game_state.fbs`
 
-In practice, the diagnostic output from the alignment test shows:
-- `nextPirateAttack` lands at absolute byte **172** (172 % 8 = 4) — MISALIGNED
-- `lastPvpAttackTime` lands at absolute byte **180** (180 % 8 = 4) — MISALIGNED
+The test file `test/complex_schemas/game_state.fbs` defines a `GameData` table with 21 reference fields and two `long` fields. Before the fix, the diagnostic output showed:
+- `nextPirateAttack` at absolute byte **172** (172 % 8 = 4) -- MISALIGNED
+- `lastPvpAttackTime` at absolute byte **180** (180 % 8 = 4) -- MISALIGNED
 
-### Running the test
+The root cause: `GameData` is a nested table inside `GameStateRoot`. The blob start for the nested table was 4-byte aligned but not 8-byte aligned. With PaddedVTableSize = 52 and first 8-byte field at table-relative offset 92, the absolute position was `blob_start + 52 + 92 = blob_start + 144`. Since 144 is 0 mod 8, the blob start needed to be 0 mod 8, but was only guaranteed 4 mod 8.
+
+### Running the tests
 
 ```bash
 cd flatbuferl
-rebar3 eunit --module=alignment_verification_tests
+rebar3 eunit --module=alignment_verification_tests  # 15 alignment tests
+rebar3 eunit                                         # full suite (728 tests)
 ```
 
-Expected output: `game_state_nested_alignment_test` FAILS with alignment violations on `long` fields.
-
-### Protocol schema reproduction
-
-The `test/complex_schemas/protocol.fbs` (copied from `runner/priv/protocol.fbs`) defines the production messages. The `CommitRoundRequest` message has:
-
-```flatbuffers
-table CommitRoundRequest {
-    service_id: ServiceId;       // nested table ref
-    round: uint64;               // 8 bytes
-    randomness: [ubyte];         // ref
-    timestamp_ms: uint64;        // 8 bytes
-    transactions: [Transaction]; // ref
-    checkpoint: bool;            // 1 byte
-    epoch_transition: EpochTransition; // ref
-}
-```
-
-The Rust verifier reports: `Type u64 at position 84 is unaligned` for the `round` field.
+All 728 tests pass after the fix, including all 15 alignment verification tests and all binary-match tests against `flatc`.
 
 ## Impact
 
 | Scenario | Impact |
 |----------|--------|
-| Erlang→Erlang roundtrip | No impact (flatbuferl reader tolerates misalignment) |
-| Erlang→Rust (wasvm-rs) | **Breaks**: Rust FlatBuffer verifier rejects the buffer |
-| Erlang→C++ | **Breaks**: C++ verifier rejects the buffer |
-| Erlang→Java/Go/etc. | Likely breaks (most verifiers are strict) |
-| Any table with `long`/`ulong`/`double`/`float64` + enough preceding fields | Affected |
-| Tables with only `int`/`uint`/`string`/`bool` and nested tables | Not affected (4-byte alignment is sufficient) |
+| Erlang-to-Erlang roundtrip | No impact (flatbuferl reader tolerates misalignment) |
+| Erlang-to-Rust (wasvm-rs) | **Fixed**: Rust FlatBuffer verifier now accepts the buffer |
+| Erlang-to-C++ | **Fixed**: C++ verifier now accepts the buffer |
+| Erlang-to-Java/Go/etc. | **Fixed**: All compliant verifiers should accept |
+| Any table with `long`/`ulong`/`double`/`float64` | Fixed for root (both paths) and nested tables |
+| Tables with only `int`/`uint`/`string`/`bool` | Not affected (4-byte alignment was already sufficient) |
 
-## Recommended Fix
-
-### Minimal fix (line 799)
-
-Change `place_fields_backward` to respect natural alignment:
-
-```erlang
-%% Before (buggy):
-Align = min(Size, 4),
-
-%% After (fixed):
-Align = case Size of
-    8 -> 8;   % long, ulong, double, float64
-    _ -> min(Size, 4)
-end,
-```
-
-This ensures 8-byte fields are placed at 8-byte boundaries within the table data area. The `align_down/2` function on line 803 already handles the actual alignment math correctly — it just receives the wrong alignment value from `min(Size, 4)`.
-
-### Additional fix: nested table 8-byte adjustment
-
-The `encode_nested_table` function (line 1647) should add the same `find_first_8byte_field_offset` adjustment that `encode_root_vtable_before` uses (lines 288-298). This ensures the nested table's absolute position in the buffer places the first 8-byte field correctly.
-
-However, the `place_fields_backward` fix alone may be sufficient if the table's internal layout correctly spaces 8-byte fields at 8-byte intervals. The table start position only matters for the absolute alignment — the relative spacing between fields is what `place_fields_backward` controls.
-
-### Comprehensive fix (recommended)
-
-The FlatBuffer spec's reference implementation (`flatc`) uses a different strategy: it sorts fields by size (largest first) within each table, which naturally minimizes padding and ensures large fields are placed first (at the most-aligned positions). This is more efficient but would be a larger change to the builder.
-
-A pragmatic approach:
-
-1. **Fix `place_fields_backward`** (line 799): `Align = case Size of 8 -> 8; _ -> min(Size, 4) end`
-2. **Fix `encode_nested_table`** (line 1647): Add 8-byte alignment adjustment for nested tables containing `long`/`double` fields, similar to lines 288-298
-3. **Fix `encode_root_vtable_after`** (line 321): Add the same 8-byte adjustment for the vtable-sharing path
-4. **Verify with the alignment test suite**: `rebar3 eunit --module=alignment_verification_tests` — all tests should pass after the fix
-
-### What NOT to change
-
-- The 4-binary_match tests that were skipped compare exact byte layout against `flatc`. The fix may produce different (but valid) padding than `flatc`. These tests should be updated to verify structural validity rather than byte-exact equality.
-- The vtable format is correct — vtable entries are u16 and always 2-byte aligned.
-- The vtable padding fix (already applied in this fork) for nested table offsets is correct and should be kept.
-
-## Test Coverage
-
-The test file `test/alignment_verification_tests.erl` contains 15 tests:
-
-| Test | Schema | What it checks | Expected result |
-|------|--------|---------------|-----------------|
-| `game_state_nested_alignment_test` | game_state.fbs | Deeply nested tables with `long` fields | **FAILS** (exposes the bug) |
-| `protocol_envelope_commit_round_test` | protocol.fbs | CommitRoundRequest with `uint64` round | Passes (happens to align) |
-| `protocol_envelope_init_service_test` | protocol.fbs | InitServiceRequest with nested ServiceId | Passes (happens to align) |
-| `protocol_envelope_deploy_test` | protocol.fbs | DeployRequest | Passes |
-| `protocol_envelope_shutdown_test` | protocol.fbs | ShutdownRequest (no nested tables) | Passes |
-| `scalar_alignment_test` | protocol.fbs | Mixed scalar types | Passes |
-| `multi_u64_alignment_test` | protocol.fbs | Multiple u64 fields | Passes |
-| `deep_nesting_alignment_test` | protocol.fbs | 4 levels of nesting | Passes |
-| `commit_round_direct_known_positions_test` | protocol.fbs | CRR as root (not wrapped in Envelope) | Passes |
-| `many_refs_then_i64_alignment_test` | protocol.fbs | 24-field table mimicking GameData | Passes |
-| + 5 more synthetic tests | protocol.fbs | Various field patterns | Pass |
-
-The protocol tests pass because the `Envelope` union wrapper adds enough padding that inner fields happen to be aligned for the specific field counts tested. The `game_state.fbs` test fails because `GameData` has 21 ref fields which shift the i64 fields to 4 mod 8.
-
-**After fixing `place_fields_backward`**, all 15 tests should pass. The `game_state_nested_alignment_test` is the regression gate.
-
-## Files Changed in This Fork
+## Files Changed
 
 | File | Change | Status |
 |------|--------|--------|
-| `src/flatbuferl_builder.erl` | Vtable padding for nested tables (lines 1654-1660) | Applied, tested |
-| `src/flatbuferl_builder.erl` line 799 | Scalar alignment fix (`min(Size, 4)` → `8` for 8-byte fields) | **NOT YET APPLIED** |
-| `test/alignment_verification_tests.erl` | 15 alignment verification tests | Added |
-| `test/complex_schemas/protocol.fbs` | Copy of runner's protocol schema for testing | Added |
+| `src/flatbuferl_builder.erl` ~line 333 | 8-byte table position adjustment in `encode_root_vtable_after` | **Applied, tested** |
+| `src/flatbuferl_builder.erl` ~line 1101 | Exact blob start alignment in `calc_ref_align_padding` | **Applied, tested** |
+| `src/flatbuferl_builder.erl` ~line 1119 | New helper `nested_table_first_8byte_offset/3` | **Applied, tested** |
+| `test/alignment_verification_tests.erl` | 15 alignment verification tests | Added (pre-existing) |
+| `test/complex_schemas/protocol.fbs` | Copy of runner's protocol schema for testing | Added (pre-existing) |
+
+Total diff: +52 -6 lines in `flatbuferl_builder.erl` (after style cleanup: +30 -30 net).
+
+## FlatBuffer Spec Alignment Rules (reference)
+
+From the FlatBuffer internals specification:
+
+- **Scalars are aligned to their own size** in absolute buffer positions. A `uint64` at absolute buffer position P requires `P % 8 == 0`.
+- **This is a spec requirement**, not just Rust verifier strictness. All compliant implementations enforce it.
+- **`flatc` achieves 8-byte alignment** by using `min(Size, 4)` for table-relative field placement and adjusting the table's absolute position in the buffer. Since all 8-byte fields within a table share the same residue mod 8 (a consequence of backward placement with 4-byte alignment where 8-byte fields are placed first), fixing the table position for the first 8-byte field fixes all of them.
+- **Nested tables** follow the same rules. The nested table blob's start position must be chosen so that its 8-byte fields are at 8-byte-aligned absolute positions.
 
 ## References
 
