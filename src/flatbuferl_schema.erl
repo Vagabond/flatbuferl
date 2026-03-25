@@ -148,8 +148,15 @@ merge_definitions(Defs1, Defs2) ->
 process({Defs, Opts}) ->
     %% Phase 1: enrich enums and unions with precomputed index maps
     EnrichedDefs = maps:map(fun(_Name, Def) -> enrich_def(Def) end, Defs),
+    %% Phase 1b: re-enrich structs that contain nested struct fields.
+    %% enrich_def doesn't have access to Defs, so nested struct types
+    %% (atoms like 'Vec2') get primitive_type_size/1's catch-all (4).
+    %% Now that all structs are enriched, re-resolve with full Defs.
+    ReEnrichedDefs = maps:map(
+        fun(_Name, Def) -> re_enrich_struct(Def, EnrichedDefs) end, EnrichedDefs),
     %% Phase 2: process tables using enriched definitions
-    ProcessedDefs = maps:map(fun(_Name, Def) -> process_def(Def, EnrichedDefs) end, EnrichedDefs),
+    ProcessedDefs = maps:map(
+        fun(_Name, Def) -> process_def(Def, ReEnrichedDefs) end, ReEnrichedDefs),
     {ProcessedDefs, Opts}.
 
 %% Phase 1: add index maps to enums/unions, precompute struct field offsets
@@ -186,6 +193,45 @@ enrich_def({struct, Fields}) ->
     #struct_def{fields = lists:reverse(EnrichedFields), total_size = TotalSize};
 enrich_def(Other) ->
     Other.
+
+%% Re-enrich struct fields that reference other structs.
+%% After Phase 1, nested struct atoms (e.g. 'Vec2') have size 4 from the
+%% catch-all. Now re-resolve using EnrichedDefs to get the actual struct
+%% size and #struct_def{} type for encode_scalar dispatch.
+re_enrich_struct(#struct_def{fields = Fields} = Def, EnrichedDefs) ->
+    HasNestedStruct = lists:any(
+        fun(#{type := Type}) -> is_atom(Type) andalso is_map_key(Type, EnrichedDefs);
+           (_) -> false
+        end, Fields),
+    case HasNestedStruct of
+        false -> Def;
+        true ->
+            {ReFields, RawSize, MaxAlign} = lists:foldl(
+                fun(#{name := Name, binary_name := BinName, type := Type,
+                      offset := _OldOff, size := _OldSize}, {Acc, Off, MaxA}) ->
+                    {ResolvedType, Size} = resolve_struct_field(Type, EnrichedDefs),
+                    AlignedOff = align_to(Off, Size),
+                    Field = #{name => Name, binary_name => BinName,
+                              type => ResolvedType, offset => AlignedOff, size => Size},
+                    {[Field | Acc], AlignedOff + Size, max(MaxA, Size)}
+                end, {[], 0, 1}, Fields),
+            TotalSize = align_to(RawSize, MaxAlign),
+            Def#struct_def{fields = lists:reverse(ReFields), total_size = TotalSize}
+    end;
+re_enrich_struct(Other, _EnrichedDefs) ->
+    Other.
+
+%% Resolve a single struct field type against enriched defs
+resolve_struct_field(Type, EnrichedDefs) when is_atom(Type) ->
+    case maps:get(Type, EnrichedDefs, undefined) of
+        #struct_def{total_size = Size} = StructDef -> {StructDef, Size};
+        #enum_def{base_type = Base} -> {normalize_scalar_type(Base), primitive_type_size(Base)};
+        _ -> {normalize_scalar_type(Type), primitive_type_size(Type)}
+    end;
+resolve_struct_field(#array_def{total_size = Size} = ArrayDef, _) ->
+    {ArrayDef, Size};
+resolve_struct_field(Type, _) ->
+    {Type, primitive_type_size(Type)}.
 
 %% Resolve types within struct fields (arrays need #array_def{})
 resolve_struct_field_type({array, ElemType, Count}) ->

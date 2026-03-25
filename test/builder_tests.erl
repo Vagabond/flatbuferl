@@ -267,6 +267,32 @@ simple_struct_test() ->
     ?assertEqual(1.0, maps:get(x, Struct)),
     ?assertEqual(2.0, maps:get(y, Struct)).
 
+nested_struct_test() ->
+    %% Struct containing another struct (Rect = two Vec2s = 16 bytes)
+    Schema = schema(
+        #{
+            'Vec2' => {struct, [{x, float}, {y, float}]},
+            'Rect' => {struct, [{min, 'Vec2'}, {max, 'Vec2'}]},
+            test => table([field(bounds, 'Rect'), field(label, string, #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    Map = #{bounds => #{min => #{x => 1.0, y => 2.0}, max => #{x => 3.0, y => 4.0}},
+            label => <<"test">>},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, bounds), Buffer),
+    Min = maps:get(min, Struct),
+    Max = maps:get(max, Struct),
+    ?assertEqual(1.0, maps:get(x, Min)),
+    ?assertEqual(2.0, maps:get(y, Min)),
+    ?assertEqual(3.0, maps:get(x, Max)),
+    ?assertEqual(4.0, maps:get(y, Max)),
+    ?assertEqual(
+        {ok, <<"test">>},
+        flatbuferl_reader:get_field(Root, 1, field_type(Schema, test, label), Buffer)
+    ).
+
 struct_with_int_and_float_test() ->
     %% Struct with mixed types to test alignment (12 bytes with alignment)
     Schema = schema(

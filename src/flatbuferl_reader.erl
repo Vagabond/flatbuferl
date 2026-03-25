@@ -707,6 +707,10 @@ read_struct_value(Buffer, Pos, #array_def{total_size = TotalSize, as_binary = tr
 read_struct_value(Buffer, Pos, #array_def{element_type = ElemType, count = Count}) ->
     {Elements, _Size} = read_array_elements(Buffer, Pos, ElemType, Count),
     {ok, Elements};
+%% Nested struct
+read_struct_value(Buffer, Pos, #struct_def{fields = Fields}) ->
+    StructMap = read_struct_fields_fast(Buffer, Pos, Fields, #{}),
+    {ok, StructMap};
 %% Non-canonical aliases (for tests that bypass schema parser)
 read_struct_value(Buffer, Pos, byte) ->
     read_struct_value(Buffer, Pos, int8);
