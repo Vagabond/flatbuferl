@@ -1,12 +1,14 @@
-# FlatBuffer Scalar Alignment Bug in flatbuferl
+# FlatBuffer Encoding Bugs in flatbuferl
 
-## Status: RESOLVED (2026-03-20)
+## Status: RESOLVED (2026-03-24)
 
 ## Summary
 
-`flatbuferl_builder.erl` was missing 8-byte absolute alignment adjustments for two code paths: the vtable-sharing root path (`encode_root_vtable_after`) and nested tables (via `calc_ref_align_padding`). This caused 8-byte scalar fields (`long`, `ulong`, `int64`, `uint64`, `double`, `float64`) to land at 4-byte-aligned absolute buffer positions instead of 8-byte-aligned positions. This violates the FlatBuffer specification and causes the Rust FlatBuffer verifier to reject the output.
+Two separate bugs were found in flatbuferl that caused cross-language FlatBuffer verification failures. Both are invisible within the Erlang ecosystem (flatbuferl's reader tolerates the issues) but manifest immediately when buffers cross language boundaries to Rust, C++, or any other implementation with strict verification.
 
-The bug is invisible within the Erlang ecosystem (encode/decode roundtrips work fine because flatbuferl's reader tolerates misalignment) but manifests immediately when buffers cross language boundaries to Rust, C++, or any other implementation with strict verification.
+**Bug 1 — Scalar alignment (2026-03-20, committed `e5b2518`):** `flatbuferl_builder.erl` was missing 8-byte absolute alignment adjustments for two code paths: the vtable-sharing root path (`encode_root_vtable_after`) and nested tables (via `calc_ref_align_padding`). This caused 8-byte scalar fields to land at 4-byte-aligned absolute buffer positions.
+
+**Bug 2 — Struct array sizing (2026-03-24):** `flatbuferl_schema.erl` `primitive_type_size/1` had a catch-all clause `primitive_type_size(_) -> 4` that silently returned 4 for `{array, ElemType, Count}` tuples (fixed-size arrays in structs). This caused struct fields like `Hash256` (a struct with `bytes: [uint8:32]`) to be sized as 4 bytes instead of 32, corrupting all subsequent offsets in the table. This was the P0 blocker for N=3 consensus `DeployRequest` encoding.
 
 ## Root Cause Analysis
 
@@ -99,7 +101,66 @@ The key insight: `NeededMod` is the required value of `blob_start rem 8`. When `
 
 3. **Simple 8-byte blob alignment** — Padding blob start to 8 unconditionally doesn't work when `PaddedVTableSize + First8ByteOffset` is 4 mod 8 (the blob needs to be at 4 mod 8, not 0 mod 8).
 
-## Reproduction (historical)
+---
+
+## Bug 2: Struct Array Sizing (2026-03-24)
+
+### Symptom
+
+N=3 cluster: DKG completes, HBBFT group starts, `store_component` succeeds, then `deploy` panics in wasvm-rs:
+
+```
+internal panic: range end index 3825351014 out of range for slice of length 212
+```
+
+The garbage offset `3825351014` (0xE3F70966) is a misaligned 4-byte read from the FlatBuffer being interpreted as a table offset. Only `DeployRequest` fails — simpler messages like `InitServiceRequest` and `StoreComponentRequest` work fine because they don't contain structs with fixed-size arrays.
+
+### Root Cause
+
+`primitive_type_size/1` in `flatbuferl_schema.erl` has a catch-all clause:
+
+```erlang
+primitive_type_size(_) -> 4.
+```
+
+When called with `{array, uint8, 32}` (the type tuple for a `[uint8:32]` struct field), it fell through to the catch-all and returned 4 instead of 32. This caused:
+
+1. `Hash256` struct `total_size = 4` (should be 32)
+2. RegistryRef table `tbl_size = 16` (should be 44 = 4+4+4+32)
+3. Inline struct data overflowed the table boundary
+4. Subsequent string offsets pointed into struct data → garbage offsets → panic
+
+### Fix
+
+One line added to `flatbuferl_schema.erl` (~line 242), before the catch-all:
+
+```erlang
+primitive_type_size({array, ElemType, Count}) -> primitive_type_size(ElemType) * Count;
+```
+
+### Verification
+
+- flatc decodes the fixed output correctly (all fields, strings, Hash256 bytes match)
+- 728 existing tests pass (0 failures)
+- Binary comparison via [.claude/tmp/compare_deploy.escript](.claude/tmp/compare_deploy.escript) confirms byte-identical output to flatc for `DeployRequest`
+
+### Status
+
+**Committed** on `bugfix/offset` branch. Ready to merge.
+
+### Diagnostic Artifacts (can be deleted)
+
+These files were generated during diagnosis and are **not** tracked in git:
+
+| File | Purpose | Track? |
+|------|---------|--------|
+| `deploy_request.bin` | flatc reference binary for DeployRequest (generated via `flatc -b protocol.fbs deploy.json`) | No — regenerable from schema + JSON |
+| `erl_deploy_fixed.json` | JSON decode of flatbuferl's fixed output, used to verify field values match | No — diagnostic artifact |
+| `.claude/tmp/compare_deploy.escript` | Escript that hex-diffs flatbuferl vs flatc output | No — in `.claude/tmp/` scratch dir |
+
+---
+
+## Reproduction (historical, Bug 1)
 
 ### Test case: `game_state.fbs`
 
@@ -132,15 +193,23 @@ All 728 tests pass after the fix, including all 15 alignment verification tests 
 
 ## Files Changed
 
+### Bug 1 (committed `e5b2518`)
+
 | File | Change | Status |
 |------|--------|--------|
-| `src/flatbuferl_builder.erl` ~line 333 | 8-byte table position adjustment in `encode_root_vtable_after` | **Applied, tested** |
-| `src/flatbuferl_builder.erl` ~line 1101 | Exact blob start alignment in `calc_ref_align_padding` | **Applied, tested** |
-| `src/flatbuferl_builder.erl` ~line 1119 | New helper `nested_table_first_8byte_offset/3` | **Applied, tested** |
-| `test/alignment_verification_tests.erl` | 15 alignment verification tests | Added (pre-existing) |
-| `test/complex_schemas/protocol.fbs` | Copy of runner's protocol schema for testing | Added (pre-existing) |
+| `src/flatbuferl_builder.erl` ~line 333 | 8-byte table position adjustment in `encode_root_vtable_after` | **Committed** |
+| `src/flatbuferl_builder.erl` ~line 1101 | Exact blob start alignment in `calc_ref_align_padding` | **Committed** |
+| `src/flatbuferl_builder.erl` ~line 1119 | New helper `nested_table_first_8byte_offset/3` | **Committed** |
+| `test/alignment_verification_tests.erl` | 15 alignment verification tests | **Committed** |
+| `test/complex_schemas/protocol.fbs` | Copy of runner's protocol schema for testing | **Committed** |
 
-Total diff: +52 -6 lines in `flatbuferl_builder.erl` (after style cleanup: +30 -30 net).
+### Bug 2 (committed on `bugfix/offset`)
+
+| File | Change | Status |
+|------|--------|--------|
+| `src/flatbuferl_schema.erl` ~line 242 | `primitive_type_size({array, ElemType, Count})` clause | **Committed** |
+
+Total diff across both bugs: +53 -6 lines in production code.
 
 ## FlatBuffer Spec Alignment Rules (reference)
 

@@ -239,6 +239,7 @@ primitive_type_size(float) -> 4;
 primitive_type_size(float32) -> 4;
 primitive_type_size(double) -> 8;
 primitive_type_size(float64) -> 8;
+primitive_type_size({array, ElemType, Count}) -> primitive_type_size(ElemType) * Count;
 primitive_type_size(_) -> 4.
 
 align_to(Off, Align) ->
