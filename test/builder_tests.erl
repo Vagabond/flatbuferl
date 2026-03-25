@@ -864,21 +864,23 @@ three_level_nested_struct_test() ->
 
 vtable_sharing_with_u64_test() ->
     %% Force vtable-sharing (encode_root_vtable_after) by making the root
-    %% table have the same field layout as a nested table. Both have a
-    %% single uint64 field, so their vtables are identical.
+    %% table have the same vtable as a nested table. Both have a uint64
+    %% and a string field in the same order/types, so their vtables match.
+    %% The root's vtable is placed after the nested table's, triggering
+    %% the vtable-sharing path with 8-byte alignment adjustment.
     Schema = schema(
         #{
-            'Inner' => table([field(ts, uint64)]),
-            test => table([field(ts, uint64), field(inner, 'Inner', #{id => 1})])
+            'Inner' => table([field(ts, uint64), field(label, string, #{id => 1})]),
+            test => table([field(ts, uint64), field(child, 'Inner', #{id => 1})])
         },
         #{root_type => test}
     ),
-    Map = #{ts => 1710000000000, inner => #{ts => 1710003600000}},
+    Map = #{ts => 1710000000000, child => #{ts => 1710003600000, label => <<"inner">>}},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Ctx = flatbuferl:new(Buffer, Schema),
     Decoded = flatbuferl:to_map(Ctx),
     ?assertEqual(1710000000000, maps:get(ts, Decoded)),
-    ?assertEqual(1710003600000, maps:get(ts, maps:get(inner, Decoded))),
+    ?assertEqual(1710003600000, maps:get(ts, maps:get(child, Decoded))),
     %% Verify the root u64 is 8-byte aligned
     <<RootOff:32/little, _/binary>> = Buffer,
     %% Root table's ts field should be at an 8-byte aligned position
@@ -903,28 +905,38 @@ vtable_sharing_with_u64_test() ->
 %% =============================================================================
 
 union_member_with_u64_alignment_test() ->
-    %% Union member table containing uint64 fields, nested inside a parent.
-    %% Exercises the #union_value_def{} clause in nested_table_first_8byte_offset.
+    %% Union member table containing uint64 fields, nested inside a non-root
+    %% table. The union must be a ref field of a nested table (not the root)
+    %% to exercise the #union_value_def{} clause in nested_table_first_8byte_offset,
+    %% which is only reached via encode_refs_with_positions -> calc_ref_align_padding.
     {ok, Schema} = flatbuferl:parse_schema(
-        <<"\n"
-        "        table MoveAction { x: int; y: int; }\n"
-        "        table TimedAction { timestamp: uint64; duration: uint64; label: string; }\n"
-        "        union Action { MoveAction, TimedAction }\n"
-        "        table Event { name: string; action: Action; }\n"
-        "        root_type Event;\n"
-        "    ">>
+        <<
+            "\n"
+            "        table MoveAction { x: int; y: int; }\n"
+            "        table TimedAction { timestamp: uint64; duration: uint64; label: string; }\n"
+            "        union Action { MoveAction, TimedAction }\n"
+            "        table Event { name: string; action: Action; }\n"
+            "        table Log { id: uint64; event: Event; }\n"
+            "        root_type Log;\n"
+            "    "
+        >>
     ),
     Map = #{
-        name => <<"tick">>,
-        action_type => 'TimedAction',
-        action => #{timestamp => 1710000000000, duration => 3600000, label => <<"test">>}
+        id => 42,
+        event => #{
+            name => <<"tick">>,
+            action_type => 'TimedAction',
+            action => #{timestamp => 1710000000000, duration => 3600000, label => <<"test">>}
+        }
     },
     Buffer = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
     Ctx = flatbuferl:new(Buffer, Schema),
     Decoded = flatbuferl:to_map(Ctx),
-    ?assertEqual(<<"tick">>, maps:get(name, Decoded)),
-    ?assertEqual('TimedAction', maps:get(action_type, Decoded)),
-    Action = maps:get(action, Decoded),
+    ?assertEqual(42, maps:get(id, Decoded)),
+    Event = maps:get(event, Decoded),
+    ?assertEqual(<<"tick">>, maps:get(name, Event)),
+    ?assertEqual('TimedAction', maps:get(action_type, Event)),
+    Action = maps:get(action, Event),
     ?assertEqual(1710000000000, maps:get(timestamp, Action)),
     ?assertEqual(3600000, maps:get(duration, Action)),
     ?assertEqual(<<"test">>, maps:get(label, Action)).

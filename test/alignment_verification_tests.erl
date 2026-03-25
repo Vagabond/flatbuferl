@@ -702,23 +702,25 @@ game_state_nested_alignment_test_() ->
 scalar_alignment_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table Inner {\n"
-            "                big_val: uint64;\n"
-            "                small_val: uint16;\n"
-            "                another_big: int64;\n"
-            "            }\n"
-            "            table ScalarTest {\n"
-            "                a_byte: ubyte;\n"
-            "                a_u64: uint64;\n"
-            "                a_string: string;\n"
-            "                a_i64: int64;\n"
-            "                inner: Inner;\n"
-            "                a_u32: uint32;\n"
-            "                another_u64: uint64;\n"
-            "            }\n"
-            "            root_type ScalarTest;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table Inner {\n"
+                "                big_val: uint64;\n"
+                "                small_val: uint16;\n"
+                "                another_big: int64;\n"
+                "            }\n"
+                "            table ScalarTest {\n"
+                "                a_byte: ubyte;\n"
+                "                a_u64: uint64;\n"
+                "                a_string: string;\n"
+                "                a_i64: int64;\n"
+                "                inner: Inner;\n"
+                "                a_u32: uint32;\n"
+                "                another_u64: uint64;\n"
+                "            }\n"
+                "            root_type ScalarTest;\n"
+                "        "
+            >>
         ),
         Map = #{
             a_byte => 42,
@@ -820,17 +822,19 @@ scalar_alignment_test_() ->
 multi_u64_alignment_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table MultiU64 {\n"
-            "                flag: bool;\n"
-            "                val1: uint64;\n"
-            "                val2: uint64;\n"
-            "                val3: uint64;\n"
-            "                small: uint16;\n"
-            "                val4: uint64;\n"
-            "            }\n"
-            "            root_type MultiU64;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table MultiU64 {\n"
+                "                flag: bool;\n"
+                "                val1: uint64;\n"
+                "                val2: uint64;\n"
+                "                val3: uint64;\n"
+                "                small: uint16;\n"
+                "                val4: uint64;\n"
+                "            }\n"
+                "            root_type MultiU64;\n"
+                "        "
+            >>
         ),
         Map = #{
             flag => true,
@@ -877,14 +881,16 @@ multi_u64_alignment_test_() ->
 vector_u64_alignment_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table VecTest {\n"
-            "                label: string;\n"
-            "                timestamps: [uint64];\n"
-            "                count: uint32;\n"
-            "            }\n"
-            "            root_type VecTest;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table VecTest {\n"
+                "                label: string;\n"
+                "                timestamps: [uint64];\n"
+                "                count: uint32;\n"
+                "            }\n"
+                "            root_type VecTest;\n"
+                "        "
+            >>
         ),
         Map = #{
             label => <<"test">>,
@@ -949,27 +955,29 @@ vector_u64_alignment_test_() ->
 deep_nesting_alignment_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table Level3 {\n"
-            "                value: uint64;\n"
-            "                tag: string;\n"
-            "            }\n"
-            "            table Level2 {\n"
-            "                child: Level3;\n"
-            "                counter: uint64;\n"
-            "                name: string;\n"
-            "            }\n"
-            "            table Level1 {\n"
-            "                inner: Level2;\n"
-            "                timestamp: uint64;\n"
-            "                flag: bool;\n"
-            "            }\n"
-            "            table Root {\n"
-            "                level1: Level1;\n"
-            "                id: uint64;\n"
-            "            }\n"
-            "            root_type Root;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table Level3 {\n"
+                "                value: uint64;\n"
+                "                tag: string;\n"
+                "            }\n"
+                "            table Level2 {\n"
+                "                child: Level3;\n"
+                "                counter: uint64;\n"
+                "                name: string;\n"
+                "            }\n"
+                "            table Level1 {\n"
+                "                inner: Level2;\n"
+                "                timestamp: uint64;\n"
+                "                flag: bool;\n"
+                "            }\n"
+                "            table Root {\n"
+                "                level1: Level1;\n"
+                "                id: uint64;\n"
+                "            }\n"
+                "            root_type Root;\n"
+                "        "
+            >>
         ),
         Map = #{
             level1 => #{
@@ -1020,25 +1028,27 @@ deep_nesting_alignment_test_() ->
 battle_round_direct_known_positions_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table PlayerId { id: string (required); }\n"
-            "            table Action {\n"
-            "                id: [ubyte] (required);\n"
-            "                sender: string (required);\n"
-            "                data: [ubyte] (required);\n"
-            "                tick: uint64 = 0;\n"
-            "                signature: [ubyte];\n"
-            "            }\n"
-            "            table BattleRoundRequest {\n"
-            "                player_id: PlayerId (required);\n"
-            "                round: uint64;\n"
-            "                randomness: [ubyte] (required);\n"
-            "                timestamp_ms: uint64;\n"
-            "                actions: [Action] (required);\n"
-            "                checkpoint: bool = true;\n"
-            "            }\n"
-            "            root_type BattleRoundRequest;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table PlayerId { id: string (required); }\n"
+                "            table Action {\n"
+                "                id: [ubyte] (required);\n"
+                "                sender: string (required);\n"
+                "                data: [ubyte] (required);\n"
+                "                tick: uint64 = 0;\n"
+                "                signature: [ubyte];\n"
+                "            }\n"
+                "            table BattleRoundRequest {\n"
+                "                player_id: PlayerId (required);\n"
+                "                round: uint64;\n"
+                "                randomness: [ubyte] (required);\n"
+                "                timestamp_ms: uint64;\n"
+                "                actions: [Action] (required);\n"
+                "                checkpoint: bool = true;\n"
+                "            }\n"
+                "            root_type BattleRoundRequest;\n"
+                "        "
+            >>
         ),
         Map = #{
             player_id => #{id => <<"test_player">>},
@@ -1476,36 +1486,38 @@ many_refs_then_i64_alignment_test_() ->
         %%
         %% Reproduced here with the same mix of types.
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table Item { name: string; value: int; }\n"
-            "            table BigTable {\n"
-            "                workers: Item;\n"
-            "                trophies: int;\n"
-            "                academy_techs: [Item];\n"
-            "                arsenal_techs: [Item];\n"
-            "                ships: [Item];\n"
-            "                current_quests: [Item];\n"
-            "                completed_quests: [string];\n"
-            "                player_resources: [Item];\n"
-            "                next_pirate_attack: long;\n"
-            "                left_over_resources: [Item];\n"
-            "                islands: [Item];\n"
-            "                fortress_level: byte;\n"
-            "                defences: [Item];\n"
-            "                buildings: [Item];\n"
-            "                island_sectors: [Item];\n"
-            "                town_sectors: [Item];\n"
-            "                merchant_visits: [long];\n"
-            "                merchant_ships: [Item];\n"
-            "                player_name: string;\n"
-            "                reserved_resources: [Item];\n"
-            "                battle_logs_attack: [Item];\n"
-            "                battle_logs_defence: [Item];\n"
-            "                last_pvp_attack_time: long;\n"
-            "                raid_players: [Item];\n"
-            "            }\n"
-            "            root_type BigTable;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table Item { name: string; value: int; }\n"
+                "            table BigTable {\n"
+                "                workers: Item;\n"
+                "                trophies: int;\n"
+                "                academy_techs: [Item];\n"
+                "                arsenal_techs: [Item];\n"
+                "                ships: [Item];\n"
+                "                current_quests: [Item];\n"
+                "                completed_quests: [string];\n"
+                "                player_resources: [Item];\n"
+                "                next_pirate_attack: long;\n"
+                "                left_over_resources: [Item];\n"
+                "                islands: [Item];\n"
+                "                fortress_level: byte;\n"
+                "                defences: [Item];\n"
+                "                buildings: [Item];\n"
+                "                island_sectors: [Item];\n"
+                "                town_sectors: [Item];\n"
+                "                merchant_visits: [long];\n"
+                "                merchant_ships: [Item];\n"
+                "                player_name: string;\n"
+                "                reserved_resources: [Item];\n"
+                "                battle_logs_attack: [Item];\n"
+                "                battle_logs_defence: [Item];\n"
+                "                last_pvp_attack_time: long;\n"
+                "                raid_players: [Item];\n"
+                "            }\n"
+                "            root_type BigTable;\n"
+                "        "
+            >>
         ),
         Map = #{
             workers => #{name => <<"w">>, value => 5},
@@ -1595,17 +1607,19 @@ many_refs_then_i64_alignment_test_() ->
 odd_small_fields_before_u64_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table OddSmall {\n"
-            "                flag1: bool;\n"
-            "                flag2: bool;\n"
-            "                flag3: bool;\n"
-            "                big: uint64;\n"
-            "                flag4: bool;\n"
-            "                another_big: int64;\n"
-            "            }\n"
-            "            root_type OddSmall;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table OddSmall {\n"
+                "                flag1: bool;\n"
+                "                flag2: bool;\n"
+                "                flag3: bool;\n"
+                "                big: uint64;\n"
+                "                flag4: bool;\n"
+                "                another_big: int64;\n"
+                "            }\n"
+                "            root_type OddSmall;\n"
+                "        "
+            >>
         ),
         Map = #{
             flag1 => true,
@@ -1652,17 +1666,19 @@ odd_small_fields_before_u64_test_() ->
 u16_u64_interleave_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table Interleaved {\n"
-            "                version: uint16;\n"
-            "                request_id: uint64;\n"
-            "                trace: string;\n"
-            "                timestamp_ms: uint64;\n"
-            "                status: uint16;\n"
-            "                round: uint64;\n"
-            "            }\n"
-            "            root_type Interleaved;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table Interleaved {\n"
+                "                version: uint16;\n"
+                "                request_id: uint64;\n"
+                "                trace: string;\n"
+                "                timestamp_ms: uint64;\n"
+                "                status: uint16;\n"
+                "                round: uint64;\n"
+                "            }\n"
+                "            root_type Interleaved;\n"
+                "        "
+            >>
         ),
         Map = #{
             version => 1,
@@ -1713,13 +1729,15 @@ u16_u64_interleave_test_() ->
 single_u32_before_u64_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table SimpleCase {\n"
-            "                count: uint32;\n"
-            "                timestamp: uint64;\n"
-            "            }\n"
-            "            root_type SimpleCase;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table SimpleCase {\n"
+                "                count: uint32;\n"
+                "                timestamp: uint64;\n"
+                "            }\n"
+                "            root_type SimpleCase;\n"
+                "        "
+            >>
         ),
         Map = #{
             count => 42,
@@ -1760,20 +1778,22 @@ single_u32_before_u64_test_() ->
 nested_u64_after_odd_wrapper_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(
-            <<"\n"
-            "            table Inner {\n"
-            "                ts1: uint64;\n"
-            "                ts2: uint64;\n"
-            "                label: string;\n"
-            "            }\n"
-            "            table Outer {\n"
-            "                flag: bool;\n"
-            "                name: string;\n"
-            "                inner: Inner;\n"
-            "                tag: uint16;\n"
-            "            }\n"
-            "            root_type Outer;\n"
-            "        ">>
+            <<
+                "\n"
+                "            table Inner {\n"
+                "                ts1: uint64;\n"
+                "                ts2: uint64;\n"
+                "                label: string;\n"
+                "            }\n"
+                "            table Outer {\n"
+                "                flag: bool;\n"
+                "                name: string;\n"
+                "                inner: Inner;\n"
+                "                tag: uint16;\n"
+                "            }\n"
+                "            root_type Outer;\n"
+                "        "
+            >>
         ),
         Map = #{
             flag => true,
