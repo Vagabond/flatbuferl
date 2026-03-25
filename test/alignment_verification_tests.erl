@@ -4,7 +4,7 @@
 %% Suppress warnings for helper functions kept for future test expansion
 -compile({nowarn_unused_function, [
     verify_vector_alignment/2,
-    deployment_id_fields/0,
+    character_id_fields/0,
     time_interval_fields/0,
     building_fields/0
 ]}).
@@ -155,89 +155,89 @@ follow_uoffset(Buffer, Pos) ->
 %% Protocol schema field definitions (manually extracted from protocol.fbs)
 %% =============================================================================
 
-%% Envelope fields (indices match FlatBuffer field order in schema):
+%% Packet fields (indices match FlatBuffer field order in schema):
 %%   0: version (uint16)
 %%   1: request_id (uint64)
 %%   2: trace_id (string)
 %%   3: timestamp_ms (uint64)
-%%   4: message_type (union type byte - implicit)
-%%   5: message (union value - uoffset)
-envelope_fields() ->
+%%   4: payload_type (union type byte - implicit)
+%%   5: payload (union value - uoffset)
+packet_fields() ->
     [{0, version, uint16},
      {1, request_id, uint64},
      {2, trace_id, string},
      {3, timestamp_ms, uint64}].
      %% Union type/value handled separately
 
-%% CommitRoundRequest fields:
-%%   0: service_id (table ref -> uoffset)
+%% BattleRoundRequest fields:
+%%   0: player_id (table ref -> uoffset)
 %%   1: round (uint64)
 %%   2: randomness (vector -> uoffset)
 %%   3: timestamp_ms (uint64)
-%%   4: transactions (vector of tables -> uoffset)
+%%   4: actions (vector of tables -> uoffset)
 %%   5: checkpoint (bool)
-%%   6: epoch_transition (table ref -> uoffset)
-commit_round_request_fields() ->
-    [{0, service_id, uint32},      % uoffset to ServiceId table
+%%   6: effects (table ref -> uoffset)
+battle_round_request_fields() ->
+    [{0, player_id, uint32},       % uoffset to PlayerId table
      {1, round, uint64},
      {2, randomness, uint32},      % uoffset to vector
      {3, timestamp_ms, uint64},
-     {4, transactions, uint32},    % uoffset to vector
+     {4, actions, uint32},         % uoffset to vector
      {5, checkpoint, bool},
-     {6, epoch_transition, uint32}]. % uoffset to table
+     {6, effects, uint32}].        % uoffset to table
 
-%% InitServiceRequest fields:
-%%   0: service_id (table ref)
+%% SpawnRequest fields:
+%%   0: player_id (table ref)
 %%   1: randomness (vector)
-%%   2: group_pubkey (vector)
+%%   2: party_key (vector)
 %%   3: members (vector of strings)
-%%   4: node_index (uint32)
-init_service_request_fields() ->
-    [{0, service_id, uint32},
+%%   4: slot_index (uint32)
+spawn_request_fields() ->
+    [{0, player_id, uint32},
      {1, randomness, uint32},
-     {2, group_pubkey, uint32},
+     {2, party_key, uint32},
      {3, members, uint32},
-     {4, node_index, uint32}].
+     {4, slot_index, uint32}].
 
-%% DeployRequest fields:
-%%   0: deployment_id (table ref)
-%%   1: component_type (union type byte)
-%%   2: component (union value -> uoffset)
-%%   3: init_randomness (vector)
-%%   4: deployer (string)
-%%   5: deployer_signature (vector)
-deploy_request_fields() ->
-    [{0, deployment_id, uint32},
-     {1, component_type, ubyte},
-     {2, component, uint32},
-     {3, init_randomness, uint32},
-     {4, deployer, string},
-     {5, deployer_signature, uint32}].
+%% CraftRequest fields:
+%%   0: character_id (table ref)
+%%   1: material_type (union type byte)
+%%   2: material (union value -> uoffset)
+%%   3: init_seed (vector)
+%%   4: crafter (string)
+%%   5: crafter_signature (vector)
+craft_request_fields() ->
+    [{0, character_id, uint32},
+     {1, material_type, ubyte},
+     {2, material, uint32},
+     {3, init_seed, uint32},
+     {4, crafter, string},
+     {5, crafter_signature, uint32}].
 
-%% ServiceId fields:
+%% PlayerId fields:
 %%   0: id (string -> uoffset)
-service_id_fields() ->
+player_id_fields() ->
     [{0, id, string}].
 
-%% Transaction fields:
+%% Action fields:
 %%   0: id (vector -> uoffset)
 %%   1: sender (string -> uoffset)
 %%   2: data (vector -> uoffset)
-%%   3: nonce (uint64)
+%%   3: tick (uint64)
 %%   4: signature (vector -> uoffset)
-transaction_fields() ->
+action_fields() ->
     [{0, id, uint32},
      {1, sender, string},
      {2, data, uint32},
-     {3, nonce, uint64},
+     {3, tick, uint64},
      {4, signature, uint32}].
 
-%% DeploymentId fields:
-%%   0: service_id (string)
-%%   1: deployment_id (string)
-deployment_id_fields() ->
-    [{0, service_id, string},
-     {1, deployment_id, string}].
+%% CharacterId fields:
+%%   0: player_id (string)
+%%   1: character_id (string)
+character_id_fields() ->
+    [{0, player_id, string},
+     {1, character_id, string}].
 
 %% =============================================================================
 %% Game state schema field definitions
@@ -319,12 +319,13 @@ building_fields() ->
      {16, 'defenceUpgrading', bool}].
 
 %% =============================================================================
-%% Test: Protocol Envelope wrapping CommitRoundRequest
+%% Test: Packet wrapping BattleRoundRequest
 %% =============================================================================
-%% This is the exact message pattern that fails in production.
-%% The Rust strict verifier rejects it due to misaligned u64 fields.
+%% Tests the core message pattern: root envelope with union dispatch wrapping
+%% a table that has nested tables, u64 fields, and vectors of tables.
+%% The strict verifier rejects misaligned u64 fields.
 
-protocol_envelope_commit_round_test_() ->
+packet_battle_round_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema_file(protocol_schema_path()),
         Map = #{
@@ -332,24 +333,24 @@ protocol_envelope_commit_round_test_() ->
             request_id => 42,
             timestamp_ms => 1710000000000,
             trace_id => <<"trace-abc-123">>,
-            message_type => 'CommitRoundRequest',
-            message => #{
-                service_id => #{id => <<"test-service-alpha">>},
+            payload_type => 'BattleRoundRequest',
+            payload => #{
+                player_id => #{id => <<"player-alpha">>},
                 round => 100,
                 randomness => crypto:strong_rand_bytes(32),
                 timestamp_ms => 1710000000000,
-                transactions => [
+                actions => [
                     #{
-                        id => <<"txn-001">>,
-                        sender => <<"peer-1234">>,
-                        data => <<"increment">>,
-                        nonce => 1
+                        id => <<"act-001">>,
+                        sender => <<"player-1234">>,
+                        data => <<"attack">>,
+                        tick => 1
                     },
                     #{
-                        id => <<"txn-002">>,
-                        sender => <<"peer-5678">>,
-                        data => <<"transfer">>,
-                        nonce => 2
+                        id => <<"act-002">>,
+                        sender => <<"player-5678">>,
+                        data => <<"defend">>,
+                        tick => 2
                     }
                 ],
                 checkpoint => true
@@ -361,12 +362,12 @@ protocol_envelope_commit_round_test_() ->
         %% Verify roundtrip works (Erlang is tolerant of misalignment)
         Ctx = flatbuferl:new(Buffer, Schema),
         Decoded = flatbuferl:to_map(Ctx),
-        ?assertEqual('CommitRoundRequest', maps:get(message_type, Decoded)),
+        ?assertEqual('BattleRoundRequest', maps:get(payload_type, Decoded)),
 
         %% Now check actual byte-level alignment
-        Violations = verify_protocol_envelope(Buffer, commit_round_request_fields()),
+        Violations = verify_packet_envelope(Buffer, battle_round_request_fields()),
 
-        io:format("~n=== CommitRoundRequest Envelope Alignment ===~n"),
+        io:format("~n=== BattleRoundRequest Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         case Violations of
             [] ->
@@ -380,28 +381,28 @@ protocol_envelope_commit_round_test_() ->
         end,
         ?assertEqual([], Violations,
             lists:flatten(io_lib:format(
-                "CommitRoundRequest has ~p alignment violations: ~p",
+                "BattleRoundRequest has ~p alignment violations: ~p",
                 [length(Violations), Violations])))
     end}.
 
 %% =============================================================================
-%% Test: Protocol Envelope wrapping InitServiceRequest
+%% Test: Packet wrapping SpawnRequest
 %% =============================================================================
 
-protocol_envelope_init_service_test_() ->
+packet_spawn_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema_file(protocol_schema_path()),
         Map = #{
             version => 1,
             request_id => 1,
             timestamp_ms => 1710000000000,
-            message_type => 'InitServiceRequest',
-            message => #{
-                service_id => #{id => <<"my-service">>},
+            payload_type => 'SpawnRequest',
+            payload => #{
+                player_id => #{id => <<"player-one">>},
                 randomness => crypto:strong_rand_bytes(32),
-                group_pubkey => crypto:strong_rand_bytes(48),
-                members => [<<"peer-1">>, <<"peer-2">>, <<"peer-3">>],
-                node_index => 0
+                party_key => crypto:strong_rand_bytes(48),
+                members => [<<"ally-1">>, <<"ally-2">>, <<"ally-3">>],
+                slot_index => 0
             }
         },
         IoData = flatbuferl:from_map(Map, Schema),
@@ -409,42 +410,42 @@ protocol_envelope_init_service_test_() ->
 
         Ctx = flatbuferl:new(Buffer, Schema),
         Decoded = flatbuferl:to_map(Ctx),
-        ?assertEqual('InitServiceRequest', maps:get(message_type, Decoded)),
+        ?assertEqual('SpawnRequest', maps:get(payload_type, Decoded)),
 
-        Violations = verify_protocol_envelope(Buffer, init_service_request_fields()),
+        Violations = verify_packet_envelope(Buffer, spawn_request_fields()),
 
-        io:format("~n=== InitServiceRequest Envelope Alignment ===~n"),
+        io:format("~n=== SpawnRequest Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(Violations),
         ?assertEqual([], Violations,
             lists:flatten(io_lib:format(
-                "InitServiceRequest has ~p alignment violations: ~p",
+                "SpawnRequest has ~p alignment violations: ~p",
                 [length(Violations), Violations])))
     end}.
 
 %% =============================================================================
-%% Test: Protocol Envelope wrapping DeployRequest
+%% Test: Packet wrapping CraftRequest (with InlineMaterial)
 %% =============================================================================
 
-protocol_envelope_deploy_test_() ->
+packet_craft_inline_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema_file(protocol_schema_path()),
         Map = #{
             version => 1,
             request_id => 7,
             timestamp_ms => 1710000000000,
-            message_type => 'DeployRequest',
-            message => #{
-                deployment_id => #{
-                    service_id => <<"svc-1">>,
-                    deployment_id => <<"deploy-1">>
+            payload_type => 'CraftRequest',
+            payload => #{
+                character_id => #{
+                    player_id => <<"player-1">>,
+                    character_id => <<"char-1">>
                 },
-                component_type => 'InlineComponent',
-                component => #{
+                material_type => 'InlineMaterial',
+                material => #{
                     bytes => crypto:strong_rand_bytes(64)
                 },
-                init_randomness => crypto:strong_rand_bytes(32),
-                deployer => <<"admin-peer">>
+                init_seed => crypto:strong_rand_bytes(32),
+                crafter => <<"admin-crafter">>
             }
         },
         IoData = flatbuferl:from_map(Map, Schema),
@@ -452,16 +453,74 @@ protocol_envelope_deploy_test_() ->
 
         Ctx = flatbuferl:new(Buffer, Schema),
         Decoded = flatbuferl:to_map(Ctx),
-        ?assertEqual('DeployRequest', maps:get(message_type, Decoded)),
+        ?assertEqual('CraftRequest', maps:get(payload_type, Decoded)),
 
-        Violations = verify_protocol_envelope(Buffer, deploy_request_fields()),
+        Violations = verify_packet_envelope(Buffer, craft_request_fields()),
 
-        io:format("~n=== DeployRequest Envelope Alignment ===~n"),
+        io:format("~n=== CraftRequest Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(Violations),
         ?assertEqual([], Violations,
             lists:flatten(io_lib:format(
-                "DeployRequest has ~p alignment violations: ~p",
+                "CraftRequest has ~p alignment violations: ~p",
+                [length(Violations), Violations])))
+    end}.
+
+%% =============================================================================
+%% Test: CraftRequest with RecipeRef + Checksum (struct array sizing)
+%% =============================================================================
+%%
+%% Regression test for primitive_type_size/1 returning 4 for {array, uint8, 32}.
+%% RecipeRef contains Checksum (struct with bytes:[uint8:32]). Before the fix,
+%% the struct was sized as 4 bytes instead of 32, corrupting all subsequent
+%% offsets and causing the strict verifier to panic with garbage table offsets.
+
+packet_craft_recipe_ref_test_() ->
+    {timeout, 30, fun() ->
+        {ok, Schema} = flatbuferl:parse_schema_file(protocol_schema_path()),
+        HashBytes = lists:seq(1, 32),
+        Map = #{
+            version => 1,
+            request_id => 42,
+            timestamp_ms => 1710000000000,
+            payload_type => 'CraftRequest',
+            payload => #{
+                character_id => #{
+                    player_id => <<"player-1">>,
+                    character_id => <<"char-1">>
+                },
+                material_type => 'RecipeRef',
+                material => #{
+                    name => <<"iron-sword">>,
+                    version => <<"1.0.0">>,
+                    content_hash => #{bytes => HashBytes}
+                },
+                crafter => <<"master-smith">>
+            }
+        },
+        IoData = flatbuferl:from_map(Map, Schema),
+        Buffer = iolist_to_binary(IoData),
+
+        %% Roundtrip decode must recover all fields including Checksum bytes
+        Ctx = flatbuferl:new(Buffer, Schema),
+        Decoded = flatbuferl:to_map(Ctx),
+        ?assertEqual('CraftRequest', maps:get(payload_type, Decoded)),
+        Msg = maps:get(payload, Decoded),
+        ?assertEqual('RecipeRef', maps:get(material_type, Msg)),
+        Mat = maps:get(material, Msg),
+        ?assertEqual(<<"iron-sword">>, maps:get(name, Mat)),
+        ?assertEqual(<<"1.0.0">>, maps:get(version, Mat)),
+        Hash = maps:get(content_hash, Mat),
+        ?assertEqual(HashBytes, maps:get(bytes, Hash)),
+
+        %% Verify alignment of the outer packet
+        Violations = verify_packet_envelope(Buffer, craft_request_fields()),
+        io:format("~n=== CraftRequest+RecipeRef Packet Alignment ===~n"),
+        io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
+        report_violations(Violations),
+        ?assertEqual([], Violations,
+            lists:flatten(io_lib:format(
+                "CraftRequest+RecipeRef has ~p alignment violations: ~p",
                 [length(Violations), Violations])))
     end}.
 
@@ -838,116 +897,116 @@ deep_nesting_alignment_test_() ->
     end}.
 
 %% =============================================================================
-%% Test: CommitRoundRequest direct root (no union wrapping) with specific
-%% byte position checks matching the known production failures.
+%% Test: BattleRoundRequest direct root (no union wrapping) with specific
+%% byte position checks for nested tables and vectors of tables.
 %% =============================================================================
 
-commit_round_direct_known_positions_test_() ->
+battle_round_direct_known_positions_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema(<<"
-            table ServiceId { id: string (required); }
-            table Transaction {
+            table PlayerId { id: string (required); }
+            table Action {
                 id: [ubyte] (required);
                 sender: string (required);
                 data: [ubyte] (required);
-                nonce: uint64 = 0;
+                tick: uint64 = 0;
                 signature: [ubyte];
             }
-            table CommitRoundRequest {
-                service_id: ServiceId (required);
+            table BattleRoundRequest {
+                player_id: PlayerId (required);
                 round: uint64;
                 randomness: [ubyte] (required);
                 timestamp_ms: uint64;
-                transactions: [Transaction] (required);
+                actions: [Action] (required);
                 checkpoint: bool = true;
             }
-            root_type CommitRoundRequest;
+            root_type BattleRoundRequest;
         ">>),
         Map = #{
-            service_id => #{id => <<"test_svc">>},
+            player_id => #{id => <<"test_player">>},
             round => 1,
             randomness => <<0:256>>,
             timestamp_ms => 1000,
-            transactions => [
-                #{id => <<"txn1">>, sender => <<"test">>, data => <<"hello">>, nonce => 0}
+            actions => [
+                #{id => <<"act1">>, sender => <<"test">>, data => <<"hello">>, tick => 0}
             ],
             checkpoint => true
         },
         IoData = flatbuferl:from_map(Map, Schema),
         Buffer = iolist_to_binary(IoData),
 
-        %% Check all fields in CommitRoundRequest
+        %% Check all fields in BattleRoundRequest
         RootPos = read_u32(Buffer, 0),
-        CRRViolations = verify_table_alignment(Buffer, RootPos,
-            commit_round_request_fields()),
+        BRRViolations = verify_table_alignment(Buffer, RootPos,
+            battle_round_request_fields()),
 
-        %% Also check the ServiceId table that CRR points to
+        %% Also check the PlayerId table that BRR points to
         SOffset = read_i32(Buffer, RootPos),
         VTablePos = RootPos - SOffset,
-        SvcIdSlotPos = VTablePos + 4,  % field 0
-        SvcIdFieldOffset = read_u16(Buffer, SvcIdSlotPos),
-        SvcIdViolations = case SvcIdFieldOffset of
-            0 -> [{service_id_missing, 0, 0, 0}];
+        PlayerIdSlotPos = VTablePos + 4,  % field 0
+        PlayerIdFieldOffset = read_u16(Buffer, PlayerIdSlotPos),
+        PlayerIdViolations = case PlayerIdFieldOffset of
+            0 -> [{player_id_missing, 0, 0, 0}];
             _ ->
-                SvcIdRefPos = RootPos + SvcIdFieldOffset,
-                SvcIdTablePos = follow_uoffset(Buffer, SvcIdRefPos),
+                PlayerIdRefPos = RootPos + PlayerIdFieldOffset,
+                PlayerIdTablePos = follow_uoffset(Buffer, PlayerIdRefPos),
                 %% Check uoffset alignment
-                UOffViol = case SvcIdRefPos rem 4 of
+                UOffViol = case PlayerIdRefPos rem 4 of
                     0 -> [];
-                    R -> [{service_id_uoffset, SvcIdRefPos, 4, R}]
+                    R -> [{player_id_uoffset, PlayerIdRefPos, 4, R}]
                 end,
                 %% Check table alignment
-                TableViol = verify_table_alignment(Buffer, SvcIdTablePos,
-                    service_id_fields()),
+                TableViol = verify_table_alignment(Buffer, PlayerIdTablePos,
+                    player_id_fields()),
                 UOffViol ++ TableViol
         end,
 
-        %% Check Transaction tables
-        TxnSlotPos = VTablePos + 4 + 4 * 2,  % field 4 = transactions
-        TxnFieldOffset = read_u16(Buffer, TxnSlotPos),
-        TxnViolations = case TxnFieldOffset of
+        %% Check Action tables
+        ActSlotPos = VTablePos + 4 + 4 * 2,  % field 4 = actions
+        ActFieldOffset = read_u16(Buffer, ActSlotPos),
+        ActViolations = case ActFieldOffset of
             0 -> [];
             _ ->
-                TxnRefPos = RootPos + TxnFieldOffset,
-                TxnVecPos = follow_uoffset(Buffer, TxnRefPos),
-                NumTxns = read_u32(Buffer, TxnVecPos),
+                ActRefPos = RootPos + ActFieldOffset,
+                ActVecPos = follow_uoffset(Buffer, ActRefPos),
+                NumActs = read_u32(Buffer, ActVecPos),
                 lists:foldl(fun(I, Acc) ->
-                    TxnOffsetPos = TxnVecPos + 4 + I * 4,
-                    TxnTablePos = follow_uoffset(Buffer, TxnOffsetPos),
-                    TxnViol = verify_table_alignment(Buffer, TxnTablePos,
-                        transaction_fields()),
-                    TaggedViol = [{list_to_atom("txn_" ++ integer_to_list(I) ++ "_" ++
+                    ActOffsetPos = ActVecPos + 4 + I * 4,
+                    ActTablePos = follow_uoffset(Buffer, ActOffsetPos),
+                    ActViol = verify_table_alignment(Buffer, ActTablePos,
+                        action_fields()),
+                    TaggedViol = [{list_to_atom("act_" ++ integer_to_list(I) ++ "_" ++
                                    atom_to_list(N)), P, A, M}
-                                  || {N, P, A, M} <- TxnViol],
+                                  || {N, P, A, M} <- ActViol],
                     Acc ++ TaggedViol
-                end, [], lists:seq(0, NumTxns - 1))
+                end, [], lists:seq(0, NumActs - 1))
         end,
 
-        AllViolations = CRRViolations ++ SvcIdViolations ++ TxnViolations,
+        AllViolations = BRRViolations ++ PlayerIdViolations ++ ActViolations,
 
-        io:format("~n=== CommitRoundRequest Direct (Known Positions) ===~n"),
+        io:format("~n=== BattleRoundRequest Direct (Known Positions) ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(AllViolations),
         ?assertEqual([], AllViolations,
             lists:flatten(io_lib:format(
-                "CommitRoundRequest direct has ~p alignment violations: ~p",
+                "BattleRoundRequest direct has ~p alignment violations: ~p",
                 [length(AllViolations), AllViolations])))
     end}.
 
 %% =============================================================================
-%% Test: Envelope with small inner message (tests union padding interaction)
+%% Test: Packet with small inner message (tests union padding interaction)
 %% =============================================================================
 
-protocol_envelope_shutdown_test_() ->
+packet_quit_test_() ->
     {timeout, 30, fun() ->
         {ok, Schema} = flatbuferl:parse_schema_file(protocol_schema_path()),
         Map = #{
             version => 1,
             request_id => 99,
             timestamp_ms => 1710000000000,
-            message_type => 'ShutdownRequest',
-            message => #{
-                service_id => #{id => <<"svc-shutdown">>},
+            payload_type => 'QuitRequest',
+            payload => #{
+                player_id => #{id => <<"player-quitting">>},
                 timeout_ms => 10000
             }
         },
@@ -956,47 +1015,47 @@ protocol_envelope_shutdown_test_() ->
 
         Ctx = flatbuferl:new(Buffer, Schema),
         Decoded = flatbuferl:to_map(Ctx),
-        ?assertEqual('ShutdownRequest', maps:get(message_type, Decoded)),
+        ?assertEqual('QuitRequest', maps:get(payload_type, Decoded)),
 
-        %% Check Envelope fields
+        %% Check Packet fields
         RootPos = read_u32(Buffer, 0),
-        EnvelopeViolations = verify_table_alignment(Buffer, RootPos, envelope_fields()),
+        PacketViolations = verify_table_alignment(Buffer, RootPos, packet_fields()),
 
-        %% Check Envelope table position itself
+        %% Check Packet table position itself
         RootPosViol = case RootPos rem 4 of
             0 -> [];
             R -> [{root_table_pos, RootPos, 4, R}]
         end,
 
-        AllViolations = RootPosViol ++ EnvelopeViolations,
+        AllViolations = RootPosViol ++ PacketViolations,
 
-        io:format("~n=== Shutdown Envelope Alignment ===~n"),
+        io:format("~n=== Quit Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(AllViolations),
         ?assertEqual([], AllViolations,
             lists:flatten(io_lib:format(
-                "Shutdown envelope has ~p alignment violations: ~p",
+                "Quit packet has ~p alignment violations: ~p",
                 [length(AllViolations), AllViolations])))
     end}.
 
 %% =============================================================================
-%% Helper: Verify protocol envelope + inner message
+%% Helper: Verify packet envelope + inner message
 %% =============================================================================
 
-verify_protocol_envelope(Buffer, InnerFields) ->
+verify_packet_envelope(Buffer, InnerFields) ->
     RootPos = read_u32(Buffer, 0),
 
-    %% Check root (Envelope) table alignment
-    EnvelopeViolations = verify_table_alignment(Buffer, RootPos, envelope_fields()),
+    %% Check root (Packet) table alignment
+    PacketViolations = verify_table_alignment(Buffer, RootPos, packet_fields()),
 
-    %% Navigate to the union message (field index 4 = type, field index 5 = value)
+    %% Navigate to the union payload (field index 4 = type, field index 5 = value)
     SOffset = read_i32(Buffer, RootPos),
     VTablePos = RootPos - SOffset,
     VTableSize = read_u16(Buffer, VTablePos),
 
     %% Union value is at vtable slot 5 (0-indexed from field 0)
-    %% Envelope: version(0), request_id(1), trace_id(2), timestamp_ms(3),
-    %%           message_type(4), message(5)
+    %% Packet: version(0), request_id(1), trace_id(2), timestamp_ms(3),
+    %%         payload_type(4), payload(5)
     MsgSlotPos = VTablePos + 4 + 5 * 2,
     InnerViolations = case MsgSlotPos + 2 =< VTablePos + VTableSize of
         false -> [];
@@ -1011,13 +1070,13 @@ verify_protocol_envelope(Buffer, InnerFields) ->
                     %% Check uoffset alignment
                     UOffViol = case MsgRefPos rem 4 of
                         0 -> [];
-                        R -> [{message_uoffset, MsgRefPos, 4, R}]
+                        R -> [{payload_uoffset, MsgRefPos, 4, R}]
                     end,
 
                     %% Check inner table alignment
                     InnerViol = verify_table_alignment(Buffer, InnerTablePos, InnerFields),
 
-                    %% For CommitRoundRequest, also check nested ServiceId
+                    %% Also check nested tables (player_id, character_id)
                     NestedViol = verify_inner_nested_tables(
                         Buffer, InnerTablePos, InnerFields),
 
@@ -1025,7 +1084,7 @@ verify_protocol_envelope(Buffer, InnerFields) ->
             end
     end,
 
-    EnvelopeViolations ++ InnerViolations.
+    PacketViolations ++ InnerViolations.
 
 %% Check nested tables inside the inner message
 verify_inner_nested_tables(Buffer, InnerTablePos, InnerFields) ->
@@ -1037,8 +1096,8 @@ verify_inner_nested_tables(Buffer, InnerTablePos, InnerFields) ->
         fun({FieldIdx, FieldName, FieldType}, Acc) ->
             %% Only check uoffset fields that point to tables
             case FieldType of
-                uint32 when FieldName =:= service_id;
-                             FieldName =:= deployment_id ->
+                uint32 when FieldName =:= player_id;
+                             FieldName =:= character_id ->
                     SlotPos = VTablePos + 4 + FieldIdx * 2,
                     case SlotPos + 2 =< VTablePos + VTableSize of
                         false -> Acc;

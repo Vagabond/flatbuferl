@@ -1,54 +1,60 @@
 // =============================================================================
-// Complex protocol schema for alignment and struct-array testing.
+// Complex game protocol schema for alignment and struct-array testing.
 //
 // Exercises: deeply nested tables, unions, structs with fixed-size arrays,
 // vectors of tables, enums, and 8-byte scalar fields.
+//
+// Mirrors the patterns in a real-world message envelope protocol:
+//   - Root envelope with union dispatch and 8-byte timestamp/id fields
+//   - Multiple inner message types with varying nesting depth
+//   - Structs containing fixed-size byte arrays (e.g. checksums, hashes)
+//   - Vectors of tables with mixed scalar widths
 // =============================================================================
 
-namespace test.protocol;
+namespace test.game;
 
 // =============================================================================
 // Common Types
 // =============================================================================
 
-// 256-bit cryptographic hash (state hashes, content hashes)
-struct Hash256 {
+// 256-bit checksum (content verification)
+struct Checksum {
     bytes: [uint8: 32];
 }
 
-// Service identifier
-table ServiceId {
+// Player identifier
+table PlayerId {
     id: string (required);
 }
 
-// Deployment identifier (service + deployment within service)
-table DeploymentId {
-    service_id: string (required);
-    deployment_id: string (required);
+// Character identifier (player + character within account)
+table CharacterId {
+    player_id: string (required);
+    character_id: string (required);
 }
 
-// Transaction structure
-table Transaction {
-    // Unique transaction identifier
+// In-game action (command from a player)
+table Action {
+    // Unique action identifier
     id: [ubyte] (required);
-    // Sender identity (P2P peer ID or similar)
+    // Sender identity
     sender: string (required);
-    // Transaction payload (opaque bytes)
+    // Action payload (opaque bytes)
     data: [ubyte] (required);
-    // Sequence number for ordering
-    nonce: uint64 = 0;
-    // Optional cryptographic signature
+    // Tick number for ordering
+    tick: uint64 = 0;
+    // Optional signature
     signature: [ubyte];
 }
 
-// Reference to a transaction by ID
-table TransactionRef {
-    txn_id: [ubyte] (required);
+// Reference to an action by ID
+table ActionRef {
+    action_id: [ubyte] (required);
 }
 
-// Rejected transaction with reason
-table RejectedTransaction {
-    txn_id: [ubyte] (required);
+// Rejected action with reason
+table RejectedAction {
+    action_id: [ubyte] (required);
     reason: string;
 }
 
@@ -56,703 +62,170 @@ table RejectedTransaction {
 // Effect Types (outputs from execution)
 // =============================================================================
 
-// Message type for outbound messages
-enum MessageType: byte {
-    Unicast = 0,
-    Multicast = 1,
-    BroadcastGroup = 2
+enum DeliveryMode: byte {
+    Direct = 0,
+    Broadcast = 1,
+    Group = 2
 }
 
-// Outbound message to be delivered by runner
 table OutboundMessage {
     recipient: string (required);
     data: [ubyte] (required);
-    message_type: MessageType = Unicast;
+    delivery: DeliveryMode = Direct;
 }
 
-// Storage operation type
-enum StorageOpType: byte {
-    Set = 0,
-    Delete = 1
+enum StorageOp: byte {
+    Put = 0,
+    Remove = 1
 }
 
-// Storage operation (collected during execution)
-table StorageOp {
+table StorageChange {
     bucket: string (required);
     key: [ubyte] (required);
-    op: StorageOpType;
-    value: [ubyte];  // Only for Set operations
+    op: StorageOp;
+    value: [ubyte];
 }
 
-// Threshold signing request
-table SigningRequest {
-    id: [ubyte] (required);
-    message: [ubyte] (required);
-    key_id: string;
-    context: [ubyte];
-}
-
-// Broadcast group operation type
-enum BroadcastGroupOpType: byte {
-    Create = 0,
-    Join = 1,
-    Leave = 2,
-    AddPeer = 3,
-    RemovePeer = 4,
-    Destroy = 5
-}
-
-// Broadcast group operation
-table BroadcastGroupOp {
-    op: BroadcastGroupOpType;
-    group_id: string (required);
-    peer_id: string;  // For Add/RemovePeer operations
-}
-
-// Collection of all effects from execution
 table Effects {
     messages: [OutboundMessage];
-    storage: [StorageOp];
+    storage: [StorageChange];
     logs: [string];
-    threshold_signing: [SigningRequest];
-    broadcast_groups: [BroadcastGroupOp];
 }
 
 // =============================================================================
-// Component Source Types
+// Crafting / Material Source Types
 // =============================================================================
 
-// Inline component (bytes included in message)
-table InlineComponent {
+// Inline material (raw bytes included in message)
+table InlineMaterial {
     bytes: [ubyte] (required);
 }
 
-// Reference to component in registry
-table RegistryRef {
-    package: string (required);
+// Reference to a material in the recipe book
+table RecipeRef {
+    name: string (required);
     version: string (required);
-    content_hash: Hash256;
+    content_hash: Checksum;
 }
 
-// Component source - inline or registry reference
-union ComponentSource {
-    InlineComponent,
-    RegistryRef
+// Material source — inline or recipe reference
+union MaterialSource {
+    InlineMaterial,
+    RecipeRef
 }
 
 // =============================================================================
-// Lifecycle Messages
+// Game Messages
 // =============================================================================
 
-// Initialize the wasvm service
-table InitServiceRequest {
-    service_id: ServiceId (required);
-    // Consensus-derived randomness for initialization
+// Spawn a new entity in the game world
+table SpawnRequest {
+    player_id: PlayerId (required);
+    // Seed randomness
     randomness: [ubyte];
-    // Group public key for threshold signatures
-    group_pubkey: [ubyte];
-    // List of group member identities
+    // Party public key
+    party_key: [ubyte];
+    // Party member names
     members: [string];
-    // This node's index in the group
-    node_index: uint32;
+    // Slot index
+    slot_index: uint32;
 }
 
-table InitServiceResponse {
+table SpawnResponse {
     success: bool;
     error: string;
-    state_hash: Hash256;
+    state_hash: Checksum;
 }
 
-// Graceful shutdown request
-table ShutdownRequest {
-    service_id: ServiceId (required);
-    // Timeout in milliseconds before forced shutdown
+// Graceful disconnect
+table QuitRequest {
+    player_id: PlayerId (required);
     timeout_ms: uint32 = 5000;
 }
 
-table ShutdownResponse {
+table QuitResponse {
     success: bool;
-    final_state_hash: Hash256;
-    // Number of in-flight operations that were cancelled
-    cancelled_operations: uint32;
+    final_state_hash: Checksum;
+    cancelled_actions: uint32;
 }
 
-// =============================================================================
-// Deployment Messages
-// =============================================================================
-
-// Deploy a component
-table DeployRequest {
-    deployment_id: DeploymentId (required);
-    component: ComponentSource (required);
-    // Randomness for initialization
-    init_randomness: [ubyte];
-    // Identity of deployer
-    deployer: string;
-    // Signature over deployment for authorization
-    deployer_signature: [ubyte];
+// Craft an item
+table CraftRequest {
+    character_id: CharacterId (required);
+    material: MaterialSource (required);
+    init_seed: [ubyte];
+    crafter: string;
+    crafter_signature: [ubyte];
 }
 
-table DeployResponse {
+table CraftResponse {
     success: bool;
     error: string;
-    state_hash: Hash256;
-    // Hash of the deployed component
-    content_hash: Hash256;
+    state_hash: Checksum;
+    content_hash: Checksum;
 }
 
-// Undeploy a component
-table UndeployRequest {
-    deployment_id: DeploymentId (required);
-    // Whether to archive state vs. delete
-    archive_state: bool = true;
-}
-
-table UndeployResponse {
-    success: bool;
-    error: string;
-    final_state_hash: Hash256;
-}
-
-// =============================================================================
-// Validation Messages (Pre-Consensus)
-// =============================================================================
-
-// Validation result
-enum ValidationResult: byte {
-    Valid = 0,
-    Invalid = 1,
-    Defer = 2
-}
-
-// Reason for deferring validation
-enum DeferReason: byte {
-    NonceTooHigh = 0,
-    DependencyMissing = 1,
-    ResourceBusy = 2,
-    RetryLater = 3
-}
-
-// Validate a transaction before consensus
-table ValidateRequest {
-    deployment_id: DeploymentId (required);
-    txn: Transaction (required);
-    // Current round number for context
+// Process a round of actions (the core tick)
+table BattleRoundRequest {
+    player_id: PlayerId (required);
     round: uint64;
+    randomness: [ubyte] (required);
+    timestamp_ms: uint64;
+    actions: [Action] (required);
+    checkpoint: bool = true;
+    effects: Effects;
 }
 
-table ValidateResponse {
-    result: ValidationResult;
+table ActionOutcome {
+    action_id: [ubyte] (required);
+    status: ubyte;
     error: string;
-    defer_reason: DeferReason;
-    // Any broadcast group changes requested during validation
-    broadcast_groups: [BroadcastGroupOp];
-}
-
-// =============================================================================
-// Query Messages (Read-Only)
-// =============================================================================
-
-// Query result status
-enum QueryResult: byte {
-    Success = 0,
-    NotFound = 1,
-    Unauthorized = 2,
-    InvalidQuery = 3,
-    InternalError = 4
-}
-
-// Execute a read-only query
-table QueryRequest {
-    deployment_id: DeploymentId (required);
-    payload: [ubyte] (required);
-    sender: string;
-    // Optional: query state as of specific round
-    at_round: uint64;
-}
-
-table QueryResponse {
-    result: QueryResult;
-    payload: [ubyte];
-    error: string;
-    // Round number of the state that was queried
-    round: uint64;
-}
-
-// =============================================================================
-// Execution Messages (Post-Consensus Core)
-// =============================================================================
-
-// Transaction execution status
-enum TransactionStatus: byte {
-    Applied = 0,
-    InvalidDuringExecution = 1,
-    ExecutionError = 2,
-    Deferred = 3
-}
-
-// Per-keyspace hash for fine-grained state verification
-table KeyspaceHash {
-    keyspace: string;
-    hash: Hash256;
-    keys_modified: uint32;
-}
-
-// Outcome of a single transaction
-table TransactionOutcome {
-    txn_id: [ubyte] (required);
-    status: TransactionStatus;
-    error: string;
-    // Fuel (gas) consumed during execution
     fuel_consumed: uint64;
 }
 
-// Validator info for epoch transition
-table ValidatorInfo {
-    // Validator identity (P2P peer ID or public key hex)
-    peer_id: string (required);
-    // BLS public key share bytes
-    pubkey_share: [ubyte];
-    // Validator voting weight
-    weight: uint32 = 1;
-}
-
-// Consensus parameters for an epoch
-table ConsensusParams {
-    // Maximum fuel (gas) allowed per round
-    max_fuel_per_round: uint64;
-    // Maximum transactions per round
-    max_txns_per_round: uint32;
-    // Round timeout in milliseconds
-    round_timeout_ms: uint32;
-    // Fault tolerance threshold (f value for f+1 out of 3f+1)
-    fault_tolerance: uint32;
-}
-
-// Epoch transition payload — attached to CommitRoundRequest when the
-// validator set or consensus parameters change at the end of an epoch.
-table EpochTransition {
-    // New epoch number (must be current_epoch + 1)
-    new_epoch: uint64;
-    // New threshold / group public key bytes
-    new_threshold_key: [ubyte] (required);
-    // New validator set for the epoch
-    validators: [ValidatorInfo];
-    // Updated consensus parameters (nil = keep current)
-    params: ConsensusParams;
-}
-
-// Commit a round of transactions (post-consensus)
-// This is the core execution message - determinism critical
-table CommitRoundRequest {
-    service_id: ServiceId (required);
-    // Consensus round number
-    round: uint64;
-    // Consensus-derived randomness
-    randomness: [ubyte] (required);
-    // Consensus timestamp (milliseconds since epoch)
-    timestamp_ms: uint64;
-    // Ordered batch of transactions
-    transactions: [Transaction] (required);
-    // Whether to create a checkpoint after this round
-    checkpoint: bool = true;
-    // Optional epoch transition (non-nil signals validator set change)
-    epoch_transition: EpochTransition;
-}
-
-table CommitRoundResponse {
+table BattleRoundResponse {
     success: bool;
     error: string;
-    // Root state hash after execution
-    state_hash: Hash256;
-    // Per-keyspace hashes for verification
-    keyspace_hashes: [KeyspaceHash];
-    // Outcome for each transaction
-    outcomes: [TransactionOutcome];
-    // Effects to be executed by runner
+    state_hash: Checksum;
+    outcomes: [ActionOutcome];
     effects: Effects;
-    // Total fuel consumed across all transactions in this round
     fuel_consumed: uint64 = 0;
-}
-
-// =============================================================================
-// Ordering Messages (Proposal Preparation)
-// =============================================================================
-
-// Prepare a proposal batch for HBBFT
-table PrepareProposalRequest {
-    service_id: ServiceId (required);
-    // Pending transactions from mempool
-    pending: [Transaction] (required);
-    // Maximum number of transactions to include
-    max_batch_size: uint32;
-    // Maximum total bytes
-    max_batch_bytes: uint32;
-    // Current round
-    round: uint64;
-}
-
-table PrepareProposalResponse {
-    // Transactions to include in proposal
-    include: [TransactionRef];
-    // Transactions to keep in mempool for later
-    defer: [TransactionRef];
-    // Transactions to reject from mempool
-    reject: [RejectedTransaction];
-}
-
-// =============================================================================
-// Callback Messages (Async Delivery)
-// =============================================================================
-
-// Threshold signature success
-table SignatureSuccess {
-    signed_envelope: SignedEnvelope (required);
-}
-
-// Signed envelope from threshold signature
-table SignedEnvelope {
-    version: uint16 = 1;
-    magic: string;
-    group_pubkey: string;
-    round: uint64;
-    timestamp_ms: uint64;
-    key_id: string;
-    payload_type: string;
-    payload: [ubyte];
-    signature: [ubyte];
-}
-
-// Threshold signature failure reason
-enum SignatureFailureReason: byte {
-    Timeout = 0,
-    InsufficientShares = 1,
-    InvalidShares = 2,
-    InternalError = 3
-}
-
-// Threshold signature failure
-table SignatureFailure {
-    reason: SignatureFailureReason;
-    error: string;
-}
-
-// Result of threshold signing operation
-union SignatureResult {
-    SignatureSuccess,
-    SignatureFailure
-}
-
-// Handle completed threshold signature (callback from runner)
-table OnThresholdSignatureRequest {
-    deployment_id: DeploymentId (required);
-    request_id: [ubyte] (required);
-    result: SignatureResult (required);
-    round: uint64;
-}
-
-table OnThresholdSignatureResponse {
-    state_hash: Hash256;
-    effects: Effects;
-}
-
-// =============================================================================
-// Upgrade Messages
-// =============================================================================
-
-// Upgrade a deployment to a new component version
-table UpgradeRequest {
-    deployment_id: DeploymentId (required);
-    component: ComponentSource (required);
-    // Consensus round
-    round: uint64;
-    // Consensus randomness
-    randomness: [ubyte];
-    // Consensus timestamp
-    timestamp_ms: uint64;
-    // Identity of upgrader
-    upgrader: string;
-    // Signature for authorization
-    upgrader_signature: [ubyte];
-}
-
-table UpgradeResponse {
-    success: bool;
-    error: string;
-    state_hash: Hash256;
-    effects: Effects;
-}
-
-// =============================================================================
-// Component Registry Messages (M3)
-// =============================================================================
-
-// Store a component blob in the content-addressed registry
-table StoreComponentRequest {
-    // Component binary (WASM)
-    bytes: [ubyte] (required);
-    // Optional expected content hash (verified after storage)
-    expected_hash: Hash256;
-}
-
-table StoreComponentResponse {
-    success: bool;
-    error: string;
-    // Content hash (BLAKE3) of the stored component
-    content_hash: Hash256;
-    // Size of the stored component in bytes
-    size: uint64;
-}
-
-// Check if a component blob exists in the registry
-table HasComponentRequest {
-    // Content hash to look up
-    content_hash: Hash256 (required);
-}
-
-table HasComponentResponse {
-    exists: bool;
-    // Size of the component in bytes (if exists)
-    size: uint64;
-}
-
-// Confirm a committed round (two-phase commit)
-table ConfirmRoundRequest {
-    service_id: ServiceId (required);
-    round: uint64;
-}
-
-table ConfirmRoundResponse {
-    success: bool;
-    error: string;
-}
-
-// Cancel a committed round (discard staged writes)
-table CancelRoundRequest {
-    service_id: ServiceId (required);
-    round: uint64;
-}
-
-table CancelRoundResponse {
-    success: bool;
-    error: string;
-}
-
-// Request list of all stored component hashes.
-// Used during new node join / state sync.
-// Sent via point-to-point transfer stream.
-table ListComponentsRequest {
-    // No fields needed; returns all stored component hashes
-}
-
-table ListComponentsResponse {
-    // All component hashes stored on this node
-    component_hashes: [Hash256];
-}
-
-// =============================================================================
-// Management Messages
-// =============================================================================
-
-// Management operation identifiers.
-// State-changing ops go through HBBFT consensus (ManagementRequest).
-// Read-only ops use the query path (ManagementQueryRequest).
-enum ManagementOp: byte {
-    // --- Registry Browse (read-only, query path) ---
-    ListNamespaces = 0,
-    ListPackages = 1,
-    ResolvePackage = 2,
-
-    // --- Registry Publish (state-changing) ---
-    Publish = 3,
-
-    // --- Build Pipeline (state-changing) ---
-    Compile = 4,
-    Compose = 5,
-    // WizerInit = 6 removed (P3-REFACTOR-94760): pre-init is an external build-pipeline concern
-
-    // --- Deployment (state-changing) ---
-    Activate = 7,
-    Deactivate = 8,
-
-    // --- Instance Management ---
-    ListDeployments = 9,   // read-only
-    GetDeployment = 10,    // read-only
-    HotReload = 11,        // state-changing
-    Pause = 12,            // state-changing
-    Resume = 13           // state-changing
-}
-
-// Management request for state-changing operations.
-// Routed through HBBFT consensus before reaching the platform component.
-table ManagementRequest {
-    // Service context
-    service_id: ServiceId (required);
-    // Which management operation to perform
-    op: ManagementOp;
-    // CBOR-encoded operation payload (operation-specific structure)
-    payload: [ubyte];
-    // Sender identity (peer ID or account ID)
-    sender: string;
-    // Auth proof signature over the payload
-    signature: [ubyte];
-    // Consensus round number (filled by consensus layer)
-    round: uint64;
-    // Consensus-provided randomness
-    randomness: [ubyte];
-}
-
-// Management response for state-changing operations.
-table ManagementResponse {
-    // Whether the operation succeeded
-    success: bool;
-    // Error message (if success == false)
-    error: string;
-    // CBOR-encoded result payload (operation-specific)
-    payload: [ubyte];
-    // State hash after operation
-    state_hash: Hash256;
-}
-
-// Management query request for read-only operations.
-// Handled by a single node without consensus.
-table ManagementQueryRequest {
-    // Service context
-    service_id: ServiceId (required);
-    // Which query operation to perform
-    op: ManagementOp;
-    // CBOR-encoded query parameters
-    payload: [ubyte];
-    // Sender identity
-    sender: string;
-}
-
-// Management query response.
-table ManagementQueryResponse {
-    // Whether the query succeeded
-    success: bool;
-    // Error message (if success == false)
-    error: string;
-    // CBOR-encoded result payload
-    payload: [ubyte];
-}
-
-// =============================================================================
-// Error Messages
-// =============================================================================
-
-// Error codes
-enum ErrorCode: byte {
-    Unknown = 0,
-    InvalidRequest = 1,
-    DeploymentNotFound = 2,
-    ServiceNotFound = 3,
-    ComponentLoadFailed = 4,
-    ExecutionFailed = 5,
-    FuelExhausted = 6,
-    StorageError = 7,
-    VersionMismatch = 8,
-    Unauthorized = 9
-}
-
-// Generic error response
-table ErrorResponse {
-    code: ErrorCode;
-    message: string;
-    details: string;
-    // Whether the operation can be retried
-    recoverable: bool;
 }
 
 // =============================================================================
 // Message Union (All Message Types)
 // =============================================================================
 
-// Union of all possible message types
-union Message {
-    // === Lifecycle ===
-    InitServiceRequest,
-    InitServiceResponse,
-    ShutdownRequest,
-    ShutdownResponse,
-
-    // === Deployment ===
-    DeployRequest,
-    DeployResponse,
-    UndeployRequest,
-    UndeployResponse,
-
-    // === Validation ===
-    ValidateRequest,
-    ValidateResponse,
-
-    // === Query ===
-    QueryRequest,
-    QueryResponse,
-
-    // === Execution ===
-    CommitRoundRequest,
-    CommitRoundResponse,
-
-    // === Ordering ===
-    PrepareProposalRequest,
-    PrepareProposalResponse,
-
-    // === Callbacks ===
-    OnThresholdSignatureRequest,
-    OnThresholdSignatureResponse,
-
-    // === Upgrade ===
-    UpgradeRequest,
-    UpgradeResponse,
-
-    // === Registry ===
-    StoreComponentRequest,
-    StoreComponentResponse,
-    HasComponentRequest,
-    HasComponentResponse,
-
-    // === Round Confirmation ===
-    ConfirmRoundRequest,
-    ConfirmRoundResponse,
-    CancelRoundRequest,
-    CancelRoundResponse,
-
-    // === Component Distribution (ListComponents for new node sync) ===
-    ListComponentsRequest,
-    ListComponentsResponse,
-
-    // === Management ===
-    ManagementRequest,
-    ManagementResponse,
-    ManagementQueryRequest,
-    ManagementQueryResponse,
-
-    // === Errors ===
-    ErrorResponse
+union Payload {
+    SpawnRequest,
+    SpawnResponse,
+    QuitRequest,
+    QuitResponse,
+    CraftRequest,
+    CraftResponse,
+    BattleRoundRequest,
+    BattleRoundResponse
 }
 
 // =============================================================================
-// Envelope (Top-Level Message Container)
+// Packet (Top-Level Message Container)
 // =============================================================================
 
-// Top-level message envelope - all messages wrapped in this
-table Envelope {
-    // Protocol version (must match PROTOCOL_VERSION)
+table Packet {
+    // Protocol version
     version: uint16 = 1;
 
-    // Unique request identifier (echoed in response)
+    // Unique request identifier
     request_id: uint64;
 
-    // Optional trace ID for distributed tracing
+    // Optional trace ID for debugging
     trace_id: string;
 
     // Timestamp when message was created (ms since epoch)
     timestamp_ms: uint64;
 
     // The actual message payload
-    message: Message;
+    payload: Payload;
 }
 
-// Root type for the schema
-root_type Envelope;
+root_type Packet;

@@ -672,3 +672,118 @@ binary_as_ubyte_array_test() ->
     {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, data), Buffer),
     %% ubyte returns binary directly
     ?assertEqual(Bin, maps:get(bytes, Struct)).
+
+%% =============================================================================
+%% Struct Array Sizing Tests
+%% =============================================================================
+%% Regression tests for primitive_type_size/1 returning wrong sizes for
+%% {array, ElemType, Count} tuples. The catch-all clause returned 4 for any
+%% unrecognized type, causing structs with fixed-size arrays > 4 bytes to
+%% have incorrect total_size, corrupting vtable tbl_size and all subsequent
+%% field offsets.
+
+struct_array_vtable_size_test() ->
+    %% Verify the vtable tbl_size is correct for a table with a 32-byte struct.
+    %% Before the fix, tbl_size was 16 (treated array as 4 bytes) instead of 44.
+    Schema = schema(
+        #{
+            'Checksum' => {struct, [{bytes, {array, uint8, 32}}]},
+            test => table([
+                field(name, string),
+                field(version, string, #{id => 1}),
+                field(hash, 'Checksum', #{id => 2})
+            ])
+        },
+        #{root_type => test}
+    ),
+    Map = #{name => <<"pkg">>, version => <<"1.0">>, hash => #{bytes => lists:seq(1, 32)}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    %% Read root table vtable
+    <<RootOff:32/little, _/binary>> = Buffer,
+    <<_:RootOff/binary, SOffset:32/little-signed, _/binary>> = Buffer,
+    VTPos = RootOff - SOffset,
+    <<_:VTPos/binary, _VTSize:16/little, TblSize:16/little, _/binary>> = Buffer,
+    %% tbl_size = 4 (soffset) + 4 (name uoffset) + 4 (version uoffset) + 32 (Checksum) = 44
+    ?assertEqual(44, TblSize).
+
+struct_array_roundtrip_test() ->
+    %% Roundtrip: table with 32-byte struct array field and strings
+    Schema = schema(
+        #{
+            'Checksum' => {struct, [{bytes, {array, uint8, 32}}]},
+            test => table([
+                field(name, string),
+                field(version, string, #{id => 1}),
+                field(hash, 'Checksum', #{id => 2})
+            ])
+        },
+        #{root_type => test}
+    ),
+    HashBytes = lists:seq(1, 32),
+    Map = #{name => <<"test:pkg">>, version => <<"2.0.0">>, hash => #{bytes => HashBytes}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, <<"test:pkg">>} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, name), Buffer),
+    {ok, <<"2.0.0">>} = flatbuferl_reader:get_field(Root, 1, field_type(Schema, test, version), Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 2, field_type(Schema, test, hash), Buffer),
+    ?assertEqual(HashBytes, maps:get(bytes, Struct)).
+
+struct_array_with_trailing_scalar_test() ->
+    %% Struct with array followed by a scalar — both must be sized correctly
+    Schema = schema(
+        #{
+            'Tagged' => {struct, [{data, {array, ubyte, 16}}, {tag, uint32}]},
+            test => table([field(item, 'Tagged'), field(label, string, #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    Bin = crypto:strong_rand_bytes(16),
+    Map = #{item => #{data => Bin, tag => 99}, label => <<"hello">>},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, item), Buffer),
+    ?assertEqual(Bin, maps:get(data, Struct)),
+    ?assertEqual(99, maps:get(tag, Struct)),
+    ?assertEqual(
+        {ok, <<"hello">>},
+        flatbuferl_reader:get_field(Root, 1, field_type(Schema, test, label), Buffer)
+    ).
+
+struct_double_array_test() ->
+    %% Struct with [double:4] — 8-byte elements, 32 bytes total
+    Schema = schema(
+        #{
+            'Matrix' => {struct, [{vals, {array, double, 4}}]},
+            test => table([field(m, 'Matrix')])
+        },
+        #{root_type => test}
+    ),
+    Map = #{m => #{vals => [1.0, 2.0, 3.0, 4.0]}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, m), Buffer),
+    ?assertEqual([1.0, 2.0, 3.0, 4.0], maps:get(vals, Struct)).
+
+struct_array_nested_in_table_test() ->
+    %% Struct with array inside a nested table (not root) — exercises
+    %% calc_ref_align_padding path with struct array sizing
+    Schema = schema(
+        #{
+            'Checksum' => {struct, [{bytes, {array, ubyte, 32}}]},
+            'Ref' => table([
+                field(pkg, string),
+                field(hash, 'Checksum', #{id => 1})
+            ]),
+            test => table([field(name, string), field(ref, 'Ref', #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    HashBin = crypto:strong_rand_bytes(32),
+    Map = #{name => <<"outer">>, ref => #{pkg => <<"inner:pkg">>, hash => #{bytes => HashBin}}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Decoded = flatbuferl:to_map(Ctx),
+    ?assertEqual(<<"outer">>, maps:get(name, Decoded)),
+    Ref = maps:get(ref, Decoded),
+    ?assertEqual(<<"inner:pkg">>, maps:get(pkg, Ref)),
+    ?assertEqual(HashBin, maps:get(bytes, maps:get(hash, Ref))).
