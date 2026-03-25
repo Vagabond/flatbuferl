@@ -2,12 +2,14 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% Suppress warnings for helper functions kept for future test expansion
--compile({nowarn_unused_function, [
-    verify_vector_alignment/2,
-    character_id_fields/0,
-    time_interval_fields/0,
-    building_fields/0
-]}).
+-compile(
+    {nowarn_unused_function, [
+        verify_vector_alignment/2,
+        character_id_fields/0,
+        time_interval_fields/0,
+        building_fields/0
+    ]}
+).
 
 %% =============================================================================
 %% Alignment Verification Tests for flatbuferl
@@ -43,29 +45,31 @@ game_state_schema_path() ->
 %% =============================================================================
 
 %% Returns the natural alignment for a FlatBuffer scalar type.
-type_alignment(bool)    -> 1;
-type_alignment(byte)    -> 1;
-type_alignment(ubyte)   -> 1;
-type_alignment(int8)    -> 1;
-type_alignment(uint8)   -> 1;
-type_alignment(short)   -> 2;
-type_alignment(ushort)  -> 2;
-type_alignment(int16)   -> 2;
-type_alignment(uint16)  -> 2;
-type_alignment(int)     -> 4;
-type_alignment(uint)    -> 4;
-type_alignment(int32)   -> 4;
-type_alignment(uint32)  -> 4;
-type_alignment(float)   -> 4;
+type_alignment(bool) -> 1;
+type_alignment(byte) -> 1;
+type_alignment(ubyte) -> 1;
+type_alignment(int8) -> 1;
+type_alignment(uint8) -> 1;
+type_alignment(short) -> 2;
+type_alignment(ushort) -> 2;
+type_alignment(int16) -> 2;
+type_alignment(uint16) -> 2;
+type_alignment(int) -> 4;
+type_alignment(uint) -> 4;
+type_alignment(int32) -> 4;
+type_alignment(uint32) -> 4;
+type_alignment(float) -> 4;
 type_alignment(float32) -> 4;
-type_alignment(long)    -> 8;
-type_alignment(ulong)   -> 8;
-type_alignment(int64)   -> 8;
-type_alignment(uint64)  -> 8;
-type_alignment(double)  -> 8;
+type_alignment(long) -> 8;
+type_alignment(ulong) -> 8;
+type_alignment(int64) -> 8;
+type_alignment(uint64) -> 8;
+type_alignment(double) -> 8;
 type_alignment(float64) -> 8;
-type_alignment(string)  -> 4;  % uoffset
-type_alignment(_)       -> 4.  % table refs, vectors are uoffsets (4 bytes)
+% uoffset
+type_alignment(string) -> 4;
+% table refs, vectors are uoffsets (4 bytes)
+type_alignment(_) -> 4.
 
 %% type_size/1 kept for reference; may be used by future alignment checks.
 %% -compile({nowarn_unused_function, type_size/1}).
@@ -115,19 +119,21 @@ verify_table_alignment(Buffer, TablePos, FieldDefs) ->
     FieldViolations = lists:foldl(
         fun({FieldIndex, FieldName, FieldType}, Acc) ->
             case FieldIndex < NumSlots of
-                false -> Acc;
+                false ->
+                    Acc;
                 true ->
                     SlotPos = VTablePos + 4 + FieldIndex * 2,
                     FieldOffset = read_u16(Buffer, SlotPos),
                     case FieldOffset of
-                        0 -> Acc;  % field not present
+                        % field not present
+                        0 ->
+                            Acc;
                         _ ->
                             AbsFieldPos = TablePos + FieldOffset,
                             RequiredAlign = type_alignment(FieldType),
                             case AbsFieldPos rem RequiredAlign of
                                 0 -> Acc;
-                                Mod ->
-                                    [{FieldName, AbsFieldPos, RequiredAlign, Mod} | Acc]
+                                Mod -> [{FieldName, AbsFieldPos, RequiredAlign, Mod} | Acc]
                             end
                     end
             end
@@ -163,11 +169,13 @@ follow_uoffset(Buffer, Pos) ->
 %%   4: payload_type (union type byte - implicit)
 %%   5: payload (union value - uoffset)
 packet_fields() ->
-    [{0, version, uint16},
-     {1, request_id, uint64},
-     {2, trace_id, string},
-     {3, timestamp_ms, uint64}].
-     %% Union type/value handled separately
+    [
+        {0, version, uint16},
+        {1, request_id, uint64},
+        {2, trace_id, string},
+        {3, timestamp_ms, uint64}
+    ].
+%% Union type/value handled separately
 
 %% BattleRoundRequest fields:
 %%   0: player_id (table ref -> uoffset)
@@ -178,13 +186,19 @@ packet_fields() ->
 %%   5: checkpoint (bool)
 %%   6: effects (table ref -> uoffset)
 battle_round_request_fields() ->
-    [{0, player_id, uint32},       % uoffset to PlayerId table
-     {1, round, uint64},
-     {2, randomness, uint32},      % uoffset to vector
-     {3, timestamp_ms, uint64},
-     {4, actions, uint32},         % uoffset to vector
-     {5, checkpoint, bool},
-     {6, effects, uint32}].        % uoffset to table
+    % uoffset to PlayerId table
+    [
+        {0, player_id, uint32},
+        {1, round, uint64},
+        % uoffset to vector
+        {2, randomness, uint32},
+        {3, timestamp_ms, uint64},
+        % uoffset to vector
+        {4, actions, uint32},
+        {5, checkpoint, bool},
+        % uoffset to table
+        {6, effects, uint32}
+    ].
 
 %% SpawnRequest fields:
 %%   0: player_id (table ref)
@@ -193,11 +207,13 @@ battle_round_request_fields() ->
 %%   3: members (vector of strings)
 %%   4: slot_index (uint32)
 spawn_request_fields() ->
-    [{0, player_id, uint32},
-     {1, randomness, uint32},
-     {2, party_key, uint32},
-     {3, members, uint32},
-     {4, slot_index, uint32}].
+    [
+        {0, player_id, uint32},
+        {1, randomness, uint32},
+        {2, party_key, uint32},
+        {3, members, uint32},
+        {4, slot_index, uint32}
+    ].
 
 %% CraftRequest fields:
 %%   0: character_id (table ref)
@@ -207,12 +223,14 @@ spawn_request_fields() ->
 %%   4: crafter (string)
 %%   5: crafter_signature (vector)
 craft_request_fields() ->
-    [{0, character_id, uint32},
-     {1, material_type, ubyte},
-     {2, material, uint32},
-     {3, init_seed, uint32},
-     {4, crafter, string},
-     {5, crafter_signature, uint32}].
+    [
+        {0, character_id, uint32},
+        {1, material_type, ubyte},
+        {2, material, uint32},
+        {3, init_seed, uint32},
+        {4, crafter, string},
+        {5, crafter_signature, uint32}
+    ].
 
 %% PlayerId fields:
 %%   0: id (string -> uoffset)
@@ -226,18 +244,22 @@ player_id_fields() ->
 %%   3: tick (uint64)
 %%   4: signature (vector -> uoffset)
 action_fields() ->
-    [{0, id, uint32},
-     {1, sender, string},
-     {2, data, uint32},
-     {3, tick, uint64},
-     {4, signature, uint32}].
+    [
+        {0, id, uint32},
+        {1, sender, string},
+        {2, data, uint32},
+        {3, tick, uint64},
+        {4, signature, uint32}
+    ].
 
 %% CharacterId fields:
 %%   0: player_id (string)
 %%   1: character_id (string)
 character_id_fields() ->
-    [{0, player_id, string},
-     {1, character_id, string}].
+    [
+        {0, player_id, string},
+        {1, character_id, string}
+    ].
 
 %% =============================================================================
 %% Game state schema field definitions
@@ -247,76 +269,86 @@ character_id_fields() ->
 %%   0: version (int = int32)
 %%   1: gameData1 (table ref)
 game_state_root_fields() ->
-    [{0, version, int32},
-     {1, 'gameData1', uint32}].
+    [
+        {0, version, int32},
+        {1, 'gameData1', uint32}
+    ].
 
 %% GameData fields (selected - the ones with long/i64):
 %%   6: nextPirateAttack (long)
 %%   13: merchantVisits ([long])  - vector
 %%   20: lastPvpAttackTime (long)
 game_data_fields() ->
-    [{0, workers, uint32},
-     {1, trophies, int32},
-     {2, 'academyTechnologies', uint32},
-     {3, 'arsenalTechnologies', uint32},
-     {4, ships, uint32},
-     {5, 'currentQuests', uint32},
-     {6, 'completedQuests', uint32},
-     {7, 'playerResources', uint32},
-     {8, 'nextPirateAttack', int64},
-     {9, 'leftOverResources', uint32},
-     {10, islands, uint32},
-     {11, 'fortressLevel', byte},
-     {12, defences, uint32},
-     {13, buildings, uint32},
-     {14, 'islandSectors', uint32},
-     {15, 'townSectors', uint32},
-     {16, 'merchantVisits', uint32},
-     {17, 'merchantShips', uint32},
-     {18, 'playerName', string},
-     {19, 'reservedResources', uint32},
-     {20, 'battleLogsAttack', uint32},
-     {21, 'battleLogsDefence', uint32},
-     {22, 'lastPvpAttackTime', int64},
-     {23, 'raidPlayers', uint32}].
+    [
+        {0, workers, uint32},
+        {1, trophies, int32},
+        {2, 'academyTechnologies', uint32},
+        {3, 'arsenalTechnologies', uint32},
+        {4, ships, uint32},
+        {5, 'currentQuests', uint32},
+        {6, 'completedQuests', uint32},
+        {7, 'playerResources', uint32},
+        {8, 'nextPirateAttack', int64},
+        {9, 'leftOverResources', uint32},
+        {10, islands, uint32},
+        {11, 'fortressLevel', byte},
+        {12, defences, uint32},
+        {13, buildings, uint32},
+        {14, 'islandSectors', uint32},
+        {15, 'townSectors', uint32},
+        {16, 'merchantVisits', uint32},
+        {17, 'merchantShips', uint32},
+        {18, 'playerName', string},
+        {19, 'reservedResources', uint32},
+        {20, 'battleLogsAttack', uint32},
+        {21, 'battleLogsDefence', uint32},
+        {22, 'lastPvpAttackTime', int64},
+        {23, 'raidPlayers', uint32}
+    ].
 
 %% Workers fields:
 %%   0: productionStartTime (long)
 %%   1: assignedWorkers (int)
 %%   2: productionEndTime (long)
 workers_fields() ->
-    [{0, 'productionStartTime', int64},
-     {1, 'assignedWorkers', int32},
-     {2, 'productionEndTime', int64}].
+    [
+        {0, 'productionStartTime', int64},
+        {1, 'assignedWorkers', int32},
+        {2, 'productionEndTime', int64}
+    ].
 
 %% TimeInterval fields:
 %%   0: start (long)
 %%   1: end_field (long)
 time_interval_fields() ->
-    [{0, start, int64},
-     {1, 'end', int64}].
+    [
+        {0, start, int64},
+        {1, 'end', int64}
+    ].
 
 %% Building fields (selected for i64):
 %%   8: currentCraftingStartTime (long)
 %%   11: pause (long)
 building_fields() ->
-    [{0, type, string},
-     {1, level, byte},
-     {2, position, uint32},
-     %% 3 = paused (deprecated)
-     %% 4 = production (deprecated)
-     {5, storage, uint32},
-     {6, upgrading, bool},
-     {7, 'startEndTime', uint32},
-     {8, construction, string},
-     %% 9 = currentCraftingItem (deprecated)
-     {10, 'currentCraftingStartTime', int64},
-     {11, 'craftingQueue', uint32},
-     {12, research, uint32},
-     {13, pause, int64},
-     {14, producing, bool},
-     {15, 'userPaused', bool},
-     {16, 'defenceUpgrading', bool}].
+    [
+        {0, type, string},
+        {1, level, byte},
+        {2, position, uint32},
+        %% 3 = paused (deprecated)
+        %% 4 = production (deprecated)
+        {5, storage, uint32},
+        {6, upgrading, bool},
+        {7, 'startEndTime', uint32},
+        {8, construction, string},
+        %% 9 = currentCraftingItem (deprecated)
+        {10, 'currentCraftingStartTime', int64},
+        {11, 'craftingQueue', uint32},
+        {12, research, uint32},
+        {13, pause, int64},
+        {14, producing, bool},
+        {15, 'userPaused', bool},
+        {16, 'defenceUpgrading', bool}
+    ].
 
 %% =============================================================================
 %% Test: Packet wrapping BattleRoundRequest
@@ -374,15 +406,26 @@ packet_battle_round_test_() ->
                 io:format("All fields properly aligned.~n");
             _ ->
                 io:format("ALIGNMENT VIOLATIONS (~p):~n", [length(Violations)]),
-                lists:foreach(fun({Name, Pos, Req, Mod}) ->
-                    io:format("  ~p at byte ~p: requires ~p-byte alignment, position mod ~p = ~p~n",
-                              [Name, Pos, Req, Req, Mod])
-                end, Violations)
+                lists:foreach(
+                    fun({Name, Pos, Req, Mod}) ->
+                        io:format(
+                            "  ~p at byte ~p: requires ~p-byte alignment, position mod ~p = ~p~n",
+                            [Name, Pos, Req, Req, Mod]
+                        )
+                    end,
+                    Violations
+                )
         end,
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "BattleRoundRequest has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "BattleRoundRequest has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -417,10 +460,16 @@ packet_spawn_test_() ->
         io:format("~n=== SpawnRequest Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "SpawnRequest has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "SpawnRequest has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -460,10 +509,16 @@ packet_craft_inline_test_() ->
         io:format("~n=== CraftRequest Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "CraftRequest has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "CraftRequest has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -518,10 +573,16 @@ packet_craft_recipe_ref_test_() ->
         io:format("~n=== CraftRequest+RecipeRef Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "CraftRequest+RecipeRef has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "CraftRequest+RecipeRef has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -561,8 +622,12 @@ game_state_nested_alignment_test_() ->
                     }
                 ],
                 'currentQuests' => [
-                    #{name => <<"build_farm">>, 'taskAmountToComplete' => 1,
-                      'taskAmountDone' => 0, done => false}
+                    #{
+                        name => <<"build_farm">>,
+                        'taskAmountToComplete' => 1,
+                        'taskAmountDone' => 0,
+                        done => false
+                    }
                 ],
                 'completedQuests' => [<<"tutorial">>],
                 'playerResources' => [
@@ -617,10 +682,16 @@ game_state_nested_alignment_test_() ->
         io:format("~n=== GameState Nested Alignment ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(AllViolations),
-        ?assertEqual([], AllViolations,
-            lists:flatten(io_lib:format(
-                "GameState has ~p alignment violations: ~p",
-                [length(AllViolations), AllViolations])))
+        ?assertEqual(
+            [],
+            AllViolations,
+            lists:flatten(
+                io_lib:format(
+                    "GameState has ~p alignment violations: ~p",
+                    [length(AllViolations), AllViolations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -630,28 +701,32 @@ game_state_nested_alignment_test_() ->
 
 scalar_alignment_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table Inner {
-                big_val: uint64;
-                small_val: uint16;
-                another_big: int64;
-            }
-            table ScalarTest {
-                a_byte: ubyte;
-                a_u64: uint64;
-                a_string: string;
-                a_i64: int64;
-                inner: Inner;
-                a_u32: uint32;
-                another_u64: uint64;
-            }
-            root_type ScalarTest;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table Inner {\n"
+            "                big_val: uint64;\n"
+            "                small_val: uint16;\n"
+            "                another_big: int64;\n"
+            "            }\n"
+            "            table ScalarTest {\n"
+            "                a_byte: ubyte;\n"
+            "                a_u64: uint64;\n"
+            "                a_string: string;\n"
+            "                a_i64: int64;\n"
+            "                inner: Inner;\n"
+            "                a_u32: uint32;\n"
+            "                another_u64: uint64;\n"
+            "            }\n"
+            "            root_type ScalarTest;\n"
+            "        ">>
+        ),
         Map = #{
             a_byte => 42,
-            a_u64 => 18446744073709551615,  % max u64
+            % max u64
+            a_u64 => 18446744073709551615,
             a_string => <<"hello">>,
-            a_i64 => -9223372036854775808,   % min i64
+            % min i64
+            a_i64 => -9223372036854775808,
             inner => #{
                 big_val => 123456789012345,
                 small_val => 65535,
@@ -675,7 +750,8 @@ scalar_alignment_test_() ->
             {1, a_u64, uint64},
             {2, a_string, string},
             {3, a_i64, int64},
-            {4, inner, uint32},    % uoffset
+            % uoffset
+            {4, inner, uint32},
             {5, a_u32, uint32},
             {6, another_u64, uint64}
         ],
@@ -693,25 +769,31 @@ scalar_alignment_test_() ->
         SOffset = read_i32(Buffer, RootPos),
         VTablePos = RootPos - SOffset,
         VTableSize = read_u16(Buffer, VTablePos),
-        InnerSlotPos = VTablePos + 4 + 4 * 2,  % field index 4
+        % field index 4
+        InnerSlotPos = VTablePos + 4 + 4 * 2,
         InnerViolations =
             case InnerSlotPos + 2 =< VTablePos + VTableSize of
                 true ->
                     InnerFieldOffset = read_u16(Buffer, InnerSlotPos),
                     case InnerFieldOffset of
-                        0 -> [];
+                        0 ->
+                            [];
                         _ ->
                             InnerRefPos = RootPos + InnerFieldOffset,
                             InnerTablePos = follow_uoffset(Buffer, InnerRefPos),
-                            InnerTableViol = verify_table_alignment(Buffer, InnerTablePos, InnerFields),
+                            InnerTableViol = verify_table_alignment(
+                                Buffer, InnerTablePos, InnerFields
+                            ),
                             %% Also check the inner table uoffset itself is 4-aligned
-                            UOffsetViol = case InnerRefPos rem 4 of
-                                0 -> [];
-                                R -> [{inner_uoffset, InnerRefPos, 4, R}]
-                            end,
+                            UOffsetViol =
+                                case InnerRefPos rem 4 of
+                                    0 -> [];
+                                    R -> [{inner_uoffset, InnerRefPos, 4, R}]
+                                end,
                             UOffsetViol ++ InnerTableViol
                     end;
-                false -> []
+                false ->
+                    []
             end,
 
         AllViolations = RootViolations ++ InnerViolations,
@@ -719,10 +801,16 @@ scalar_alignment_test_() ->
         io:format("~n=== Scalar Alignment Test ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(AllViolations),
-        ?assertEqual([], AllViolations,
-            lists:flatten(io_lib:format(
-                "ScalarTest has ~p alignment violations: ~p",
-                [length(AllViolations), AllViolations])))
+        ?assertEqual(
+            [],
+            AllViolations,
+            lists:flatten(
+                io_lib:format(
+                    "ScalarTest has ~p alignment violations: ~p",
+                    [length(AllViolations), AllViolations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -731,17 +819,19 @@ scalar_alignment_test_() ->
 
 multi_u64_alignment_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table MultiU64 {
-                flag: bool;
-                val1: uint64;
-                val2: uint64;
-                val3: uint64;
-                small: uint16;
-                val4: uint64;
-            }
-            root_type MultiU64;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table MultiU64 {\n"
+            "                flag: bool;\n"
+            "                val1: uint64;\n"
+            "                val2: uint64;\n"
+            "                val3: uint64;\n"
+            "                small: uint16;\n"
+            "                val4: uint64;\n"
+            "            }\n"
+            "            root_type MultiU64;\n"
+            "        ">>
+        ),
         Map = #{
             flag => true,
             val1 => 1,
@@ -768,10 +858,16 @@ multi_u64_alignment_test_() ->
         io:format("~n=== Multi-u64 Alignment Test ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "MultiU64 has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "MultiU64 has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -780,14 +876,16 @@ multi_u64_alignment_test_() ->
 
 vector_u64_alignment_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table VecTest {
-                label: string;
-                timestamps: [uint64];
-                count: uint32;
-            }
-            root_type VecTest;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table VecTest {\n"
+            "                label: string;\n"
+            "                timestamps: [uint64];\n"
+            "                count: uint32;\n"
+            "            }\n"
+            "            root_type VecTest;\n"
+            "        ">>
+        ),
         Map = #{
             label => <<"test">>,
             timestamps => [1710000000000, 1710000001000, 1710000002000],
@@ -805,33 +903,43 @@ vector_u64_alignment_test_() ->
         TimestampsSlotPos = VTablePos + 4 + 1 * 2,
         TimestampsFieldOffset = read_u16(Buffer, TimestampsSlotPos),
 
-        Violations = case TimestampsFieldOffset of
-            0 -> [{timestamps_missing, 0, 0, 0}];
-            _ ->
-                TimestampsRefPos = RootPos + TimestampsFieldOffset,
-                VecPos = follow_uoffset(Buffer, TimestampsRefPos),
-                %% Vector length prefix must be 4-byte aligned
-                LenViol = case VecPos rem 4 of
-                    0 -> [];
-                    R1 -> [{timestamps_vec_length, VecPos, 4, R1}]
-                end,
-                %% Vector data (u64 elements) starts at VecPos + 4
-                %% Each u64 element should be 8-byte aligned
-                DataStart = VecPos + 4,
-                DataViol = case DataStart rem 8 of
-                    0 -> [];
-                    R2 -> [{timestamps_vec_data, DataStart, 8, R2}]
-                end,
-                LenViol ++ DataViol
-        end,
+        Violations =
+            case TimestampsFieldOffset of
+                0 ->
+                    [{timestamps_missing, 0, 0, 0}];
+                _ ->
+                    TimestampsRefPos = RootPos + TimestampsFieldOffset,
+                    VecPos = follow_uoffset(Buffer, TimestampsRefPos),
+                    %% Vector length prefix must be 4-byte aligned
+                    LenViol =
+                        case VecPos rem 4 of
+                            0 -> [];
+                            R1 -> [{timestamps_vec_length, VecPos, 4, R1}]
+                        end,
+                    %% Vector data (u64 elements) starts at VecPos + 4
+                    %% Each u64 element should be 8-byte aligned
+                    DataStart = VecPos + 4,
+                    DataViol =
+                        case DataStart rem 8 of
+                            0 -> [];
+                            R2 -> [{timestamps_vec_data, DataStart, 8, R2}]
+                        end,
+                    LenViol ++ DataViol
+            end,
 
         io:format("~n=== Vector u64 Alignment Test ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "VecTest has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "VecTest has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -840,27 +948,29 @@ vector_u64_alignment_test_() ->
 
 deep_nesting_alignment_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table Level3 {
-                value: uint64;
-                tag: string;
-            }
-            table Level2 {
-                child: Level3;
-                counter: uint64;
-                name: string;
-            }
-            table Level1 {
-                inner: Level2;
-                timestamp: uint64;
-                flag: bool;
-            }
-            table Root {
-                level1: Level1;
-                id: uint64;
-            }
-            root_type Root;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table Level3 {\n"
+            "                value: uint64;\n"
+            "                tag: string;\n"
+            "            }\n"
+            "            table Level2 {\n"
+            "                child: Level3;\n"
+            "                counter: uint64;\n"
+            "                name: string;\n"
+            "            }\n"
+            "            table Level1 {\n"
+            "                inner: Level2;\n"
+            "                timestamp: uint64;\n"
+            "                flag: bool;\n"
+            "            }\n"
+            "            table Root {\n"
+            "                level1: Level1;\n"
+            "                id: uint64;\n"
+            "            }\n"
+            "            root_type Root;\n"
+            "        ">>
+        ),
         Map = #{
             level1 => #{
                 inner => #{
@@ -890,10 +1000,16 @@ deep_nesting_alignment_test_() ->
         io:format("~n=== Deep Nesting Alignment Test ===~n"),
         io:format("Buffer size: ~p bytes~n", [byte_size(Buffer)]),
         report_violations(AllViolations),
-        ?assertEqual([], AllViolations,
-            lists:flatten(io_lib:format(
-                "DeepNesting has ~p alignment violations: ~p",
-                [length(AllViolations), AllViolations])))
+        ?assertEqual(
+            [],
+            AllViolations,
+            lists:flatten(
+                io_lib:format(
+                    "DeepNesting has ~p alignment violations: ~p",
+                    [length(AllViolations), AllViolations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -903,25 +1019,27 @@ deep_nesting_alignment_test_() ->
 
 battle_round_direct_known_positions_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table PlayerId { id: string (required); }
-            table Action {
-                id: [ubyte] (required);
-                sender: string (required);
-                data: [ubyte] (required);
-                tick: uint64 = 0;
-                signature: [ubyte];
-            }
-            table BattleRoundRequest {
-                player_id: PlayerId (required);
-                round: uint64;
-                randomness: [ubyte] (required);
-                timestamp_ms: uint64;
-                actions: [Action] (required);
-                checkpoint: bool = true;
-            }
-            root_type BattleRoundRequest;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table PlayerId { id: string (required); }\n"
+            "            table Action {\n"
+            "                id: [ubyte] (required);\n"
+            "                sender: string (required);\n"
+            "                data: [ubyte] (required);\n"
+            "                tick: uint64 = 0;\n"
+            "                signature: [ubyte];\n"
+            "            }\n"
+            "            table BattleRoundRequest {\n"
+            "                player_id: PlayerId (required);\n"
+            "                round: uint64;\n"
+            "                randomness: [ubyte] (required);\n"
+            "                timestamp_ms: uint64;\n"
+            "                actions: [Action] (required);\n"
+            "                checkpoint: bool = true;\n"
+            "            }\n"
+            "            root_type BattleRoundRequest;\n"
+            "        ">>
+        ),
         Map = #{
             player_id => #{id => <<"test_player">>},
             round => 1,
@@ -937,60 +1055,96 @@ battle_round_direct_known_positions_test_() ->
 
         %% Check all fields in BattleRoundRequest
         RootPos = read_u32(Buffer, 0),
-        BRRViolations = verify_table_alignment(Buffer, RootPos,
-            battle_round_request_fields()),
+        BRRViolations = verify_table_alignment(
+            Buffer,
+            RootPos,
+            battle_round_request_fields()
+        ),
 
         %% Also check the PlayerId table that BRR points to
         SOffset = read_i32(Buffer, RootPos),
         VTablePos = RootPos - SOffset,
-        PlayerIdSlotPos = VTablePos + 4,  % field 0
+        % field 0
+        PlayerIdSlotPos = VTablePos + 4,
         PlayerIdFieldOffset = read_u16(Buffer, PlayerIdSlotPos),
-        PlayerIdViolations = case PlayerIdFieldOffset of
-            0 -> [{player_id_missing, 0, 0, 0}];
-            _ ->
-                PlayerIdRefPos = RootPos + PlayerIdFieldOffset,
-                PlayerIdTablePos = follow_uoffset(Buffer, PlayerIdRefPos),
-                %% Check uoffset alignment
-                UOffViol = case PlayerIdRefPos rem 4 of
-                    0 -> [];
-                    R -> [{player_id_uoffset, PlayerIdRefPos, 4, R}]
-                end,
-                %% Check table alignment
-                TableViol = verify_table_alignment(Buffer, PlayerIdTablePos,
-                    player_id_fields()),
-                UOffViol ++ TableViol
-        end,
+        PlayerIdViolations =
+            case PlayerIdFieldOffset of
+                0 ->
+                    [{player_id_missing, 0, 0, 0}];
+                _ ->
+                    PlayerIdRefPos = RootPos + PlayerIdFieldOffset,
+                    PlayerIdTablePos = follow_uoffset(Buffer, PlayerIdRefPos),
+                    %% Check uoffset alignment
+                    UOffViol =
+                        case PlayerIdRefPos rem 4 of
+                            0 -> [];
+                            R -> [{player_id_uoffset, PlayerIdRefPos, 4, R}]
+                        end,
+                    %% Check table alignment
+                    TableViol = verify_table_alignment(
+                        Buffer,
+                        PlayerIdTablePos,
+                        player_id_fields()
+                    ),
+                    UOffViol ++ TableViol
+            end,
 
         %% Check Action tables
-        ActSlotPos = VTablePos + 4 + 4 * 2,  % field 4 = actions
+
+        % field 4 = actions
+        ActSlotPos = VTablePos + 4 + 4 * 2,
         ActFieldOffset = read_u16(Buffer, ActSlotPos),
-        ActViolations = case ActFieldOffset of
-            0 -> [];
-            _ ->
-                ActRefPos = RootPos + ActFieldOffset,
-                ActVecPos = follow_uoffset(Buffer, ActRefPos),
-                NumActs = read_u32(Buffer, ActVecPos),
-                lists:foldl(fun(I, Acc) ->
-                    ActOffsetPos = ActVecPos + 4 + I * 4,
-                    ActTablePos = follow_uoffset(Buffer, ActOffsetPos),
-                    ActViol = verify_table_alignment(Buffer, ActTablePos,
-                        action_fields()),
-                    TaggedViol = [{list_to_atom("act_" ++ integer_to_list(I) ++ "_" ++
-                                   atom_to_list(N)), P, A, M}
-                                  || {N, P, A, M} <- ActViol],
-                    Acc ++ TaggedViol
-                end, [], lists:seq(0, NumActs - 1))
-        end,
+        ActViolations =
+            case ActFieldOffset of
+                0 ->
+                    [];
+                _ ->
+                    ActRefPos = RootPos + ActFieldOffset,
+                    ActVecPos = follow_uoffset(Buffer, ActRefPos),
+                    NumActs = read_u32(Buffer, ActVecPos),
+                    lists:foldl(
+                        fun(I, Acc) ->
+                            ActOffsetPos = ActVecPos + 4 + I * 4,
+                            ActTablePos = follow_uoffset(Buffer, ActOffsetPos),
+                            ActViol = verify_table_alignment(
+                                Buffer,
+                                ActTablePos,
+                                action_fields()
+                            ),
+                            TaggedViol = [
+                                {
+                                    list_to_atom(
+                                        "act_" ++ integer_to_list(I) ++ "_" ++
+                                            atom_to_list(N)
+                                    ),
+                                    P,
+                                    A,
+                                    M
+                                }
+                             || {N, P, A, M} <- ActViol
+                            ],
+                            Acc ++ TaggedViol
+                        end,
+                        [],
+                        lists:seq(0, NumActs - 1)
+                    )
+            end,
 
         AllViolations = BRRViolations ++ PlayerIdViolations ++ ActViolations,
 
         io:format("~n=== BattleRoundRequest Direct (Known Positions) ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(AllViolations),
-        ?assertEqual([], AllViolations,
-            lists:flatten(io_lib:format(
-                "BattleRoundRequest direct has ~p alignment violations: ~p",
-                [length(AllViolations), AllViolations])))
+        ?assertEqual(
+            [],
+            AllViolations,
+            lists:flatten(
+                io_lib:format(
+                    "BattleRoundRequest direct has ~p alignment violations: ~p",
+                    [length(AllViolations), AllViolations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -1022,20 +1176,27 @@ packet_quit_test_() ->
         PacketViolations = verify_table_alignment(Buffer, RootPos, packet_fields()),
 
         %% Check Packet table position itself
-        RootPosViol = case RootPos rem 4 of
-            0 -> [];
-            R -> [{root_table_pos, RootPos, 4, R}]
-        end,
+        RootPosViol =
+            case RootPos rem 4 of
+                0 -> [];
+                R -> [{root_table_pos, RootPos, 4, R}]
+            end,
 
         AllViolations = RootPosViol ++ PacketViolations,
 
         io:format("~n=== Quit Packet Alignment ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(AllViolations),
-        ?assertEqual([], AllViolations,
-            lists:flatten(io_lib:format(
-                "Quit packet has ~p alignment violations: ~p",
-                [length(AllViolations), AllViolations])))
+        ?assertEqual(
+            [],
+            AllViolations,
+            lists:flatten(
+                io_lib:format(
+                    "Quit packet has ~p alignment violations: ~p",
+                    [length(AllViolations), AllViolations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -1057,32 +1218,37 @@ verify_packet_envelope(Buffer, InnerFields) ->
     %% Packet: version(0), request_id(1), trace_id(2), timestamp_ms(3),
     %%         payload_type(4), payload(5)
     MsgSlotPos = VTablePos + 4 + 5 * 2,
-    InnerViolations = case MsgSlotPos + 2 =< VTablePos + VTableSize of
-        false -> [];
-        true ->
-            MsgFieldOffset = read_u16(Buffer, MsgSlotPos),
-            case MsgFieldOffset of
-                0 -> [];
-                _ ->
-                    MsgRefPos = RootPos + MsgFieldOffset,
-                    InnerTablePos = follow_uoffset(Buffer, MsgRefPos),
+    InnerViolations =
+        case MsgSlotPos + 2 =< VTablePos + VTableSize of
+            false ->
+                [];
+            true ->
+                MsgFieldOffset = read_u16(Buffer, MsgSlotPos),
+                case MsgFieldOffset of
+                    0 ->
+                        [];
+                    _ ->
+                        MsgRefPos = RootPos + MsgFieldOffset,
+                        InnerTablePos = follow_uoffset(Buffer, MsgRefPos),
 
-                    %% Check uoffset alignment
-                    UOffViol = case MsgRefPos rem 4 of
-                        0 -> [];
-                        R -> [{payload_uoffset, MsgRefPos, 4, R}]
-                    end,
+                        %% Check uoffset alignment
+                        UOffViol =
+                            case MsgRefPos rem 4 of
+                                0 -> [];
+                                R -> [{payload_uoffset, MsgRefPos, 4, R}]
+                            end,
 
-                    %% Check inner table alignment
-                    InnerViol = verify_table_alignment(Buffer, InnerTablePos, InnerFields),
+                        %% Check inner table alignment
+                        InnerViol = verify_table_alignment(Buffer, InnerTablePos, InnerFields),
 
-                    %% Also check nested tables (player_id, character_id)
-                    NestedViol = verify_inner_nested_tables(
-                        Buffer, InnerTablePos, InnerFields),
+                        %% Also check nested tables (player_id, character_id)
+                        NestedViol = verify_inner_nested_tables(
+                            Buffer, InnerTablePos, InnerFields
+                        ),
 
-                    UOffViol ++ InnerViol ++ NestedViol
-            end
-    end,
+                        UOffViol ++ InnerViol ++ NestedViol
+                end
+        end,
 
     PacketViolations ++ InnerViolations.
 
@@ -1096,28 +1262,43 @@ verify_inner_nested_tables(Buffer, InnerTablePos, InnerFields) ->
         fun({FieldIdx, FieldName, FieldType}, Acc) ->
             %% Only check uoffset fields that point to tables
             case FieldType of
-                uint32 when FieldName =:= player_id;
-                             FieldName =:= character_id ->
+                uint32 when
+                    FieldName =:= player_id;
+                    FieldName =:= character_id
+                ->
                     SlotPos = VTablePos + 4 + FieldIdx * 2,
                     case SlotPos + 2 =< VTablePos + VTableSize of
-                        false -> Acc;
+                        false ->
+                            Acc;
                         true ->
                             FieldOffset = read_u16(Buffer, SlotPos),
                             case FieldOffset of
-                                0 -> Acc;
+                                0 ->
+                                    Acc;
                                 _ ->
                                     RefPos = InnerTablePos + FieldOffset,
                                     TargetPos = follow_uoffset(Buffer, RefPos),
-                                    Violations = case TargetPos rem 4 of
-                                        0 -> [];
-                                        R ->
-                                            [{list_to_atom(atom_to_list(FieldName) ++ "_table"),
-                                              TargetPos, 4, R}]
-                                    end,
+                                    Violations =
+                                        case TargetPos rem 4 of
+                                            0 ->
+                                                [];
+                                            R ->
+                                                [
+                                                    {
+                                                        list_to_atom(
+                                                            atom_to_list(FieldName) ++ "_table"
+                                                        ),
+                                                        TargetPos,
+                                                        4,
+                                                        R
+                                                    }
+                                                ]
+                                        end,
                                     Acc ++ Violations
                             end
                     end;
-                _ -> Acc
+                _ ->
+                    Acc
             end
         end,
         [],
@@ -1139,31 +1320,47 @@ verify_game_state_buffer(Buffer) ->
     VTablePos = RootPos - SOffset,
     VTableSize = read_u16(Buffer, VTablePos),
 
-    GameDataSlotPos = VTablePos + 4 + 1 * 2,  % field 1
-    GameDataViol = case GameDataSlotPos + 2 =< VTablePos + VTableSize of
-        false -> [];
-        true ->
-            GameDataFieldOffset = read_u16(Buffer, GameDataSlotPos),
-            case GameDataFieldOffset of
-                0 -> [];
-                _ ->
-                    GameDataRefPos = RootPos + GameDataFieldOffset,
-                    GameDataTablePos = follow_uoffset(Buffer, GameDataRefPos),
+    % field 1
+    GameDataSlotPos = VTablePos + 4 + 1 * 2,
+    GameDataViol =
+        case GameDataSlotPos + 2 =< VTablePos + VTableSize of
+            false ->
+                [];
+            true ->
+                GameDataFieldOffset = read_u16(Buffer, GameDataSlotPos),
+                case GameDataFieldOffset of
+                    0 ->
+                        [];
+                    _ ->
+                        GameDataRefPos = RootPos + GameDataFieldOffset,
+                        GameDataTablePos = follow_uoffset(Buffer, GameDataRefPos),
 
-                    %% Dump GameData field positions for diagnosis
-                    dump_table_fields(Buffer, GameDataTablePos,
-                        game_data_fields(), "GameData"),
+                        %% Dump GameData field positions for diagnosis
+                        dump_table_fields(
+                            Buffer,
+                            GameDataTablePos,
+                            game_data_fields(),
+                            "GameData"
+                        ),
 
-                    GDViol = verify_table_alignment(Buffer, GameDataTablePos,
-                        game_data_fields()),
+                        GDViol = verify_table_alignment(
+                            Buffer,
+                            GameDataTablePos,
+                            game_data_fields()
+                        ),
 
-                    %% Check Workers table (field 0 of GameData)
-                    WorkersViol = verify_nested_field(Buffer, GameDataTablePos, 0,
-                        workers_fields(), workers),
+                        %% Check Workers table (field 0 of GameData)
+                        WorkersViol = verify_nested_field(
+                            Buffer,
+                            GameDataTablePos,
+                            0,
+                            workers_fields(),
+                            workers
+                        ),
 
-                    GDViol ++ WorkersViol
-            end
-    end,
+                        GDViol ++ WorkersViol
+                end
+        end,
 
     RootViol ++ GameDataViol.
 
@@ -1175,18 +1372,22 @@ verify_nested_field(Buffer, ParentPos, FieldIdx, FieldDefs, Label) ->
 
     SlotPos = VTablePos + 4 + FieldIdx * 2,
     case SlotPos + 2 =< VTablePos + VTableSize of
-        false -> [];
+        false ->
+            [];
         true ->
             FieldOffset = read_u16(Buffer, SlotPos),
             case FieldOffset of
-                0 -> [];
+                0 ->
+                    [];
                 _ ->
                     RefPos = ParentPos + FieldOffset,
                     TablePos = follow_uoffset(Buffer, RefPos),
                     Violations = verify_table_alignment(Buffer, TablePos, FieldDefs),
                     %% Tag violations with the nesting label
-                    [{list_to_atom(atom_to_list(Label) ++ "." ++ atom_to_list(N)),
-                      P, A, M} || {N, P, A, M} <- Violations]
+                    [
+                        {list_to_atom(atom_to_list(Label) ++ "." ++ atom_to_list(N)), P, A, M}
+                     || {N, P, A, M} <- Violations
+                    ]
             end
     end.
 
@@ -1203,13 +1404,18 @@ verify_nested_tables_level(_Buffer, _ParentPos, _ParentFields, [], Acc) ->
     Acc;
 verify_nested_tables_level(Buffer, ParentPos, ParentFields, [{Label, Fields} | Rest], Acc) ->
     %% Find the first table-ref field (uoffset) in parent to follow
-    TableRefField = lists:foldl(fun
-        ({Idx, _Name, uint32}, none) -> Idx;
-        (_, Found) -> Found
-    end, none, ParentFields),
+    TableRefField = lists:foldl(
+        fun
+            ({Idx, _Name, uint32}, none) -> Idx;
+            (_, Found) -> Found
+        end,
+        none,
+        ParentFields
+    ),
 
     case TableRefField of
-        none -> Acc;
+        none ->
+            Acc;
         FieldIdx ->
             SOffset = read_i32(Buffer, ParentPos),
             VTablePos = ParentPos - SOffset,
@@ -1217,20 +1423,32 @@ verify_nested_tables_level(Buffer, ParentPos, ParentFields, [{Label, Fields} | R
 
             SlotPos = VTablePos + 4 + FieldIdx * 2,
             case SlotPos + 2 =< VTablePos + VTableSize of
-                false -> Acc;
+                false ->
+                    Acc;
                 true ->
                     FieldOffset = read_u16(Buffer, SlotPos),
                     case FieldOffset of
-                        0 -> Acc;
+                        0 ->
+                            Acc;
                         _ ->
                             RefPos = ParentPos + FieldOffset,
                             ChildPos = follow_uoffset(Buffer, RefPos),
                             ChildViol = verify_table_alignment(Buffer, ChildPos, Fields),
-                            Tagged = [{list_to_atom(atom_to_list(Label) ++ "." ++
-                                       atom_to_list(N)), P, A, M}
-                                      || {N, P, A, M} <- ChildViol],
+                            Tagged = [
+                                {
+                                    list_to_atom(
+                                        atom_to_list(Label) ++ "." ++
+                                            atom_to_list(N)
+                                    ),
+                                    P,
+                                    A,
+                                    M
+                                }
+                             || {N, P, A, M} <- ChildViol
+                            ],
                             verify_nested_tables_level(
-                                Buffer, ChildPos, Fields, Rest, Acc ++ Tagged)
+                                Buffer, ChildPos, Fields, Rest, Acc ++ Tagged
+                            )
                     end
             end
     end.
@@ -1257,36 +1475,38 @@ many_refs_then_i64_alignment_test_() ->
         %%     lastPvpAttackTime (long), 1x vector ref
         %%
         %% Reproduced here with the same mix of types.
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table Item { name: string; value: int; }
-            table BigTable {
-                workers: Item;
-                trophies: int;
-                academy_techs: [Item];
-                arsenal_techs: [Item];
-                ships: [Item];
-                current_quests: [Item];
-                completed_quests: [string];
-                player_resources: [Item];
-                next_pirate_attack: long;
-                left_over_resources: [Item];
-                islands: [Item];
-                fortress_level: byte;
-                defences: [Item];
-                buildings: [Item];
-                island_sectors: [Item];
-                town_sectors: [Item];
-                merchant_visits: [long];
-                merchant_ships: [Item];
-                player_name: string;
-                reserved_resources: [Item];
-                battle_logs_attack: [Item];
-                battle_logs_defence: [Item];
-                last_pvp_attack_time: long;
-                raid_players: [Item];
-            }
-            root_type BigTable;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table Item { name: string; value: int; }\n"
+            "            table BigTable {\n"
+            "                workers: Item;\n"
+            "                trophies: int;\n"
+            "                academy_techs: [Item];\n"
+            "                arsenal_techs: [Item];\n"
+            "                ships: [Item];\n"
+            "                current_quests: [Item];\n"
+            "                completed_quests: [string];\n"
+            "                player_resources: [Item];\n"
+            "                next_pirate_attack: long;\n"
+            "                left_over_resources: [Item];\n"
+            "                islands: [Item];\n"
+            "                fortress_level: byte;\n"
+            "                defences: [Item];\n"
+            "                buildings: [Item];\n"
+            "                island_sectors: [Item];\n"
+            "                town_sectors: [Item];\n"
+            "                merchant_visits: [long];\n"
+            "                merchant_ships: [Item];\n"
+            "                player_name: string;\n"
+            "                reserved_resources: [Item];\n"
+            "                battle_logs_attack: [Item];\n"
+            "                battle_logs_defence: [Item];\n"
+            "                last_pvp_attack_time: long;\n"
+            "                raid_players: [Item];\n"
+            "            }\n"
+            "            root_type BigTable;\n"
+            "        ">>
+        ),
         Map = #{
             workers => #{name => <<"w">>, value => 5},
             trophies => 1500,
@@ -1347,14 +1567,22 @@ many_refs_then_i64_alignment_test_() ->
         Violations = verify_table_alignment(Buffer, RootPos, Fields),
 
         io:format("~n=== Many Refs + i64 (GameData pattern) Alignment Test ===~n"),
-        io:format("Buffer size: ~p bytes, root at: ~p (mod8=~p)~n",
-                  [byte_size(Buffer), RootPos, RootPos rem 8]),
+        io:format(
+            "Buffer size: ~p bytes, root at: ~p (mod8=~p)~n",
+            [byte_size(Buffer), RootPos, RootPos rem 8]
+        ),
         dump_table_fields(Buffer, RootPos, Fields, "BigTable"),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "BigTable has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "BigTable has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -1366,17 +1594,19 @@ many_refs_then_i64_alignment_test_() ->
 
 odd_small_fields_before_u64_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table OddSmall {
-                flag1: bool;
-                flag2: bool;
-                flag3: bool;
-                big: uint64;
-                flag4: bool;
-                another_big: int64;
-            }
-            root_type OddSmall;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table OddSmall {\n"
+            "                flag1: bool;\n"
+            "                flag2: bool;\n"
+            "                flag3: bool;\n"
+            "                big: uint64;\n"
+            "                flag4: bool;\n"
+            "                another_big: int64;\n"
+            "            }\n"
+            "            root_type OddSmall;\n"
+            "        ">>
+        ),
         Map = #{
             flag1 => true,
             flag2 => false,
@@ -1403,10 +1633,16 @@ odd_small_fields_before_u64_test_() ->
         io:format("~n=== Odd Small Fields + u64 Alignment Test ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "OddSmall has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "OddSmall has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -1415,17 +1651,19 @@ odd_small_fields_before_u64_test_() ->
 
 u16_u64_interleave_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table Interleaved {
-                version: uint16;
-                request_id: uint64;
-                trace: string;
-                timestamp_ms: uint64;
-                status: uint16;
-                round: uint64;
-            }
-            root_type Interleaved;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table Interleaved {\n"
+            "                version: uint16;\n"
+            "                request_id: uint64;\n"
+            "                trace: string;\n"
+            "                timestamp_ms: uint64;\n"
+            "                status: uint16;\n"
+            "                round: uint64;\n"
+            "            }\n"
+            "            root_type Interleaved;\n"
+            "        ">>
+        ),
         Map = #{
             version => 1,
             request_id => 42,
@@ -1452,10 +1690,16 @@ u16_u64_interleave_test_() ->
         io:format("~n=== u16/u64 Interleave Alignment Test ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "Interleaved has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "Interleaved has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -1468,13 +1712,15 @@ u16_u64_interleave_test_() ->
 
 single_u32_before_u64_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table SimpleCase {
-                count: uint32;
-                timestamp: uint64;
-            }
-            root_type SimpleCase;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table SimpleCase {\n"
+            "                count: uint32;\n"
+            "                timestamp: uint64;\n"
+            "            }\n"
+            "            root_type SimpleCase;\n"
+            "        ">>
+        ),
         Map = #{
             count => 42,
             timestamp => 1710000000000
@@ -1493,10 +1739,16 @@ single_u32_before_u64_test_() ->
         io:format("~n=== Simple u32+u64 Alignment Test ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(Violations),
-        ?assertEqual([], Violations,
-            lists:flatten(io_lib:format(
-                "SimpleCase has ~p alignment violations: ~p",
-                [length(Violations), Violations])))
+        ?assertEqual(
+            [],
+            Violations,
+            lists:flatten(
+                io_lib:format(
+                    "SimpleCase has ~p alignment violations: ~p",
+                    [length(Violations), Violations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -1507,20 +1759,22 @@ single_u32_before_u64_test_() ->
 
 nested_u64_after_odd_wrapper_test_() ->
     {timeout, 30, fun() ->
-        {ok, Schema} = flatbuferl:parse_schema(<<"
-            table Inner {
-                ts1: uint64;
-                ts2: uint64;
-                label: string;
-            }
-            table Outer {
-                flag: bool;
-                name: string;
-                inner: Inner;
-                tag: uint16;
-            }
-            root_type Outer;
-        ">>),
+        {ok, Schema} = flatbuferl:parse_schema(
+            <<"\n"
+            "            table Inner {\n"
+            "                ts1: uint64;\n"
+            "                ts2: uint64;\n"
+            "                label: string;\n"
+            "            }\n"
+            "            table Outer {\n"
+            "                flag: bool;\n"
+            "                name: string;\n"
+            "                inner: Inner;\n"
+            "                tag: uint16;\n"
+            "            }\n"
+            "            root_type Outer;\n"
+            "        ">>
+        ),
         Map = #{
             flag => true,
             name => <<"test">>,
@@ -1558,10 +1812,16 @@ nested_u64_after_odd_wrapper_test_() ->
         io:format("~n=== Nested u64 After Odd Wrapper Test ===~n"),
         io:format("Buffer size: ~p bytes, root at: ~p~n", [byte_size(Buffer), RootPos]),
         report_violations(AllViolations),
-        ?assertEqual([], AllViolations,
-            lists:flatten(io_lib:format(
-                "Nested has ~p alignment violations: ~p",
-                [length(AllViolations), AllViolations])))
+        ?assertEqual(
+            [],
+            AllViolations,
+            lists:flatten(
+                io_lib:format(
+                    "Nested has ~p alignment violations: ~p",
+                    [length(AllViolations), AllViolations]
+                )
+            )
+        )
     end}.
 
 %% =============================================================================
@@ -1575,27 +1835,39 @@ dump_table_fields(Buffer, TablePos, FieldDefs, Label) ->
     VTablePos = TablePos - SOffset,
     VTableSize = read_u16(Buffer, VTablePos),
     io:format("  vtable at ~p, size ~p~n", [VTablePos, VTableSize]),
-    lists:foreach(fun({Idx, Name, _Type}) ->
-        SlotP = VTablePos + 4 + Idx * 2,
-        case SlotP + 2 =< VTablePos + VTableSize of
-            true ->
-                FO = read_u16(Buffer, SlotP),
-                case FO of
-                    0 -> io:format("  field ~p (~p): absent~n", [Idx, Name]);
-                    _ -> io:format("  field ~p (~p): offset=~p, abs=~p (mod8=~p)~n",
-                                   [Idx, Name, FO, TablePos + FO, (TablePos + FO) rem 8])
-                end;
-            false ->
-                io:format("  field ~p (~p): beyond vtable~n", [Idx, Name])
-        end
-    end, FieldDefs).
+    lists:foreach(
+        fun({Idx, Name, _Type}) ->
+            SlotP = VTablePos + 4 + Idx * 2,
+            case SlotP + 2 =< VTablePos + VTableSize of
+                true ->
+                    FO = read_u16(Buffer, SlotP),
+                    case FO of
+                        0 ->
+                            io:format("  field ~p (~p): absent~n", [Idx, Name]);
+                        _ ->
+                            io:format(
+                                "  field ~p (~p): offset=~p, abs=~p (mod8=~p)~n",
+                                [Idx, Name, FO, TablePos + FO, (TablePos + FO) rem 8]
+                            )
+                    end;
+                false ->
+                    io:format("  field ~p (~p): beyond vtable~n", [Idx, Name])
+            end
+        end,
+        FieldDefs
+    ).
 
 report_violations([]) ->
     io:format("All fields properly aligned.~n");
 report_violations(Violations) ->
     io:format("ALIGNMENT VIOLATIONS (~p):~n", [length(Violations)]),
-    lists:foreach(fun({Name, Pos, Req, Mod}) ->
-        io:format("  ~p at byte ~p: requires ~p-byte alignment, "
-                  "position mod ~p = ~p~n",
-                  [Name, Pos, Req, Req, Mod])
-    end, Violations).
+    lists:foreach(
+        fun({Name, Pos, Req, Mod}) ->
+            io:format(
+                "  ~p at byte ~p: requires ~p-byte alignment, "
+                "position mod ~p = ~p~n",
+                [Name, Pos, Req, Req, Mod]
+            )
+        end,
+        Violations
+    ).

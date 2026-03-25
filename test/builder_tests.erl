@@ -277,8 +277,10 @@ nested_struct_test() ->
         },
         #{root_type => test}
     ),
-    Map = #{bounds => #{min => #{x => 1.0, y => 2.0}, max => #{x => 3.0, y => 4.0}},
-            label => <<"test">>},
+    Map = #{
+        bounds => #{min => #{x => 1.0, y => 2.0}, max => #{x => 3.0, y => 4.0}},
+        label => <<"test">>
+    },
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
     {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, bounds), Buffer),
@@ -749,8 +751,12 @@ struct_array_roundtrip_test() ->
     Map = #{name => <<"test:pkg">>, version => <<"2.0.0">>, hash => #{bytes => HashBytes}},
     Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
     Root = flatbuferl_reader:get_root(Buffer),
-    {ok, <<"test:pkg">>} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, name), Buffer),
-    {ok, <<"2.0.0">>} = flatbuferl_reader:get_field(Root, 1, field_type(Schema, test, version), Buffer),
+    {ok, <<"test:pkg">>} = flatbuferl_reader:get_field(
+        Root, 0, field_type(Schema, test, name), Buffer
+    ),
+    {ok, <<"2.0.0">>} = flatbuferl_reader:get_field(
+        Root, 1, field_type(Schema, test, version), Buffer
+    ),
     {ok, Struct} = flatbuferl_reader:get_field(Root, 2, field_type(Schema, test, hash), Buffer),
     ?assertEqual(HashBytes, maps:get(bytes, Struct)).
 

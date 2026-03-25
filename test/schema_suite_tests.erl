@@ -472,8 +472,14 @@ generate_tests({Name, SchemaPath, RootType, FileId, SampleData}) ->
     %% to 4-byte boundaries for correct alignment of nested-nested tables, which
     %% produces a valid but byte-different layout from flatc.
     SkipBinaryMatch = [
-        wide_scalars_max, wide_scalars_min, deep_nested, deep_nested_partial,
-        nested, nested_table, union_hello, union_bye
+        wide_scalars_max,
+        wide_scalars_min,
+        deep_nested,
+        deep_nested_partial,
+        nested,
+        nested_table,
+        union_hello,
+        union_bye
     ],
     Tests =
         case lists:member(Name, SkipBinaryMatch) of

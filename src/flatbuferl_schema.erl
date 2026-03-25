@@ -153,10 +153,12 @@ process({Defs, Opts}) ->
     %% (atoms like 'Vec2') get primitive_type_size/1's catch-all (4).
     %% Now that all structs are enriched, re-resolve with full Defs.
     ReEnrichedDefs = maps:map(
-        fun(_Name, Def) -> re_enrich_struct(Def, EnrichedDefs) end, EnrichedDefs),
+        fun(_Name, Def) -> re_enrich_struct(Def, EnrichedDefs) end, EnrichedDefs
+    ),
     %% Phase 2: process tables using enriched definitions
     ProcessedDefs = maps:map(
-        fun(_Name, Def) -> process_def(Def, ReEnrichedDefs) end, ReEnrichedDefs),
+        fun(_Name, Def) -> process_def(Def, ReEnrichedDefs) end, ReEnrichedDefs
+    ),
     {ProcessedDefs, Opts}.
 
 %% Phase 1: add index maps to enums/unions, precompute struct field offsets
@@ -200,21 +202,41 @@ enrich_def(Other) ->
 %% size and #struct_def{} type for encode_scalar dispatch.
 re_enrich_struct(#struct_def{fields = Fields} = Def, EnrichedDefs) ->
     HasNestedStruct = lists:any(
-        fun(#{type := Type}) -> is_atom(Type) andalso is_map_key(Type, EnrichedDefs);
-           (_) -> false
-        end, Fields),
+        fun
+            (#{type := Type}) -> is_atom(Type) andalso is_map_key(Type, EnrichedDefs);
+            (_) -> false
+        end,
+        Fields
+    ),
     case HasNestedStruct of
-        false -> Def;
+        false ->
+            Def;
         true ->
             {ReFields, RawSize, MaxAlign} = lists:foldl(
-                fun(#{name := Name, binary_name := BinName, type := Type,
-                      offset := _OldOff, size := _OldSize}, {Acc, Off, MaxA}) ->
+                fun(
+                    #{
+                        name := Name,
+                        binary_name := BinName,
+                        type := Type,
+                        offset := _OldOff,
+                        size := _OldSize
+                    },
+                    {Acc, Off, MaxA}
+                ) ->
                     {ResolvedType, Size} = resolve_struct_field(Type, EnrichedDefs),
                     AlignedOff = align_to(Off, Size),
-                    Field = #{name => Name, binary_name => BinName,
-                              type => ResolvedType, offset => AlignedOff, size => Size},
+                    Field = #{
+                        name => Name,
+                        binary_name => BinName,
+                        type => ResolvedType,
+                        offset => AlignedOff,
+                        size => Size
+                    },
                     {[Field | Acc], AlignedOff + Size, max(MaxA, Size)}
-                end, {[], 0, 1}, Fields),
+                end,
+                {[], 0, 1},
+                Fields
+            ),
             TotalSize = align_to(RawSize, MaxAlign),
             Def#struct_def{fields = lists:reverse(ReFields), total_size = TotalSize}
     end;
