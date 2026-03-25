@@ -711,6 +711,13 @@ read_struct_value(Buffer, Pos, #array_def{element_type = ElemType, count = Count
 read_struct_value(Buffer, Pos, #struct_def{fields = Fields}) ->
     StructMap = read_struct_fields_fast(Buffer, Pos, Fields, #{}),
     {ok, StructMap};
+%% Enum (resolve to base type, then decode index back to atom)
+read_struct_value(Buffer, Pos, #enum_resolved{base_type = Base, reverse_map = RM}) ->
+    {ok, RawValue} = read_struct_value(Buffer, Pos, Base),
+    case maps:find(RawValue, RM) of
+        {ok, Name} -> {ok, Name};
+        error -> {ok, RawValue}
+    end;
 %% Non-canonical aliases (for tests that bypass schema parser)
 read_struct_value(Buffer, Pos, byte) ->
     read_struct_value(Buffer, Pos, int8);

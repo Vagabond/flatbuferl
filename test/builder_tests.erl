@@ -940,3 +940,27 @@ union_member_with_u64_alignment_test() ->
     ?assertEqual(1710000000000, maps:get(timestamp, Action)),
     ?assertEqual(3600000, maps:get(duration, Action)),
     ?assertEqual(<<"test">>, maps:get(label, Action)).
+
+%% =============================================================================
+%% Struct with Enum Field Tests
+%% =============================================================================
+
+struct_with_enum_field_test() ->
+    %% Struct containing an enum field. Exercises resolve_struct_field's
+    %% #enum_def{} clause during Phase 1b re-enrichment.
+    Schema = schema(
+        #{
+            'Channel' => {{enum, ubyte}, ['Red', 'Green', 'Blue']},
+            'Pixel' => {struct, [{r, ubyte}, {g, ubyte}, {b, ubyte}, {channel, 'Channel'}]},
+            test => table([field(color, 'Pixel')])
+        },
+        #{root_type => test}
+    ),
+    Map = #{color => #{r => 255, g => 128, b => 0, channel => 'Green'}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, color), Buffer),
+    ?assertEqual(255, maps:get(r, Struct)),
+    ?assertEqual(128, maps:get(g, Struct)),
+    ?assertEqual(0, maps:get(b, Struct)),
+    ?assertEqual('Green', maps:get(channel, Struct)).

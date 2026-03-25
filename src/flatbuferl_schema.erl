@@ -251,9 +251,17 @@ re_enrich_structs_fixpoint(OriginalDefs, CurrentDefs) ->
 %% Resolve a single struct field type against enriched defs
 resolve_struct_field(Type, EnrichedDefs) when is_atom(Type) ->
     case maps:get(Type, EnrichedDefs, undefined) of
-        #struct_def{total_size = Size} = StructDef -> {StructDef, Size};
-        #enum_def{base_type = Base} -> {normalize_scalar_type(Base), primitive_type_size(Base)};
-        _ -> {normalize_scalar_type(Type), primitive_type_size(Type)}
+        #struct_def{total_size = Size} = StructDef ->
+            {StructDef, Size};
+        #enum_def{base_type = Base, index_map = IM, reverse_map = RM} ->
+            Resolved = #enum_resolved{
+                base_type = normalize_scalar_type(Base),
+                index_map = IM,
+                reverse_map = RM
+            },
+            {Resolved, primitive_type_size(Base)};
+        _ ->
+            {normalize_scalar_type(Type), primitive_type_size(Type)}
     end;
 resolve_struct_field(#struct_def{total_size = Size} = StructDef, _) ->
     {StructDef, Size};
