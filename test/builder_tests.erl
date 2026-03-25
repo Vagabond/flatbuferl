@@ -819,3 +819,112 @@ struct_array_nested_in_table_test() ->
     Ref = maps:get(ref, Decoded),
     ?assertEqual(<<"inner:pkg">>, maps:get(pkg, Ref)),
     ?assertEqual(HashBin, maps:get(bytes, maps:get(hash, Ref))).
+
+%% =============================================================================
+%% Deep Nested Struct Tests
+%% =============================================================================
+
+three_level_nested_struct_test() ->
+    %% Struct A contains struct B contains struct C (3 levels).
+    %% Tests that re-enrichment fixpoint resolves all nesting levels.
+    Schema = schema(
+        #{
+            'Point' => {struct, [{x, float}, {y, float}]},
+            'Segment' => {struct, [{start, 'Point'}, {finish, 'Point'}]},
+            'Path' => {struct, [{seg, 'Segment'}, {weight, float}]},
+            test => table([field(route, 'Path')])
+        },
+        #{root_type => test}
+    ),
+    Map = #{
+        route => #{
+            seg => #{
+                start => #{x => 1.0, y => 2.0},
+                finish => #{x => 3.0, y => 4.0}
+            },
+            weight => 0.5
+        }
+    },
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Path} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, route), Buffer),
+    Seg = maps:get(seg, Path),
+    Start = maps:get(start, Seg),
+    Finish = maps:get(finish, Seg),
+    ?assertEqual(1.0, maps:get(x, Start)),
+    ?assertEqual(2.0, maps:get(y, Start)),
+    ?assertEqual(3.0, maps:get(x, Finish)),
+    ?assertEqual(4.0, maps:get(y, Finish)),
+    {ok, W} = maps:find(weight, Path),
+    ?assert(abs(W - 0.5) < 0.001).
+
+%% =============================================================================
+%% Vtable-Sharing Path Tests
+%% =============================================================================
+
+vtable_sharing_with_u64_test() ->
+    %% Force vtable-sharing (encode_root_vtable_after) by making the root
+    %% table have the same field layout as a nested table. Both have a
+    %% single uint64 field, so their vtables are identical.
+    Schema = schema(
+        #{
+            'Inner' => table([field(ts, uint64)]),
+            test => table([field(ts, uint64), field(inner, 'Inner', #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    Map = #{ts => 1710000000000, inner => #{ts => 1710003600000}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Decoded = flatbuferl:to_map(Ctx),
+    ?assertEqual(1710000000000, maps:get(ts, Decoded)),
+    ?assertEqual(1710003600000, maps:get(ts, maps:get(inner, Decoded))),
+    %% Verify the root u64 is 8-byte aligned
+    <<RootOff:32/little, _/binary>> = Buffer,
+    %% Root table's ts field should be at an 8-byte aligned position
+    <<_:RootOff/binary, SOffset:32/little-signed, _/binary>> = Buffer,
+    VTPos = RootOff - SOffset,
+    <<_:VTPos/binary, _VTSize:16/little, _TblSize:16/little, TsFieldOffset:16/little, _/binary>> =
+        Buffer,
+    TsAbsPos = RootOff + TsFieldOffset,
+    ?assertEqual(
+        0,
+        TsAbsPos rem 8,
+        lists:flatten(
+            io_lib:format(
+                "Root u64 at abs ~p must be 8-byte aligned (vtable-sharing path)",
+                [TsAbsPos]
+            )
+        )
+    ).
+
+%% =============================================================================
+%% Union with 8-byte Field Tests
+%% =============================================================================
+
+union_member_with_u64_alignment_test() ->
+    %% Union member table containing uint64 fields, nested inside a parent.
+    %% Exercises the #union_value_def{} clause in nested_table_first_8byte_offset.
+    {ok, Schema} = flatbuferl:parse_schema(
+        <<"\n"
+        "        table MoveAction { x: int; y: int; }\n"
+        "        table TimedAction { timestamp: uint64; duration: uint64; label: string; }\n"
+        "        union Action { MoveAction, TimedAction }\n"
+        "        table Event { name: string; action: Action; }\n"
+        "        root_type Event;\n"
+        "    ">>
+    ),
+    Map = #{
+        name => <<"tick">>,
+        action_type => 'TimedAction',
+        action => #{timestamp => 1710000000000, duration => 3600000, label => <<"test">>}
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Decoded = flatbuferl:to_map(Ctx),
+    ?assertEqual(<<"tick">>, maps:get(name, Decoded)),
+    ?assertEqual('TimedAction', maps:get(action_type, Decoded)),
+    Action = maps:get(action, Decoded),
+    ?assertEqual(1710000000000, maps:get(timestamp, Action)),
+    ?assertEqual(3600000, maps:get(duration, Action)),
+    ?assertEqual(<<"test">>, maps:get(label, Action)).
