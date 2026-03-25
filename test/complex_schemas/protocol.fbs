@@ -1,19 +1,11 @@
 // =============================================================================
-// wasvm-rs Protocol Schema
-// =============================================================================
+// Complex protocol schema for alignment and struct-array testing.
 //
-// FlatBuffer schema for Runner ↔ wasvm-rs communication via Erlang Port.
-// Generated from: docs/specifications/port-protocol.md
-//
-// Message framing: 4-byte big-endian length prefix + FlatBuffer payload
-// Transport: stdin/stdout via Erlang Port ({packet, 4})
-//
+// Exercises: deeply nested tables, unions, structs with fixed-size arrays,
+// vectors of tables, enums, and 8-byte scalar fields.
 // =============================================================================
 
-namespace mearum.wasvm;
-
-// Protocol version - must match on both sides
-// PROTOCOL_VERSION = 1 (defined as Rust constant in wasvm-protocol crate)
+namespace test.protocol;
 
 // =============================================================================
 // Common Types

@@ -4,8 +4,3 @@ src/internal/flatbuferl_lexer.erl
 _build/*
 erl_crash.dump
 *.crashdump
-.claude/
-
-# Diagnostic artifacts
-deploy_request.bin
-erl_deploy_fixed.json
