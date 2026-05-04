@@ -3,3 +3,4 @@ src/internal/flatbuferl_lexer.erl
 
 _build/*
 erl_crash.dump
+*.crashdump

@@ -1,0 +1,231 @@
+// =============================================================================
+// Complex game protocol schema for alignment and struct-array testing.
+//
+// Exercises: deeply nested tables, unions, structs with fixed-size arrays,
+// vectors of tables, enums, and 8-byte scalar fields.
+//
+// Mirrors the patterns in a real-world message envelope protocol:
+//   - Root envelope with union dispatch and 8-byte timestamp/id fields
+//   - Multiple inner message types with varying nesting depth
+//   - Structs containing fixed-size byte arrays (e.g. checksums, hashes)
+//   - Vectors of tables with mixed scalar widths
+// =============================================================================
+
+namespace test.game;
+
+// =============================================================================
+// Common Types
+// =============================================================================
+
+// 256-bit checksum (content verification)
+struct Checksum {
+    bytes: [uint8: 32];
+}
+
+// Player identifier
+table PlayerId {
+    id: string (required);
+}
+
+// Character identifier (player + character within account)
+table CharacterId {
+    player_id: string (required);
+    character_id: string (required);
+}
+
+// In-game action (command from a player)
+table Action {
+    // Unique action identifier
+    id: [ubyte] (required);
+    // Sender identity
+    sender: string (required);
+    // Action payload (opaque bytes)
+    data: [ubyte] (required);
+    // Tick number for ordering
+    tick: uint64 = 0;
+    // Optional signature
+    signature: [ubyte];
+}
+
+// Reference to an action by ID
+table ActionRef {
+    action_id: [ubyte] (required);
+}
+
+// Rejected action with reason
+table RejectedAction {
+    action_id: [ubyte] (required);
+    reason: string;
+}
+
+// =============================================================================
+// Effect Types (outputs from execution)
+// =============================================================================
+
+enum DeliveryMode: byte {
+    Direct = 0,
+    Broadcast = 1,
+    Group = 2
+}
+
+table OutboundMessage {
+    recipient: string (required);
+    data: [ubyte] (required);
+    delivery: DeliveryMode = Direct;
+}
+
+enum StorageOp: byte {
+    Put = 0,
+    Remove = 1
+}
+
+table StorageChange {
+    bucket: string (required);
+    key: [ubyte] (required);
+    op: StorageOp;
+    value: [ubyte];
+}
+
+table Effects {
+    messages: [OutboundMessage];
+    storage: [StorageChange];
+    logs: [string];
+}
+
+// =============================================================================
+// Crafting / Material Source Types
+// =============================================================================
+
+// Inline material (raw bytes included in message)
+table InlineMaterial {
+    bytes: [ubyte] (required);
+}
+
+// Reference to a material in the recipe book
+table RecipeRef {
+    name: string (required);
+    version: string (required);
+    content_hash: Checksum;
+}
+
+// Material source — inline or recipe reference
+union MaterialSource {
+    InlineMaterial,
+    RecipeRef
+}
+
+// =============================================================================
+// Game Messages
+// =============================================================================
+
+// Spawn a new entity in the game world
+table SpawnRequest {
+    player_id: PlayerId (required);
+    // Seed randomness
+    randomness: [ubyte];
+    // Party public key
+    party_key: [ubyte];
+    // Party member names
+    members: [string];
+    // Slot index
+    slot_index: uint32;
+}
+
+table SpawnResponse {
+    success: bool;
+    error: string;
+    state_hash: Checksum;
+}
+
+// Graceful disconnect
+table QuitRequest {
+    player_id: PlayerId (required);
+    timeout_ms: uint32 = 5000;
+}
+
+table QuitResponse {
+    success: bool;
+    final_state_hash: Checksum;
+    cancelled_actions: uint32;
+}
+
+// Craft an item
+table CraftRequest {
+    character_id: CharacterId (required);
+    material: MaterialSource (required);
+    init_seed: [ubyte];
+    crafter: string;
+    crafter_signature: [ubyte];
+}
+
+table CraftResponse {
+    success: bool;
+    error: string;
+    state_hash: Checksum;
+    content_hash: Checksum;
+}
+
+// Process a round of actions (the core tick)
+table BattleRoundRequest {
+    player_id: PlayerId (required);
+    round: uint64;
+    randomness: [ubyte] (required);
+    timestamp_ms: uint64;
+    actions: [Action] (required);
+    checkpoint: bool = true;
+    effects: Effects;
+}
+
+table ActionOutcome {
+    action_id: [ubyte] (required);
+    status: ubyte;
+    error: string;
+    fuel_consumed: uint64;
+}
+
+table BattleRoundResponse {
+    success: bool;
+    error: string;
+    state_hash: Checksum;
+    outcomes: [ActionOutcome];
+    effects: Effects;
+    fuel_consumed: uint64 = 0;
+}
+
+// =============================================================================
+// Message Union (All Message Types)
+// =============================================================================
+
+union Payload {
+    SpawnRequest,
+    SpawnResponse,
+    QuitRequest,
+    QuitResponse,
+    CraftRequest,
+    CraftResponse,
+    BattleRoundRequest,
+    BattleRoundResponse
+}
+
+// =============================================================================
+// Packet (Top-Level Message Container)
+// =============================================================================
+
+table Packet {
+    // Protocol version
+    version: uint16 = 1;
+
+    // Unique request identifier
+    request_id: uint64;
+
+    // Optional trace ID for debugging
+    trace_id: string;
+
+    // Timestamp when message was created (ms since epoch)
+    timestamp_ms: uint64;
+
+    // The actual message payload
+    payload: Payload;
+}
+
+root_type Packet;

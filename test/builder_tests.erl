@@ -267,6 +267,34 @@ simple_struct_test() ->
     ?assertEqual(1.0, maps:get(x, Struct)),
     ?assertEqual(2.0, maps:get(y, Struct)).
 
+nested_struct_test() ->
+    %% Struct containing another struct (Rect = two Vec2s = 16 bytes)
+    Schema = schema(
+        #{
+            'Vec2' => {struct, [{x, float}, {y, float}]},
+            'Rect' => {struct, [{min, 'Vec2'}, {max, 'Vec2'}]},
+            test => table([field(bounds, 'Rect'), field(label, string, #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    Map = #{
+        bounds => #{min => #{x => 1.0, y => 2.0}, max => #{x => 3.0, y => 4.0}},
+        label => <<"test">>
+    },
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, bounds), Buffer),
+    Min = maps:get(min, Struct),
+    Max = maps:get(max, Struct),
+    ?assertEqual(1.0, maps:get(x, Min)),
+    ?assertEqual(2.0, maps:get(y, Min)),
+    ?assertEqual(3.0, maps:get(x, Max)),
+    ?assertEqual(4.0, maps:get(y, Max)),
+    ?assertEqual(
+        {ok, <<"test">>},
+        flatbuferl_reader:get_field(Root, 1, field_type(Schema, test, label), Buffer)
+    ).
+
 struct_with_int_and_float_test() ->
     %% Struct with mixed types to test alignment (12 bytes with alignment)
     Schema = schema(
@@ -672,3 +700,267 @@ binary_as_ubyte_array_test() ->
     {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, data), Buffer),
     %% ubyte returns binary directly
     ?assertEqual(Bin, maps:get(bytes, Struct)).
+
+%% =============================================================================
+%% Struct Array Sizing Tests
+%% =============================================================================
+%% Regression tests for primitive_type_size/1 returning wrong sizes for
+%% {array, ElemType, Count} tuples. The catch-all clause returned 4 for any
+%% unrecognized type, causing structs with fixed-size arrays > 4 bytes to
+%% have incorrect total_size, corrupting vtable tbl_size and all subsequent
+%% field offsets.
+
+struct_array_vtable_size_test() ->
+    %% Verify the vtable tbl_size is correct for a table with a 32-byte struct.
+    %% Before the fix, tbl_size was 16 (treated array as 4 bytes) instead of 44.
+    Schema = schema(
+        #{
+            'Checksum' => {struct, [{bytes, {array, uint8, 32}}]},
+            test => table([
+                field(name, string),
+                field(version, string, #{id => 1}),
+                field(hash, 'Checksum', #{id => 2})
+            ])
+        },
+        #{root_type => test}
+    ),
+    Map = #{name => <<"pkg">>, version => <<"1.0">>, hash => #{bytes => lists:seq(1, 32)}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    %% Read root table vtable
+    <<RootOff:32/little, _/binary>> = Buffer,
+    <<_:RootOff/binary, SOffset:32/little-signed, _/binary>> = Buffer,
+    VTPos = RootOff - SOffset,
+    <<_:VTPos/binary, _VTSize:16/little, TblSize:16/little, _/binary>> = Buffer,
+    %% tbl_size = 4 (soffset) + 4 (name uoffset) + 4 (version uoffset) + 32 (Checksum) = 44
+    ?assertEqual(44, TblSize).
+
+struct_array_roundtrip_test() ->
+    %% Roundtrip: table with 32-byte struct array field and strings
+    Schema = schema(
+        #{
+            'Checksum' => {struct, [{bytes, {array, uint8, 32}}]},
+            test => table([
+                field(name, string),
+                field(version, string, #{id => 1}),
+                field(hash, 'Checksum', #{id => 2})
+            ])
+        },
+        #{root_type => test}
+    ),
+    HashBytes = lists:seq(1, 32),
+    Map = #{name => <<"test:pkg">>, version => <<"2.0.0">>, hash => #{bytes => HashBytes}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, <<"test:pkg">>} = flatbuferl_reader:get_field(
+        Root, 0, field_type(Schema, test, name), Buffer
+    ),
+    {ok, <<"2.0.0">>} = flatbuferl_reader:get_field(
+        Root, 1, field_type(Schema, test, version), Buffer
+    ),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 2, field_type(Schema, test, hash), Buffer),
+    ?assertEqual(HashBytes, maps:get(bytes, Struct)).
+
+struct_array_with_trailing_scalar_test() ->
+    %% Struct with array followed by a scalar — both must be sized correctly
+    Schema = schema(
+        #{
+            'Tagged' => {struct, [{data, {array, ubyte, 16}}, {tag, uint32}]},
+            test => table([field(item, 'Tagged'), field(label, string, #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    Bin = crypto:strong_rand_bytes(16),
+    Map = #{item => #{data => Bin, tag => 99}, label => <<"hello">>},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, item), Buffer),
+    ?assertEqual(Bin, maps:get(data, Struct)),
+    ?assertEqual(99, maps:get(tag, Struct)),
+    ?assertEqual(
+        {ok, <<"hello">>},
+        flatbuferl_reader:get_field(Root, 1, field_type(Schema, test, label), Buffer)
+    ).
+
+struct_double_array_test() ->
+    %% Struct with [double:4] — 8-byte elements, 32 bytes total
+    Schema = schema(
+        #{
+            'Matrix' => {struct, [{vals, {array, double, 4}}]},
+            test => table([field(m, 'Matrix')])
+        },
+        #{root_type => test}
+    ),
+    Map = #{m => #{vals => [1.0, 2.0, 3.0, 4.0]}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, m), Buffer),
+    ?assertEqual([1.0, 2.0, 3.0, 4.0], maps:get(vals, Struct)).
+
+struct_array_nested_in_table_test() ->
+    %% Struct with array inside a nested table (not root) — exercises
+    %% calc_ref_align_padding path with struct array sizing
+    Schema = schema(
+        #{
+            'Checksum' => {struct, [{bytes, {array, ubyte, 32}}]},
+            'Ref' => table([
+                field(pkg, string),
+                field(hash, 'Checksum', #{id => 1})
+            ]),
+            test => table([field(name, string), field(ref, 'Ref', #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    HashBin = crypto:strong_rand_bytes(32),
+    Map = #{name => <<"outer">>, ref => #{pkg => <<"inner:pkg">>, hash => #{bytes => HashBin}}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Decoded = flatbuferl:to_map(Ctx),
+    ?assertEqual(<<"outer">>, maps:get(name, Decoded)),
+    Ref = maps:get(ref, Decoded),
+    ?assertEqual(<<"inner:pkg">>, maps:get(pkg, Ref)),
+    ?assertEqual(HashBin, maps:get(bytes, maps:get(hash, Ref))).
+
+%% =============================================================================
+%% Deep Nested Struct Tests
+%% =============================================================================
+
+three_level_nested_struct_test() ->
+    %% Struct A contains struct B contains struct C (3 levels).
+    %% Tests that re-enrichment fixpoint resolves all nesting levels.
+    Schema = schema(
+        #{
+            'Point' => {struct, [{x, float}, {y, float}]},
+            'Segment' => {struct, [{start, 'Point'}, {finish, 'Point'}]},
+            'Path' => {struct, [{seg, 'Segment'}, {weight, float}]},
+            test => table([field(route, 'Path')])
+        },
+        #{root_type => test}
+    ),
+    Map = #{
+        route => #{
+            seg => #{
+                start => #{x => 1.0, y => 2.0},
+                finish => #{x => 3.0, y => 4.0}
+            },
+            weight => 0.5
+        }
+    },
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Path} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, route), Buffer),
+    Seg = maps:get(seg, Path),
+    Start = maps:get(start, Seg),
+    Finish = maps:get(finish, Seg),
+    ?assertEqual(1.0, maps:get(x, Start)),
+    ?assertEqual(2.0, maps:get(y, Start)),
+    ?assertEqual(3.0, maps:get(x, Finish)),
+    ?assertEqual(4.0, maps:get(y, Finish)),
+    {ok, W} = maps:find(weight, Path),
+    ?assert(abs(W - 0.5) < 0.001).
+
+%% =============================================================================
+%% Vtable-Sharing Path Tests
+%% =============================================================================
+
+vtable_sharing_with_u64_test() ->
+    %% Force vtable-sharing (encode_root_vtable_after) by making the root
+    %% table have the same vtable as a nested table. Both have a uint64
+    %% and a string field in the same order/types, so their vtables match.
+    %% The root's vtable is placed after the nested table's, triggering
+    %% the vtable-sharing path with 8-byte alignment adjustment.
+    Schema = schema(
+        #{
+            'Inner' => table([field(ts, uint64), field(label, string, #{id => 1})]),
+            test => table([field(ts, uint64), field(child, 'Inner', #{id => 1})])
+        },
+        #{root_type => test}
+    ),
+    Map = #{ts => 1710000000000, child => #{ts => 1710003600000, label => <<"inner">>}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Decoded = flatbuferl:to_map(Ctx),
+    ?assertEqual(1710000000000, maps:get(ts, Decoded)),
+    ?assertEqual(1710003600000, maps:get(ts, maps:get(child, Decoded))),
+    %% Verify the root u64 is 8-byte aligned
+    <<RootOff:32/little, _/binary>> = Buffer,
+    %% Root table's ts field should be at an 8-byte aligned position
+    <<_:RootOff/binary, SOffset:32/little-signed, _/binary>> = Buffer,
+    VTPos = RootOff - SOffset,
+    <<_:VTPos/binary, _VTSize:16/little, _TblSize:16/little, TsFieldOffset:16/little, _/binary>> =
+        Buffer,
+    TsAbsPos = RootOff + TsFieldOffset,
+    ?assertEqual(
+        0,
+        TsAbsPos rem 8,
+        lists:flatten(
+            io_lib:format(
+                "Root u64 at abs ~p must be 8-byte aligned (vtable-sharing path)",
+                [TsAbsPos]
+            )
+        )
+    ).
+
+%% =============================================================================
+%% Union with 8-byte Field Tests
+%% =============================================================================
+
+union_member_with_u64_alignment_test() ->
+    %% Union member table containing uint64 fields, nested inside a non-root
+    %% table. The union must be a ref field of a nested table (not the root)
+    %% to exercise the #union_value_def{} clause in nested_table_first_8byte_offset,
+    %% which is only reached via encode_refs_with_positions -> calc_ref_align_padding.
+    {ok, Schema} = flatbuferl:parse_schema(
+        <<
+            "\n"
+            "        table MoveAction { x: int; y: int; }\n"
+            "        table TimedAction { timestamp: uint64; duration: uint64; label: string; }\n"
+            "        union Action { MoveAction, TimedAction }\n"
+            "        table Event { name: string; action: Action; }\n"
+            "        table Log { id: uint64; event: Event; }\n"
+            "        root_type Log;\n"
+            "    "
+        >>
+    ),
+    Map = #{
+        id => 42,
+        event => #{
+            name => <<"tick">>,
+            action_type => 'TimedAction',
+            action => #{timestamp => 1710000000000, duration => 3600000, label => <<"test">>}
+        }
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Decoded = flatbuferl:to_map(Ctx),
+    ?assertEqual(42, maps:get(id, Decoded)),
+    Event = maps:get(event, Decoded),
+    ?assertEqual(<<"tick">>, maps:get(name, Event)),
+    ?assertEqual('TimedAction', maps:get(action_type, Event)),
+    Action = maps:get(action, Event),
+    ?assertEqual(1710000000000, maps:get(timestamp, Action)),
+    ?assertEqual(3600000, maps:get(duration, Action)),
+    ?assertEqual(<<"test">>, maps:get(label, Action)).
+
+%% =============================================================================
+%% Struct with Enum Field Tests
+%% =============================================================================
+
+struct_with_enum_field_test() ->
+    %% Struct containing an enum field. Exercises resolve_struct_field's
+    %% #enum_def{} clause during Phase 1b re-enrichment.
+    Schema = schema(
+        #{
+            'Channel' => {{enum, ubyte}, ['Red', 'Green', 'Blue']},
+            'Pixel' => {struct, [{r, ubyte}, {g, ubyte}, {b, ubyte}, {channel, 'Channel'}]},
+            test => table([field(color, 'Pixel')])
+        },
+        #{root_type => test}
+    ),
+    Map = #{color => #{r => 255, g => 128, b => 0, channel => 'Green'}},
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Root = flatbuferl_reader:get_root(Buffer),
+    {ok, Struct} = flatbuferl_reader:get_field(Root, 0, field_type(Schema, test, color), Buffer),
+    ?assertEqual(255, maps:get(r, Struct)),
+    ?assertEqual(128, maps:get(g, Struct)),
+    ?assertEqual(0, maps:get(b, Struct)),
+    ?assertEqual('Green', maps:get(channel, Struct)).
