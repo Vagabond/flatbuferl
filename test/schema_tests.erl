@@ -217,3 +217,91 @@ string_default_with_enum_test() ->
         [#field_def{type = string, default = <<"pixel">>}],
         StringFields
     ).
+
+%% =============================================================================
+%% Field Hook Tests
+%% =============================================================================
+
+field_hook_attrs_test() ->
+    %% Verify that schema attributes are captured in field_def.attrs
+    {ok, {Defs, _Opts}} = flatbuferl:parse_schema(
+        "table User { name: string (required, validate: \"non_empty\"); }"),
+    #table_def{all_fields = [#field_def{name = name, attrs = Attrs}]} = maps:get('User', Defs),
+    ?assertEqual(true, maps:get(required, Attrs)),
+    ?assertEqual(<<"non_empty">>, maps:get(validate, Attrs)).
+
+field_hook_encode_test() ->
+    %% Verify field hook fires on encode (from_map) with correct message type
+    Self = self(),
+    Hook = fun(MsgType, FieldName, Value, encode, _Attrs) ->
+        Self ! {hook_fired, MsgType, FieldName, Value, encode},
+        ok
+    end,
+    {ok, {Defs, Opts0}} = flatbuferl:parse_schema("table Foo { count: int; } root_type Foo;"),
+    Opts = Opts0#{field_hook => Hook},
+    Schema = {Defs, Opts},
+    _Bin = flatbuferl:from_map(#{count => 42}, Schema),
+    receive
+        {hook_fired, 'Foo', count, 42, encode} -> ok
+    after 1000 -> error(timeout)
+    end.
+
+field_hook_decode_test() ->
+    %% Verify field hook fires on decode (to_map) with correct message type
+    Self = self(),
+    Hook = fun(MsgType, FieldName, Value, decode, _Attrs) ->
+        Self ! {hook_fired, MsgType, FieldName, Value, decode},
+        ok;
+        (_MsgType, _FieldName, _Value, _Dir, _Attrs) -> ok
+    end,
+    {ok, {Defs, Opts0}} = flatbuferl:parse_schema("table Foo { count: int; } root_type Foo;"),
+    Opts = Opts0#{field_hook => Hook},
+    Schema = {Defs, Opts},
+    Bin = flatbuferl:from_map(#{count => 42}, Schema),
+    Ctx = flatbuferl:new(iolist_to_binary(Bin), Schema),
+    _Map = flatbuferl:to_map(Ctx),
+    receive
+        {hook_fired, 'Foo', count, 42, decode} -> ok
+    after 1000 -> error(timeout)
+    end.
+
+field_hook_get_test() ->
+    %% Verify field hook fires on direct get access with correct message type
+    Self = self(),
+    Hook = fun(MsgType, FieldName, Value, decode, _Attrs) ->
+        Self ! {hook_fired, MsgType, FieldName, Value, decode},
+        ok;
+        (_MsgType, _FieldName, _Value, _Dir, _Attrs) -> ok
+    end,
+    {ok, {Defs, Opts0}} = flatbuferl:parse_schema("table Foo { count: int; } root_type Foo;"),
+    Opts = Opts0#{field_hook => Hook},
+    Schema = {Defs, Opts},
+    Bin = flatbuferl:from_map(#{count => 42}, Schema),
+    Ctx = flatbuferl:new(iolist_to_binary(Bin), Schema),
+    _Value = flatbuferl:get(Ctx, [count]),
+    receive
+        {hook_fired, 'Foo', count, 42, decode} -> ok
+    after 1000 -> error(timeout)
+    end.
+
+field_hook_transform_test() ->
+    %% Verify hook can transform values via {ok, NewValue}
+    Hook = fun(_MsgType, count, Value, encode, _Attrs) -> {ok, Value * 2};
+              (_MsgType, _Field, _Value, _Dir, _Attrs) -> ok
+           end,
+    {ok, {Defs, Opts0}} = flatbuferl:parse_schema("table Foo { count: int; } root_type Foo;"),
+    Opts = Opts0#{field_hook => Hook},
+    Schema = {Defs, Opts},
+    Bin = flatbuferl:from_map(#{count => 21}, Schema),
+    Ctx = flatbuferl:new(iolist_to_binary(Bin), Schema),
+    ?assertEqual(42, flatbuferl:get(Ctx, [count])).
+
+field_hook_reject_test() ->
+    %% Verify hook can reject values via {error, Reason}
+    Hook = fun(_MsgType, name, <<>>, encode, _Attrs) -> {error, empty};
+              (_MsgType, _Field, _Value, _Dir, _Attrs) -> ok
+           end,
+    {ok, {Defs, Opts0}} = flatbuferl:parse_schema("table Foo { name: string; } root_type Foo;"),
+    Opts = Opts0#{field_hook => Hook},
+    Schema = {Defs, Opts},
+    ?assertError({field_hook_error, 'Foo', name, empty}, flatbuferl:from_map(#{name => <<>>}, Schema)).

@@ -392,7 +392,8 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
         is_scalar = is_scalar_type(NormalizedType, Defs),
         is_primitive = is_primitive_scalar(ResolvedType),
         resolved_type = ResolvedType,
-        layout_key = InlineSize * 65536 + Id
+        layout_key = InlineSize * 65536 + Id,
+        attrs = Attrs
     };
 optimize_field_to_record({Name, Type}, Defs) ->
     NormalizedType = normalize_type(Type),

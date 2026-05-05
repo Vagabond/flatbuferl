@@ -210,8 +210,8 @@ fetch(Ctx, Path) ->
 %% Extract fields from opaque ctx record
 unpack_ctx(Ctx) ->
     %% Access ctx record fields via flatbuferl module
-    %% The ctx record is: {ctx, buffer, defs, root_type, root}
-    {ctx, Buffer, Defs, RootType, Root} = Ctx,
+    %% The ctx record is: {ctx, buffer, defs, root_type, root, opts}
+    {ctx, Buffer, Defs, RootType, Root, _Opts} = Ctx,
     {Buffer, Defs, RootType, Root}.
 
 %% Main dispatch
