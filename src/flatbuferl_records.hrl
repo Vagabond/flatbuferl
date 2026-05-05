@@ -20,7 +20,10 @@
     %% true only for primitive scalars (bool, int8-64, uint8-64, float32/64)
     is_primitive :: boolean(),
     %% size * 65536 + id for sorting
-    layout_key :: non_neg_integer()
+    layout_key :: non_neg_integer(),
+    %% Arbitrary attributes from schema (e.g. validate, auth_type, etc.)
+    %% Captured from parenthesized field attributes: field (required, validate: "non_empty")
+    attrs = #{} :: map()
 }).
 
 %% Precomputed encoding layout for "all fields present" case

@@ -44,7 +44,8 @@
     buffer :: binary(),
     defs :: flatbuferl_schema:definitions(),
     root_type :: atom(),
-    root :: {table, non_neg_integer(), binary()}
+    root :: {table, non_neg_integer(), binary()},
+    opts = #{} :: map()
 }).
 
 -opaque ctx() :: #ctx{}.
@@ -79,7 +80,8 @@ new(Buffer, {Defs, SchemaOpts}) ->
         buffer = Buffer,
         defs = Defs,
         root_type = RootType,
-        root = Root
+        root = Root,
+        opts = SchemaOpts
     }.
 
 %% =============================================================================
@@ -121,18 +123,23 @@ to_map(Ctx) ->
 
 %% @doc Decode the entire buffer to an Erlang map with options.
 -spec to_map(ctx(), decode_opts()) -> map().
-to_map(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}, Opts) ->
-    table_to_map(Root, Defs, RootType, Buffer, Opts).
+to_map(
+    #ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root, opts = SchemaOpts}, Opts
+) ->
+    Map = table_to_map(Root, Defs, RootType, Buffer, Opts),
+    apply_field_hooks(Map, Defs, 'decode', SchemaOpts).
 
 %% @doc Encode an Erlang map to FlatBuffers iodata.
 -spec from_map(map(), schema()) -> iodata().
-from_map(Map, Schema) ->
-    flatbuferl_builder:from_map(Map, Schema).
+from_map(Map, {Defs, Opts} = Schema) ->
+    Map1 = apply_field_hooks(Map, Defs, encode, Opts),
+    flatbuferl_builder:from_map(Map1, Schema).
 
 %% @doc Encode an Erlang map to FlatBuffers iodata with options.
 -spec from_map(map(), schema(), flatbuferl_builder:encode_opts()) -> iodata().
-from_map(Map, Schema, Opts) ->
-    flatbuferl_builder:from_map(Map, Schema, Opts).
+from_map(Map, {Defs, Opts} = Schema, EncodeOpts) ->
+    Map1 = apply_field_hooks(Map, Defs, encode, Opts),
+    flatbuferl_builder:from_map(Map1, Schema, EncodeOpts).
 
 %% @doc Update fields in a FlatBuffer.
 %%
@@ -706,32 +713,41 @@ ctx_root(#ctx{defs = Defs, root_type = RootType, root = Root}) ->
 %% Internal
 %% =============================================================================
 
-get_internal(#ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root}, Path) ->
-    get_path(Root, Defs, RootType, Path, Buffer).
+get_internal(
+    #ctx{buffer = Buffer, defs = Defs, root_type = RootType, root = Root, opts = SchemaOpts}, Path
+) ->
+    get_path(Root, Defs, RootType, Path, Buffer, SchemaOpts).
 
-get_path(TableRef, Defs, TableType, [FieldName], Buffer) ->
+get_path(TableRef, Defs, TableType, [FieldName], Buffer, SchemaOpts) ->
     #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
     case maps:get(FieldName, FieldMap, undefined) of
-        #field_def{id = FieldId, resolved_type = Type, default = Default} ->
+        #field_def{id = FieldId, resolved_type = Type, default = Default, attrs = Attrs} ->
             ReaderType = resolve_for_reader(Type, Defs),
             case flatbuferl_reader:get_field(TableRef, FieldId, ReaderType, Buffer) of
                 {ok, Value} ->
-                    {ok, convert_enum_value(Value, Type, Defs)};
+                    {ok,
+                        apply_get_hook(
+                            TableType,
+                            FieldName,
+                            convert_enum_value(Value, Type, Defs),
+                            Attrs,
+                            SchemaOpts
+                        )};
                 missing when Default /= undefined ->
-                    {ok, Default};
+                    {ok, apply_get_hook(TableType, FieldName, Default, Attrs, SchemaOpts)};
                 missing ->
                     missing
             end;
         undefined ->
             error({unknown_field, FieldName})
     end;
-get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
+get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer, SchemaOpts) ->
     #table_def{field_map = FieldMap} = maps:get(TableType, Defs),
     case maps:get(FieldName, FieldMap, undefined) of
         #field_def{id = FieldId, resolved_type = NestedType} when is_atom(NestedType) ->
             case flatbuferl_reader:get_field(TableRef, FieldId, NestedType, Buffer) of
                 {ok, NestedTableRef} ->
-                    get_path(NestedTableRef, Defs, NestedType, Rest, Buffer);
+                    get_path(NestedTableRef, Defs, NestedType, Rest, Buffer, SchemaOpts);
                 missing ->
                     missing
             end;
@@ -740,6 +756,18 @@ get_path(TableRef, Defs, TableType, [FieldName | Rest], Buffer) ->
         undefined ->
             error({unknown_field, FieldName})
     end.
+
+%% @private Apply the field hook to a value read via get/fetch, if registered.
+apply_get_hook(_TableType, _FieldName, Value, _Attrs, #{field_hook := Hook}) when
+    is_function(Hook, 5)
+->
+    case Hook(_TableType, _FieldName, Value, 'decode', _Attrs) of
+        ok -> Value;
+        {ok, NewValue} -> NewValue;
+        {error, Reason} -> error({field_hook_error, _TableType, _FieldName, Reason})
+    end;
+apply_get_hook(_TableType, _FieldName, Value, _Attrs, _Opts) ->
+    Value.
 
 %% Resolve type name to reader-compatible type
 %% Handle types with defaults (unwrap first, but not type constructors)
@@ -798,6 +826,114 @@ convert_enum_value(Value, TypeName, Defs) when is_atom(TypeName), is_integer(Val
             Value
     end;
 convert_enum_value(Value, _Type, _Defs) ->
+    Value.
+
+%% =============================================================================
+%% Field Hooks
+%% =============================================================================
+
+%% @doc Apply the field hook function (if present in schema options) to fields
+%% in the map that have non-empty attributes in the schema.
+%%
+%% The hook signature:
+%%   fun((FieldName :: atom(), Value :: term(), Direction :: encode | decode,
+%%        Attrs :: map()) -> ok | {ok, term()} | {error, term()})
+%%
+%% The hook is stored in schema options under the key `field_hook`.
+-spec apply_field_hooks(
+    map(),
+    flatbuferl_schema:definitions(),
+    encode | 'decode',
+    map()
+) -> map().
+apply_field_hooks(Map, Defs, Direction, #{field_hook := Hook, root_type := RootType}) when
+    is_function(Hook, 5)
+->
+    apply_hook_to_table(Map, RootType, Defs, Hook, Direction);
+apply_field_hooks(Map, _Defs, _Direction, _Opts) ->
+    Map.
+
+%% @private Apply hook to a table map, looking up field attrs from the schema.
+apply_hook_to_table(Map, TableType, Defs, Hook, Dir) when is_map(Map), is_atom(TableType) ->
+    case maps:get(TableType, Defs, undefined) of
+        #table_def{all_fields = Fields} ->
+            FieldMap = maps:from_list([{F#field_def.name, F} || F <- Fields]),
+            maps:fold(
+                fun(K, V, Acc) ->
+                    V1 = apply_hook_to_field(
+                        V, K, maps:get(K, FieldMap, undefined), TableType, Defs, Hook, Dir
+                    ),
+                    Acc#{K => V1}
+                end,
+                #{},
+                Map
+            );
+        _ ->
+            apply_hook_recursive(Map, Hook, Dir)
+    end;
+apply_hook_to_table(Other, _TableType, _Defs, _Hook, _Dir) ->
+    Other.
+
+%% @private Apply hook to a single field value, using field_def for attrs and nested type info.
+apply_hook_to_field({UnionType, Fields}, _Key, _FieldDef, _TableType, Defs, Hook, Dir) when
+    is_atom(UnionType), is_map(Fields)
+->
+    {UnionType, apply_hook_to_table(Fields, UnionType, Defs, Hook, Dir)};
+apply_hook_to_field(Map, _Key, #field_def{attrs = Attrs} = FD, TableType, Defs, Hook, Dir) when
+    is_map(Map), map_size(Attrs) > 0
+->
+    Map1 =
+        case FD#field_def.type of
+            Type when is_atom(Type) -> apply_hook_to_table(Map, Type, Defs, Hook, Dir);
+            _ -> apply_hook_recursive(Map, Hook, Dir)
+        end,
+    case Hook(TableType, _Key, Map1, Dir, Attrs) of
+        ok -> Map1;
+        {ok, NewValue} -> NewValue;
+        {error, Reason} -> error({field_hook_error, TableType, _Key, Reason})
+    end;
+apply_hook_to_field(Map, _Key, #field_def{type = Type}, _TableType, Defs, Hook, Dir) when
+    is_map(Map), is_atom(Type)
+->
+    apply_hook_to_table(Map, Type, Defs, Hook, Dir);
+apply_hook_to_field(Map, _Key, _FieldDef, _TableType, _Defs, Hook, Dir) when is_map(Map) ->
+    apply_hook_recursive(Map, Hook, Dir);
+apply_hook_to_field(List, _Key, #field_def{attrs = Attrs}, TableType, _Defs, Hook, Dir) when
+    is_list(List), map_size(Attrs) > 0
+->
+    List1 = [apply_hook_recursive(E, Hook, Dir) || E <- List],
+    case Hook(TableType, _Key, List1, Dir, Attrs) of
+        ok -> List1;
+        {ok, NewValue} -> NewValue;
+        {error, Reason} -> error({field_hook_error, TableType, _Key, Reason})
+    end;
+apply_hook_to_field(List, _Key, _FieldDef, _TableType, _Defs, Hook, Dir) when is_list(List) ->
+    [apply_hook_recursive(E, Hook, Dir) || E <- List];
+apply_hook_to_field(Value, Key, #field_def{attrs = Attrs}, TableType, _Defs, Hook, Dir) when
+    map_size(Attrs) > 0
+->
+    case Hook(TableType, Key, Value, Dir, Attrs) of
+        ok -> Value;
+        {ok, NewValue} -> NewValue;
+        {error, Reason} -> error({field_hook_error, TableType, Key, Reason})
+    end;
+apply_hook_to_field(Value, _Key, _FieldDef, _TableType, _Defs, _Hook, _Dir) ->
+    Value.
+
+%% @private Recursively apply hook without schema awareness (fallback).
+apply_hook_recursive({UnionType, Fields}, Hook, Dir) when is_atom(UnionType), is_map(Fields) ->
+    {UnionType, apply_hook_recursive(Fields, Hook, Dir)};
+apply_hook_recursive(Map, Hook, Dir) when is_map(Map) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            Acc#{K => apply_hook_recursive(V, Hook, Dir)}
+        end,
+        #{},
+        Map
+    );
+apply_hook_recursive(List, Hook, Dir) when is_list(List) ->
+    [apply_hook_recursive(E, Hook, Dir) || E <- List];
+apply_hook_recursive(Value, _Hook, _Dir) ->
     Value.
 
 %% =============================================================================
