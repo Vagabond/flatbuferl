@@ -21,7 +21,8 @@
     from_map/3,
     update/2,
     validate/2,
-    validate/3
+    validate/3,
+    schema_to_module/2
 ]).
 
 %% @private Context accessors for internal modules
@@ -952,3 +953,14 @@ validate(Map, Schema) ->
 -spec validate(map(), schema(), validate_opts()) -> ok | {error, [validation_error()]}.
 validate(Map, Schema, Opts) ->
     flatbuferl_schema:validate(Map, Schema, Opts).
+
+%% =============================================================================
+%% Schema Module Generation
+%% =============================================================================
+
+%% @doc Generate an Erlang module with the parsed schema inlined.
+%% Delegates to flatbuferl_codegen. See flatbuferl_codegen:schema_to_module/2
+%% for details.
+-spec schema_to_module(schema(), module()) -> ok | {error, term()}.
+schema_to_module(Schema, ModuleName) ->
+    flatbuferl_codegen:schema_to_module(Schema, ModuleName).
