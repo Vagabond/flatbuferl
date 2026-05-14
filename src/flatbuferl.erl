@@ -10,6 +10,7 @@
     parse_schema/1,
     parse_schema_file/1,
     new/2,
+    new/3,
     get/2,
     get/3,
     get_bytes/2,
