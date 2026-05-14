@@ -74,7 +74,18 @@ parse_schema_file(Filename) ->
 %% The context can be used with `get/2', `has/2', and `to_map/1'.
 -spec new(binary(), schema()) -> ctx().
 new(Buffer, {Defs, SchemaOpts}) ->
-    RootType = maps:get(root_type, SchemaOpts),
+    new(Buffer, {Defs, SchemaOpts}, #{}).
+
+%% @doc Create a decoding context from a buffer and schema.
+%% The context can be used with `get/2', `has/2', and `to_map/1'.
+-spec new(binary(), schema(), map()) -> ctx().
+new(Buffer, {Defs, SchemaOpts}, Opts) ->
+    RootType = case maps:find(root_type, Opts) of
+                   error ->
+                       maps:get(root_type, SchemaOpts);
+                   {ok, Res} ->
+                       Res
+               end,
     Root = flatbuferl_reader:get_root(Buffer),
     #ctx{
         buffer = Buffer,
