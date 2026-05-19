@@ -19,7 +19,8 @@
 %%     - error: raise error if deprecated field has value
 -type encode_opts() :: #{
     file_id => boolean() | <<_:32>>,
-    deprecated => skip | allow | error
+    deprecated => skip | allow | error,
+    root_type => atom()
 }.
 
 %% =============================================================================

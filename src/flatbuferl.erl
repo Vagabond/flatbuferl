@@ -38,7 +38,8 @@
 %%     - allow: include deprecated fields in output
 %%     - error: raise error if deprecated field is present in buffer
 -type decode_opts() :: #{
-    deprecated => skip | allow | error
+    deprecated => skip | allow | error,
+    root_type => atom()
 }.
 
 -record(ctx, {
