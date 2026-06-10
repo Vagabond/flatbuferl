@@ -62,72 +62,101 @@ parse(Schema) when is_list(Schema) ->
             {error, Err}
     end.
 
-%% Parse a schema file
+%% Parse a schema file.
+%%
+%% Collects raw definitions from this file and every transitively included
+%% file before running the resolution pass exactly once over the merged set.
+%% This way, cross-file type references (e.g. a table field whose type is a
+%% struct defined in another included file) resolve correctly regardless of
+%% include order or how the includes are arranged across files.
 -spec parse_file(file:filename()) -> {ok, {map(), map()}} | {error, term()}.
 parse_file(Filename) ->
     AbsPath = filename:absname(Filename),
-    parse_file(AbsPath, sets:new()).
+    case collect_file(AbsPath, #{}, sets:new(), sets:new()) of
+        {ok, Defs, Opts, _InProgress, _Done} ->
+            {ok, process({Defs, Opts})};
+        {error, _} = Err ->
+            Err
+    end.
 
-%% Internal: parse with cycle detection
--spec parse_file(file:filename(), sets:set(file:filename())) ->
-    {ok, {map(), map()}} | {error, term()}.
-parse_file(AbsPath, Seen) ->
-    case sets:is_element(AbsPath, Seen) of
+%% Recursively read AbsPath and its includes, merging raw {Defs, Opts}.
+%%
+%% State tracked:
+%%   AccDefs    - merged raw definitions accumulated so far
+%%   InProgress - files currently on the active include stack (cycle detection)
+%%   Done       - files whose contents have already been merged (diamond dedup)
+%%
+%% Top-level Opts come from the entry file only — included files contribute
+%% their definitions but not their root_type/file_identifier/etc.
+collect_file(AbsPath, AccDefs, InProgress, Done) ->
+    case sets:is_element(AbsPath, InProgress) of
         true ->
             {error, {circular_include, AbsPath}};
         false ->
-            case file:read_file(AbsPath) of
-                {ok, Contents} ->
-                    BaseDir = filename:dirname(AbsPath),
-                    NewSeen = sets:add_element(AbsPath, Seen),
-                    parse_with_includes(Contents, BaseDir, NewSeen);
-                {error, _} = Err ->
-                    Err
+            case sets:is_element(AbsPath, Done) of
+                true ->
+                    %% Already merged via another include path; skip.
+                    {ok, AccDefs, #{}, InProgress, Done};
+                false ->
+                    read_and_collect(AbsPath, AccDefs, InProgress, Done)
             end
     end.
 
-%% Parse content and process includes
-parse_with_includes(Schema, BaseDir, Seen) when is_binary(Schema) ->
-    parse_with_includes(binary_to_list(Schema), BaseDir, Seen);
-parse_with_includes(Schema, BaseDir, Seen) when is_list(Schema) ->
-    case flatbuferl_lexer:string(Schema) of
-        {ok, Tokens, _} ->
-            case flatbuferl_parser:parse(Tokens) of
-                {ok, {Defs, Opts}} ->
-                    process_includes(Defs, Opts, BaseDir, Seen);
+read_and_collect(AbsPath, AccDefs, InProgress, Done) ->
+    case file:read_file(AbsPath) of
+        {ok, Contents} ->
+            case parse_string(Contents) of
+                {ok, {FileDefs, FileOpts}} ->
+                    case merge_definitions(AccDefs, FileDefs) of
+                        {ok, MergedDefs} ->
+                            BaseDir = filename:dirname(AbsPath),
+                            Includes = maps:get(include, FileOpts, []),
+                            OwnOpts = maps:remove(include, FileOpts),
+                            InProgress2 = sets:add_element(AbsPath, InProgress),
+                            case
+                                collect_includes(
+                                    Includes, BaseDir, MergedDefs, InProgress2, Done
+                                )
+                            of
+                                {ok, Defs2, InProgress3, Done2} ->
+                                    InProgress4 = sets:del_element(AbsPath, InProgress3),
+                                    Done3 = sets:add_element(AbsPath, Done2),
+                                    {ok, Defs2, OwnOpts, InProgress4, Done3};
+                                {error, _} = Err ->
+                                    Err
+                            end;
+                        {error, _} = Err ->
+                            Err
+                    end;
                 {error, _} = Err ->
                     Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+collect_includes([], _BaseDir, Defs, InProgress, Done) ->
+    {ok, Defs, InProgress, Done};
+collect_includes([Include | Rest], BaseDir, Defs, InProgress, Done) ->
+    IncludePath = filename:absname(binary_to_list(Include), BaseDir),
+    case collect_file(IncludePath, Defs, InProgress, Done) of
+        {ok, Defs2, _IncludedOpts, InProgress2, Done2} ->
+            collect_includes(Rest, BaseDir, Defs2, InProgress2, Done2);
+        {error, _} = Err ->
+            Err
+    end.
+
+parse_string(Contents) when is_binary(Contents) ->
+    parse_string(binary_to_list(Contents));
+parse_string(Contents) when is_list(Contents) ->
+    case flatbuferl_lexer:string(Contents) of
+        {ok, Tokens, _} ->
+            case flatbuferl_parser:parse(Tokens) of
+                {ok, Parsed} -> {ok, Parsed};
+                {error, _} = Err -> Err
             end;
         {error, _, _} = Err ->
             {error, Err}
-    end.
-
-%% Process include directives
-process_includes(Defs, Opts, BaseDir, Seen) ->
-    Includes = maps:get(include, Opts, []),
-    case process_includes_list(Includes, Defs, BaseDir, Seen) of
-        {ok, MergedDefs} ->
-            %% Remove includes from opts (they've been processed)
-            CleanOpts = maps:remove(include, Opts),
-            {ok, process({MergedDefs, CleanOpts})};
-        {error, _} = Err ->
-            Err
-    end.
-
-process_includes_list([], Defs, _BaseDir, _Seen) ->
-    {ok, Defs};
-process_includes_list([Include | Rest], Defs, BaseDir, Seen) ->
-    IncludePath = filename:absname(binary_to_list(Include), BaseDir),
-    case parse_file(IncludePath, Seen) of
-        {ok, {IncludedDefs, _IncludedOpts}} ->
-            case merge_definitions(Defs, IncludedDefs) of
-                {ok, MergedDefs} ->
-                    process_includes_list(Rest, MergedDefs, BaseDir, Seen);
-                {error, _} = Err ->
-                    Err
-            end;
-        {error, _} = Err ->
-            Err
     end.
 
 %% Merge definitions, error on duplicates

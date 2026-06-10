@@ -1114,6 +1114,46 @@ include_test_() ->
             Result = flatbuferl:parse_schema_file("/tmp/missing_include.fbs"),
             ?assertMatch({error, enoent}, Result),
             file:delete("/tmp/missing_include.fbs")
+        end},
+        {"cross-file struct reference resolves and roundtrips", fun() ->
+            %% Regression: when a table in one included file references a
+            %% struct defined in another included file, the field type must
+            %% resolve to a #struct_def{}, not stay as the bare atom.
+            {ok, Schema} = flatbuferl:parse_schema_file(
+                "test/schemas/cross_struct_root.fbs"
+            ),
+            {Defs, _Opts} = Schema,
+            #table_def{all_fields = Fields} = maps:get('CrossUser', Defs),
+            IdField = lists:keyfind(id, #field_def.name, Fields),
+            ?assertMatch(#field_def{resolved_type = #struct_def{}}, IdField),
+            Map = #{id => #{inner => 42}, value => 7},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Out = flatbuferl:to_map(Ctx),
+            ?assertEqual(42, maps:get(inner, maps:get(id, Out))),
+            ?assertEqual(7, maps:get(value, Out))
+        end},
+        {"diamond include dedups same file", fun() ->
+            %% diamond_root includes diamond_left and diamond_right, both of
+            %% which include cross_struct_def. Must not error with duplicate
+            %% type and must produce a working schema.
+            {ok, Schema} = flatbuferl:parse_schema_file(
+                "test/schemas/diamond_root.fbs"
+            ),
+            {Defs, _Opts} = Schema,
+            ?assert(maps:is_key('CrossId', Defs)),
+            ?assert(maps:is_key('LeftRef', Defs)),
+            ?assert(maps:is_key('RightRef', Defs)),
+            ?assert(maps:is_key('DiamondRoot', Defs)),
+            Map = #{
+                left => #{id => #{inner => 1}},
+                right => #{id => #{inner => 2}}
+            },
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, Schema)),
+            Ctx = flatbuferl:new(Bin, Schema),
+            Out = flatbuferl:to_map(Ctx),
+            ?assertEqual(1, maps:get(inner, maps:get(id, maps:get(left, Out)))),
+            ?assertEqual(2, maps:get(inner, maps:get(id, maps:get(right, Out))))
         end}
     ].
 

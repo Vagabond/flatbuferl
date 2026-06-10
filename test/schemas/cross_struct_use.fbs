@@ -1,0 +1,7 @@
+// References CrossId from cross_struct_def.fbs without including it
+// directly — the include is supplied by the root file. Exercises the
+// case where a struct field's type is defined in a sibling include.
+table CrossUser {
+  id: CrossId (required);
+  value: uint32;
+}
