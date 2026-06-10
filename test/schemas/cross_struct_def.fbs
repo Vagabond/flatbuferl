@@ -1,0 +1,4 @@
+// Defines a struct used by a table in a sibling file.
+struct CrossId {
+  inner: uint32;
+}

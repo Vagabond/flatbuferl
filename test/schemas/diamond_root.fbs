@@ -1,0 +1,9 @@
+include "diamond_left.fbs";
+include "diamond_right.fbs";
+
+table DiamondRoot {
+  left: LeftRef (required);
+  right: RightRef (required);
+}
+
+root_type DiamondRoot;
