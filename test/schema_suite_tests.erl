@@ -819,6 +819,74 @@ required_field_test_() ->
         end}
     ].
 
+%% Required-field validation must fire at every nesting level, not just at
+%% the root. The encoder used to call validate_fields only on the root
+%% table inside from_map_internal, so a required field inside any nested
+%% table could be silently omitted.
+nested_required_field_test_() ->
+    {ok, NestedSchema} = flatbuferl:parse_schema(
+        "table Inner {\n"
+        "  must_have:string (required);\n"
+        "  optional_field:int;\n"
+        "}\n"
+        "table Outer {\n"
+        "  inner:Inner;\n"
+        "  other:int;\n"
+        "}\n"
+        "root_type Outer;"
+    ),
+    {ok, DeepSchema} = flatbuferl:parse_schema(
+        "table Leaf {\n"
+        "  must_have:string (required);\n"
+        "}\n"
+        "table Middle {\n"
+        "  leaf:Leaf;\n"
+        "}\n"
+        "table Root {\n"
+        "  middle:Middle;\n"
+        "}\n"
+        "root_type Root;"
+    ),
+    {ok, VecSchema} = flatbuferl:parse_schema(
+        "table Item {\n"
+        "  must_have:string (required);\n"
+        "}\n"
+        "table Bag {\n"
+        "  items:[Item];\n"
+        "}\n"
+        "root_type Bag;"
+    ),
+    [
+        {"nested required field present passes", fun() ->
+            Map = #{inner => #{must_have => <<"hello">>}, other => 42},
+            Bin = iolist_to_binary(flatbuferl:from_map(Map, NestedSchema)),
+            Ctx = flatbuferl:new(Bin, NestedSchema),
+            Result = flatbuferl:to_map(Ctx),
+            ?assertEqual(<<"hello">>, maps:get(must_have, maps:get(inner, Result)))
+        end},
+        {"nested required field missing errors", fun() ->
+            Map = #{inner => #{optional_field => 7}, other => 42},
+            ?assertError(
+                {required_field_missing, 'Inner', must_have},
+                flatbuferl:from_map(Map, NestedSchema)
+            )
+        end},
+        {"deeply nested required field missing errors", fun() ->
+            Map = #{middle => #{leaf => #{}}},
+            ?assertError(
+                {required_field_missing, 'Leaf', must_have},
+                flatbuferl:from_map(Map, DeepSchema)
+            )
+        end},
+        {"required field missing in table vector element errors", fun() ->
+            Map = #{items => [#{must_have => <<"a">>}, #{}]},
+            ?assertError(
+                {required_field_missing, 'Item', must_have},
+                flatbuferl:from_map(Map, VecSchema)
+            )
+        end}
+    ].
+
 deprecated_encode_test_() ->
     Schema = {
         #{

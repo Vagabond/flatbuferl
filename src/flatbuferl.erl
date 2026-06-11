@@ -82,12 +82,13 @@ new(Buffer, {Defs, SchemaOpts}) ->
 %% The context can be used with `get/2', `has/2', and `to_map/1'.
 -spec new(binary(), schema(), map()) -> ctx().
 new(Buffer, {Defs, SchemaOpts}, Opts) ->
-    RootType = case maps:find(root_type, Opts) of
-                   error ->
-                       maps:get(root_type, SchemaOpts);
-                   {ok, Res} ->
-                       Res
-               end,
+    RootType =
+        case maps:find(root_type, Opts) of
+            error ->
+                maps:get(root_type, SchemaOpts);
+            {ok, Res} ->
+                Res
+        end,
     Root = flatbuferl_reader:get_root(Buffer),
     #ctx{
         buffer = Buffer,
