@@ -19,7 +19,8 @@
 %%     - error: raise error if deprecated field has value
 -type encode_opts() :: #{
     file_id => boolean() | <<_:32>>,
-    deprecated => skip | allow | error
+    deprecated => skip | allow | error,
+    root_type => atom()
 }.
 
 %% =============================================================================
@@ -32,7 +33,12 @@ from_map(Map, Schema) ->
 
 -spec from_map(map(), schema(), encode_opts()) -> iodata().
 from_map(Map, {Defs, SchemaOpts}, Opts) ->
-    RootType = maps:get(root_type, SchemaOpts),
+    RootType = case maps:find(root_type, Opts) of
+                   error ->
+                       maps:get(root_type, SchemaOpts);
+                   {ok, Res} ->
+                       Res
+               end,
     FileId =
         case maps:get(file_id, Opts, true) of
             true -> maps:get(file_identifier, SchemaOpts, no_file_id);

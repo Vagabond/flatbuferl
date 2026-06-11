@@ -10,6 +10,7 @@
     parse_schema/1,
     parse_schema_file/1,
     new/2,
+    new/3,
     get/2,
     get/3,
     get_bytes/2,
@@ -37,7 +38,8 @@
 %%     - allow: include deprecated fields in output
 %%     - error: raise error if deprecated field is present in buffer
 -type decode_opts() :: #{
-    deprecated => skip | allow | error
+    deprecated => skip | allow | error,
+    root_type => atom()
 }.
 
 -record(ctx, {
@@ -74,7 +76,18 @@ parse_schema_file(Filename) ->
 %% The context can be used with `get/2', `has/2', and `to_map/1'.
 -spec new(binary(), schema()) -> ctx().
 new(Buffer, {Defs, SchemaOpts}) ->
-    RootType = maps:get(root_type, SchemaOpts),
+    new(Buffer, {Defs, SchemaOpts}, #{}).
+
+%% @doc Create a decoding context from a buffer and schema.
+%% The context can be used with `get/2', `has/2', and `to_map/1'.
+-spec new(binary(), schema(), map()) -> ctx().
+new(Buffer, {Defs, SchemaOpts}, Opts) ->
+    RootType = case maps:find(root_type, Opts) of
+                   error ->
+                       maps:get(root_type, SchemaOpts);
+                   {ok, Res} ->
+                       Res
+               end,
     Root = flatbuferl_reader:get_root(Buffer),
     #ctx{
         buffer = Buffer,

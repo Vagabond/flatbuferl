@@ -1,0 +1,4 @@
+include "cross_struct_def.fbs";
+include "cross_struct_use.fbs";
+
+root_type CrossUser;
