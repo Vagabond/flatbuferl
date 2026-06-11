@@ -33,12 +33,13 @@ from_map(Map, Schema) ->
 
 -spec from_map(map(), schema(), encode_opts()) -> iodata().
 from_map(Map, {Defs, SchemaOpts}, Opts) ->
-    RootType = case maps:find(root_type, Opts) of
-                   error ->
-                       maps:get(root_type, SchemaOpts);
-                   {ok, Res} ->
-                       Res
-               end,
+    RootType =
+        case maps:find(root_type, Opts) of
+            error ->
+                maps:get(root_type, SchemaOpts);
+            {ok, Res} ->
+                Res
+        end,
     FileId =
         case maps:get(file_id, Opts, true) of
             true -> maps:get(file_identifier, SchemaOpts, no_file_id);
@@ -239,12 +240,25 @@ adjust_slots_for_missing(PrecomputedSlots, PresentIds, AllFieldIds) ->
 
 %% Get layout for a nested table value using precomputed encode_layout
 %% Returns {Scalars, Refs, VTable, AllFields, BaseTableSize, Slots}
-layout_for_value(Value, TableDef, Defs) ->
+%% TableType is threaded in so missing-required errors name the actual
+%% offending table type, not just 'unknown'. Callers that don't have the
+%% name handy can pass `undefined` and we fall back to a generic atom in
+%% the error tuple.
+layout_for_value(Value, TableDef, Defs, TableType) ->
     #table_def{
         scalars = ScalarDefs,
         refs = RefDefs,
+        all_fields = AllFieldDefs,
         encode_layout = EncodeLayout
     } = TableDef,
+    %% Required-field check at every nesting level. The root call site in
+    %% from_map_internal still validates (with the full Opts surface, for
+    %% deprecated handling); here we just enforce `required` so the
+    %% nested-table-omits-a-required-field path doesn't silently encode a
+    %% broken buffer. Cheap iteration over field defs — pre-encoding pass
+    %% may call this twice for the same value during vtable caching, but
+    %% validation is idempotent.
+    validate_required_fields(Value, AllFieldDefs, TableType),
     #encode_layout{
         vtable = PrecomputedVTable,
         table_size = PrecomputedTableSize,
@@ -416,6 +430,27 @@ validate_fields(Map, Fields, TableType, Opts) ->
                     error({deprecated_field_set, TableType, Name});
                 _ ->
                     ok
+            end
+        end,
+        Fields
+    ).
+
+%% Required-only check, used by nested-table validation. Doesn't need
+%% Opts because the deprecated-handling policy is a root-level decision;
+%% if it ever needs to apply at nested levels too, thread Opts through
+%% layout_for_value at that point.
+validate_required_fields(Map, Fields, TableType) ->
+    EffectiveType =
+        case TableType of
+            undefined -> 'nested table';
+            _ -> TableType
+        end,
+    lists:foreach(
+        fun(FieldDef) ->
+            {Name, Required, _Deprecated} = get_field_attrs(FieldDef),
+            case Required andalso not has_field_value(Map, Name) of
+                true -> error({required_field_missing, EffectiveType, Name});
+                false -> ok
             end
         end,
         Fields
@@ -954,7 +989,7 @@ collect_vtables_from_ref({vector, ElemType}, Values, Defs, VTAcc, Seen, Cache) w
                 fun(Value, {Acc, S, #layout_cache{tables = T} = C}) ->
                     CacheKey = {ElemType, Value},
                     {Scalars, Refs, VT, AllFields, BaseTableSize, Slots} =
-                        layout_for_value(Value, TableDef, Defs),
+                        layout_for_value(Value, TableDef, Defs, ElemType),
                     NewT = T#{CacheKey => {Scalars, Refs, VT, AllFields, BaseTableSize, Slots}},
                     NewC = C#layout_cache{tables = NewT},
                     case maps:is_key(VT, S) of
@@ -974,7 +1009,7 @@ collect_vtables_from_ref(Type, Value, Defs, VTAcc, Seen, Cache) when is_atom(Typ
         #table_def{} = TableDef ->
             CacheKey = {Type, Value},
             {Scalars, Refs, VT, AllFields, BaseTableSize, Slots} =
-                layout_for_value(Value, TableDef, Defs),
+                layout_for_value(Value, TableDef, Defs, Type),
             #layout_cache{tables = T} = Cache,
             NewCache = Cache#layout_cache{
                 tables = T#{CacheKey => {Scalars, Refs, VT, AllFields, BaseTableSize, Slots}}
@@ -1134,7 +1169,7 @@ nested_table_first_8byte_offset(Type, Value, Defs) when is_atom(Type) ->
                     none;
                 true ->
                     {_, _, _, AllFields, _BaseTableSize, Slots} =
-                        layout_for_value(Value, TableDef, Defs),
+                        layout_for_value(Value, TableDef, Defs, Type),
                     find_first_8byte_field_offset(AllFields, Slots)
             end;
         _ ->
@@ -1467,7 +1502,7 @@ encode_table_vector_with_sharing(TableType, Values, Defs, #layout_cache{tables =
                 undefined ->
                     %% Not cached - use precomputed layout
                     {_Scalars, Refs, VTable, AllFields, BaseTableSize, Slots} =
-                        layout_for_value(Value, TableDef, Defs),
+                        layout_for_value(Value, TableDef, Defs, TableType),
                     {OrigIdx, VTable, AllFields, BaseTableSize, Slots, Refs}
             end
         end,
@@ -1700,7 +1735,7 @@ encode_nested_table(TableType, Map, Defs, _LayoutCache) ->
     %% Build a nested table - vtable first, then table (positive soffset, like flatc)
     TableDef = maps:get(TableType, Defs),
     {_Scalars, _Refs, VTable, AllFields, BaseTableSize, Slots} =
-        layout_for_value(Map, TableDef, Defs),
+        layout_for_value(Map, TableDef, Defs, TableType),
 
     VTableSize = vtable_size(VTable),
     %% Pad vtable to 4-byte boundary so that soffset is 4-byte aligned
