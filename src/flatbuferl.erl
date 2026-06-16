@@ -22,7 +22,8 @@
     from_map/3,
     update/2,
     validate/2,
-    validate/3
+    validate/3,
+    unpack_ctx/1
 ]).
 
 %% @private Context accessors for internal modules
@@ -966,3 +967,20 @@ validate(Map, Schema) ->
 -spec validate(map(), schema(), validate_opts()) -> ok | {error, [validation_error()]}.
 validate(Map, Schema, Opts) ->
     flatbuferl_schema:validate(Map, Schema, Opts).
+
+%% =============================================================================
+%% Context Accessors
+%% =============================================================================
+
+%% Extract fields from opaque ctx record
+-spec unpack_ctx(ctx()) ->
+    {
+        Buffer :: binary(),
+        Defs :: flatbuferl_schema:definitions(),
+        RootType :: atom(),
+        Root :: {table, non_neg_integer(), binary()},
+        Opts :: map()
+    }.
+
+unpack_ctx(Ctx) ->
+    {Ctx#ctx.buffer, Ctx#ctx.defs, Ctx#ctx.root_type, Ctx#ctx.root, Ctx#ctx.opts}.
