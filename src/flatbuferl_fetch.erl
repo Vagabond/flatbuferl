@@ -199,20 +199,13 @@
 %% returns `undefined' or filters out in wildcards.
 -spec fetch(flatbuferl:ctx(), path()) -> term() | undefined.
 fetch(Ctx, Path) ->
-    {Buffer, Defs, RootType, Root} = unpack_ctx(Ctx),
+    {Buffer, Defs, RootType, Root, _Opts} = flatbuferl:unpack_ctx(Ctx),
     case do_fetch(Root, Defs, RootType, Path, Buffer) of
         {ok, Value} -> Value;
         missing -> undefined;
         filtered_out -> undefined;
         {list, Values} -> Values
     end.
-
-%% Extract fields from opaque ctx record
-unpack_ctx(Ctx) ->
-    %% Access ctx record fields via flatbuferl module
-    %% The ctx record is: {ctx, buffer, defs, root_type, root, opts}
-    {ctx, Buffer, Defs, RootType, Root, _Opts} = Ctx,
-    {Buffer, Defs, RootType, Root}.
 
 %% Main dispatch
 do_fetch(TableRef, Defs, TableType, [Elem], Buffer) ->
