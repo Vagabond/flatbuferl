@@ -191,10 +191,31 @@ process({Defs, Opts}) ->
     {ProcessedDefs, Opts}.
 
 %% Phase 1: add index maps to enums/unions, precompute struct field offsets
-enrich_def({union, Members}) ->
-    IndexMap = maps:from_list(lists:zip(Members, lists:seq(1, length(Members)))),
-    ReverseMap = maps:from_list(lists:zip(lists:seq(1, length(Members)), Members)),
-    #union_def{members = Members, index_map = IndexMap, reverse_map = ReverseMap};
+enrich_def({union, RawMembers}) ->
+    %% Normalize each member to {Discriminator, UnderlyingType}. Bare
+    %% members come from the parser as atoms; aliased members like
+    %% `Foo: Bar` come as `{alias, Foo, Bar}` tuples.
+    Pairs = lists:map(
+        fun
+            ({alias, Alias, Type}) -> {Alias, Type};
+            (Bare) when is_atom(Bare) -> {Bare, Bare}
+        end,
+        RawMembers
+    ),
+    Discriminators = [Alias || {Alias, _Type} <- Pairs],
+    IndexMap = maps:from_list(
+        lists:zip(Discriminators, lists:seq(1, length(Discriminators)))
+    ),
+    ReverseMap = maps:from_list(
+        lists:zip(lists:seq(1, length(Discriminators)), Discriminators)
+    ),
+    TypeMap = maps:from_list(Pairs),
+    #union_def{
+        members = Discriminators,
+        index_map = IndexMap,
+        reverse_map = ReverseMap,
+        type_map = TypeMap
+    };
 enrich_def({{enum, BaseType}, Values}) ->
     %% Values can be atoms (implicit indices) or {Atom, Index} tuples (explicit indices)
     {Names, IndexPairs} = normalize_enum_values(Values),
@@ -447,7 +468,12 @@ optimize_field_to_record({Name, Type}, Defs) ->
 
 %% Convert partial union_value to complete union_value_def with field ID info
 finalize_resolved_type(
-    #union_value_partial{name = Name, index_map = IndexMap, reverse_map = ReverseMap},
+    #union_value_partial{
+        name = Name,
+        index_map = IndexMap,
+        reverse_map = ReverseMap,
+        type_map = TypeMap
+    },
     FieldId,
     FieldName
 ) ->
@@ -458,6 +484,7 @@ finalize_resolved_type(
         name = Name,
         index_map = IndexMap,
         reverse_map = ReverseMap,
+        type_map = TypeMap,
         type_field_id = TypeFieldId,
         type_vtable_slot_offset = TypeFieldId * 2,
         type_name = TypeName,
@@ -662,12 +689,25 @@ resolve_type({array, ElemType, Count}, Defs) ->
         as_binary = AsBinary
     };
 resolve_type({union_type, UnionName}, Defs) ->
+    %% The discriminator field only ever sees the alias (member name as it
+    %% appears in the schema), so type_map isn't propagated here.
     #union_def{index_map = IndexMap, reverse_map = ReverseMap} = maps:get(UnionName, Defs),
     #union_type_def{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
 resolve_type({union_value, UnionName}, Defs) ->
-    #union_def{index_map = IndexMap, reverse_map = ReverseMap} = maps:get(UnionName, Defs),
+    %% The value field's decoder needs to know the underlying table type
+    %% for each alias, so the type_map gets threaded through.
+    #union_def{
+        index_map = IndexMap,
+        reverse_map = ReverseMap,
+        type_map = TypeMap
+    } = maps:get(UnionName, Defs),
     %% Partial record - finalize_resolved_type converts to union_value_def when field ID is known
-    #union_value_partial{name = UnionName, index_map = IndexMap, reverse_map = ReverseMap};
+    #union_value_partial{
+        name = UnionName,
+        index_map = IndexMap,
+        reverse_map = ReverseMap,
+        type_map = TypeMap
+    };
 resolve_type(Type, _Defs) ->
     Type.
 

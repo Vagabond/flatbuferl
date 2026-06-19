@@ -304,11 +304,21 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
             %% NONE type
             missing;
         {ok, TypeIndex} ->
-            #union_def{members = Members, reverse_map = ReverseMap} = maps:get(UnionName, Defs),
-            MemberType = maps:get(TypeIndex, ReverseMap),
+            #union_def{
+                members = Members,
+                reverse_map = ReverseMap,
+                type_map = TypeMap
+            } = maps:get(UnionName, Defs),
+            %% `Member` is the discriminator alias (what shows up in
+            %% `_type` queries and field-existence checks against the
+            %% union shape). `MemberType` is the underlying table type
+            %% to actually deserialize. For non-aliased members they're
+            %% identical.
+            Member = maps:get(TypeIndex, ReverseMap),
+            MemberType = maps:get(Member, TypeMap),
             case Rest of
                 ['_type'] ->
-                    {ok, MemberType};
+                    {ok, Member};
                 ['_type' | MoreRest] ->
                     %% '_type' followed by more path - doesn't make sense
                     error({cannot_traverse, '_type', MoreRest});
@@ -321,7 +331,7 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
                     of
                         {ok, ValueRef} ->
                             extract_fields(ValueRef, Defs, MemberType, ExtractSpec, Buffer, #{
-                                union_type => MemberType
+                                union_type => Member
                             });
                         missing ->
                             missing
@@ -329,7 +339,10 @@ traverse_union(TableRef, FieldId, UnionName, Defs, Rest, Buffer) ->
                 [FieldName | _] when is_atom(FieldName), FieldName /= '*' ->
                     %% Path continues with a field name. First validate the field
                     %% exists on at least one union member (schema validation).
-                    case any_union_member_has_field(Members, FieldName, Defs) of
+                    %% Member-has-field checks resolve through type_map so
+                    %% aliased members get checked against their real table.
+                    MemberTypes = [maps:get(M, TypeMap) || M <- Members],
+                    case any_union_member_has_field(MemberTypes, FieldName, Defs) of
                         false ->
                             error({unknown_field, FieldName});
                         true ->
@@ -481,8 +494,10 @@ traverse_union_vector(
             {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
                 ValVecInfo, ActualIndex, Buffer
             ),
-            #union_def{reverse_map = ReverseMap} = maps:get(UnionName, Defs),
-            MemberType = maps:get(TypeIndex, ReverseMap),
+            #union_def{
+                reverse_map = ReverseMap, type_map = TypeMap
+            } = maps:get(UnionName, Defs),
+            MemberType = maps:get(maps:get(TypeIndex, ReverseMap), TypeMap),
             continue_from_union_element(ValueRef, MemberType, Defs, Rest, Buffer);
         false ->
             missing
@@ -506,8 +521,10 @@ wildcard_over_union_vector(
 ) ->
     {ok, TypeIndex} = flatbuferl_reader:get_vector_element_at(TypeVecInfo, Idx, Buffer),
     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(ValVecInfo, Idx, Buffer),
-    #union_def{reverse_map = ReverseMap} = maps:get(UnionName, Defs),
-    MemberType = maps:get(TypeIndex, ReverseMap),
+    #union_def{
+        reverse_map = ReverseMap, type_map = TypeMap
+    } = maps:get(UnionName, Defs),
+    MemberType = maps:get(maps:get(TypeIndex, ReverseMap), TypeMap),
     %% Catch unknown_field errors - different union members have different fields
     Result =
         try

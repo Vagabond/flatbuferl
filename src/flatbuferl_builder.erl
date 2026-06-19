@@ -533,16 +533,28 @@ collect_field(
                 _ ->
                     []
             end;
-        #union_value_def{type_name = TypeName, type_binary_name = TypeBinaryName} ->
+        #union_value_def{
+            type_name = TypeName,
+            type_binary_name = TypeBinaryName,
+            type_map = TypeMap
+        } ->
             case get_field_value(Map, Name, BinaryName) of
                 undefined ->
                     [];
                 TableValue when is_map(TableValue) ->
-                    MemberType =
+                    %% Caller supplies the discriminator alias; resolve to
+                    %% the underlying table type so downstream encoders
+                    %% (which look the type up in Defs) see a real table.
+                    Alias =
                         case get_field_value(Map, TypeName, TypeBinaryName) of
                             T when is_atom(T) -> T;
                             T when is_binary(T) -> binary_to_atom(T);
                             _ -> error({missing_union_type_field, TypeName})
+                        end,
+                    MemberType =
+                        case maps:get(Alias, TypeMap, undefined) of
+                            undefined -> error({unknown_union_member, Alias, TypeName});
+                            Resolved -> Resolved
                         end,
                     [
                         #field{
@@ -630,6 +642,7 @@ collect_union_type_vector(Map, Name, BinaryName, FieldId, VecType, IndexMap, Inl
 collect_union_value_vector(
     Map, Name, BinaryName, FieldId, VecType, TypeName, TypeBinaryName, InlineSize, LayoutKey
 ) ->
+    #vector_def{element_type = #union_value_partial{type_map = TypeMap}} = VecType,
     case get_field_value(Map, Name, BinaryName) of
         undefined ->
             [];
@@ -645,12 +658,17 @@ collect_union_value_vector(
                 ),
             TaggedValues = lists:zipwith(
                 fun(T, V) ->
-                    Type0 =
+                    Alias =
                         case is_binary(T) of
                             true -> binary_to_atom(T);
                             false -> T
                         end,
-                    #{type => Type0, value => V}
+                    MemberType =
+                        case maps:get(Alias, TypeMap, undefined) of
+                            undefined -> error({unknown_union_member, Alias, TypeName});
+                            Resolved -> Resolved
+                        end,
+                    #{type => MemberType, value => V}
                 end,
                 TypeList,
                 ValueList

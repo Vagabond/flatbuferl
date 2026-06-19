@@ -58,6 +58,7 @@ atoms -> atom ','         : [ '$1' ].
 
 atom -> string : get_value_atom('$1').
 atom -> string '=' int : {get_value_atom('$1'), get_value('$3')}.  %% enum with explicit value
+atom -> string ':' string : {alias, get_value_atom('$1'), get_value_atom('$3')}.  %% aliased union member: Alias: Type
 
 Erlang code.
 

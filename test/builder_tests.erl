@@ -374,6 +374,93 @@ union_bye_variant_test() ->
     ?assertEqual(#{greeting => 123}, maps:get(data, Result)).
 
 %% =============================================================================
+%% Aliased Union Tests
+%% =============================================================================
+
+union_aliased_member_roundtrip_test() ->
+    %% End-to-end build + decode for `Alias: Type` union members. The
+    %% discriminator carried on the wire is the alias (`Expo`), but the
+    %% nested table is encoded/decoded as `PushTokenExpo`.
+    {ok, Schema} = flatbuferl:parse_schema_file(
+        "test/schemas/union_aliased_field.fbs"
+    ),
+
+    Map = #{
+        token_type => 'Expo',
+        token => #{token => <<"ExpoToken123">>},
+        user => <<"alice">>
+    },
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+
+    %% File-id round-trips, confirming the table wrote the right root.
+    ?assertEqual(<<"alia">>, flatbuferl_reader:get_file_id(Buffer)),
+
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Result = flatbuferl:to_map(Ctx),
+
+    %% Discriminator decodes back as the alias.
+    ?assertEqual('Expo', maps:get(token_type, Result)),
+    %% Underlying fields come from PushTokenExpo, not PushTokenFcm.
+    ?assertEqual(#{token => <<"ExpoToken123">>}, maps:get(token, Result)),
+    ?assertEqual(<<"alice">>, maps:get(user, Result)).
+
+union_aliased_other_variant_test() ->
+    %% Same schema, second variant — proves that the alias -> type
+    %% resolution picks the right table for each discriminator.
+    {ok, Schema} = flatbuferl:parse_schema_file(
+        "test/schemas/union_aliased_field.fbs"
+    ),
+
+    Map = #{
+        token_type => 'Fcm',
+        token => #{registration_id => <<"fcm-reg-id">>},
+        user => <<"bob">>
+    },
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+
+    Ctx = flatbuferl:new(Buffer, Schema),
+    Result = flatbuferl:to_map(Ctx),
+
+    ?assertEqual('Fcm', maps:get(token_type, Result)),
+    ?assertEqual(
+        #{registration_id => <<"fcm-reg-id">>},
+        maps:get(token, Result)
+    ),
+    ?assertEqual(<<"bob">>, maps:get(user, Result)).
+
+union_aliased_fetch_type_test() ->
+    %% `_type` queries return the discriminator alias, not the
+    %% underlying table name, so callers can correlate against what they
+    %% wrote.
+    {ok, Schema} = flatbuferl:parse_schema_file(
+        "test/schemas/union_aliased_field.fbs"
+    ),
+    Map = #{
+        token_type => 'Expo',
+        token => #{token => <<"t">>},
+        user => <<"alice">>
+    },
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    ?assertEqual('Expo', flatbuferl_fetch:fetch(Ctx, [token, '_type'])).
+
+union_aliased_fetch_field_test() ->
+    %% Field lookups through the alias resolve to the underlying table,
+    %% so we can reach `Expo.token` even though the discriminator name
+    %% isn't the table name.
+    {ok, Schema} = flatbuferl:parse_schema_file(
+        "test/schemas/union_aliased_field.fbs"
+    ),
+    Map = #{
+        token_type => 'Expo',
+        token => #{token => <<"deep-token">>},
+        user => <<"alice">>
+    },
+    Buffer = iolist_to_binary(flatbuferl_builder:from_map(Map, Schema)),
+    Ctx = flatbuferl:new(Buffer, Schema),
+    ?assertEqual(<<"deep-token">>, flatbuferl_fetch:fetch(Ctx, [token, token])).
+
+%% =============================================================================
 %% JSON Roundtrip Tests
 %% =============================================================================
 

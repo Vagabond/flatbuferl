@@ -313,8 +313,10 @@ traverse_for_update([FieldName | Rest], Buffer, Defs, TableType, TableRef) ->
                     %% NONE type
                     missing;
                 {ok, TypeIndex} ->
-                    #union_def{reverse_map = ReverseMap} = maps:get(UnionName, Defs),
-                    MemberType = maps:get(TypeIndex, ReverseMap),
+                    #union_def{
+                        reverse_map = ReverseMap, type_map = TypeMap
+                    } = maps:get(UnionName, Defs),
+                    MemberType = maps:get(maps:get(TypeIndex, ReverseMap), TypeMap),
                     case
                         flatbuferl_reader:get_field(
                             TableRef, FieldId, {union_value, UnionName}, Buffer
@@ -446,10 +448,13 @@ traverse_union_vector_for_update(TableRef, FieldId, UnionName, [Index | Rest], B
                                     %% NONE
                                     missing;
                                 _ ->
-                                    #union_def{reverse_map = ReverseMap2} = maps:get(
-                                        UnionName, Defs
+                                    #union_def{
+                                        reverse_map = ReverseMap2,
+                                        type_map = TypeMap2
+                                    } = maps:get(UnionName, Defs),
+                                    MemberType = maps:get(
+                                        maps:get(TypeIndex, ReverseMap2), TypeMap2
                                     ),
-                                    MemberType = maps:get(TypeIndex, ReverseMap2),
                                     %% Get value ref
                                     {ok, ValueRef} = flatbuferl_reader:get_vector_element_at(
                                         ValVecInfo, ActualIndex, Buffer
