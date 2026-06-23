@@ -72,8 +72,8 @@ parse(Schema) when is_list(Schema) ->
 -spec parse_file(file:filename()) -> {ok, {map(), map()}} | {error, term()}.
 parse_file(Filename) ->
     AbsPath = filename:absname(Filename),
-    case collect_file(AbsPath, #{}, sets:new(), sets:new()) of
-        {ok, Defs, Opts, _InProgress, _Done} ->
+    case collect_file(AbsPath, #{}, #{}, sets:new(), sets:new()) of
+        {ok, Defs, _Origin, Opts, _InProgress, _Done} ->
             {ok, process({Defs, Opts})};
         {error, _} = Err ->
             Err
@@ -83,12 +83,14 @@ parse_file(Filename) ->
 %%
 %% State tracked:
 %%   AccDefs    - merged raw definitions accumulated so far
+%%   Origin     - #{TypeName => SourcePath} so duplicate_types errors
+%%                can name both the previous and current source files
 %%   InProgress - files currently on the active include stack (cycle detection)
 %%   Done       - files whose contents have already been merged (diamond dedup)
 %%
 %% Top-level Opts come from the entry file only — included files contribute
 %% their definitions but not their root_type/file_identifier/etc.
-collect_file(AbsPath, AccDefs, InProgress, Done) ->
+collect_file(AbsPath, AccDefs, Origin, InProgress, Done) ->
     case sets:is_element(AbsPath, InProgress) of
         true ->
             {error, {circular_include, AbsPath}};
@@ -96,32 +98,37 @@ collect_file(AbsPath, AccDefs, InProgress, Done) ->
             case sets:is_element(AbsPath, Done) of
                 true ->
                     %% Already merged via another include path; skip.
-                    {ok, AccDefs, #{}, InProgress, Done};
+                    {ok, AccDefs, Origin, #{}, InProgress, Done};
                 false ->
-                    read_and_collect(AbsPath, AccDefs, InProgress, Done)
+                    read_and_collect(AbsPath, AccDefs, Origin, InProgress, Done)
             end
     end.
 
-read_and_collect(AbsPath, AccDefs, InProgress, Done) ->
+read_and_collect(AbsPath, AccDefs, Origin, InProgress, Done) ->
     case file:read_file(AbsPath) of
         {ok, Contents} ->
             case parse_string(Contents) of
                 {ok, {FileDefs, FileOpts}} ->
-                    case merge_definitions(AccDefs, FileDefs) of
-                        {ok, MergedDefs} ->
+                    case merge_definitions(AbsPath, AccDefs, Origin, FileDefs) of
+                        {ok, MergedDefs, MergedOrigin} ->
                             BaseDir = filename:dirname(AbsPath),
                             Includes = maps:get(include, FileOpts, []),
                             OwnOpts = maps:remove(include, FileOpts),
                             InProgress2 = sets:add_element(AbsPath, InProgress),
                             case
                                 collect_includes(
-                                    Includes, BaseDir, MergedDefs, InProgress2, Done
+                                    Includes,
+                                    BaseDir,
+                                    MergedDefs,
+                                    MergedOrigin,
+                                    InProgress2,
+                                    Done
                                 )
                             of
-                                {ok, Defs2, InProgress3, Done2} ->
+                                {ok, Defs2, Origin2, InProgress3, Done2} ->
                                     InProgress4 = sets:del_element(AbsPath, InProgress3),
                                     Done3 = sets:add_element(AbsPath, Done2),
-                                    {ok, Defs2, OwnOpts, InProgress4, Done3};
+                                    {ok, Defs2, Origin2, OwnOpts, InProgress4, Done3};
                                 {error, _} = Err ->
                                     Err
                             end;
@@ -135,13 +142,13 @@ read_and_collect(AbsPath, AccDefs, InProgress, Done) ->
             Err
     end.
 
-collect_includes([], _BaseDir, Defs, InProgress, Done) ->
-    {ok, Defs, InProgress, Done};
-collect_includes([Include | Rest], BaseDir, Defs, InProgress, Done) ->
+collect_includes([], _BaseDir, Defs, Origin, InProgress, Done) ->
+    {ok, Defs, Origin, InProgress, Done};
+collect_includes([Include | Rest], BaseDir, Defs, Origin, InProgress, Done) ->
     IncludePath = filename:absname(binary_to_list(Include), BaseDir),
-    case collect_file(IncludePath, Defs, InProgress, Done) of
-        {ok, Defs2, _IncludedOpts, InProgress2, Done2} ->
-            collect_includes(Rest, BaseDir, Defs2, InProgress2, Done2);
+    case collect_file(IncludePath, Defs, Origin, InProgress, Done) of
+        {ok, Defs2, Origin2, _IncludedOpts, InProgress2, Done2} ->
+            collect_includes(Rest, BaseDir, Defs2, Origin2, InProgress2, Done2);
         {error, _} = Err ->
             Err
     end.
@@ -159,14 +166,26 @@ parse_string(Contents) when is_list(Contents) ->
             {error, Err}
     end.
 
-%% Merge definitions, error on duplicates
-merge_definitions(Defs1, Defs2) ->
-    Duplicates = maps:keys(maps:with(maps:keys(Defs1), Defs2)),
+%% Merge definitions, error on duplicates. Origin tracks the source
+%% file of each previously-merged type; on conflict the error names
+%% both the file that defined the type first and the file trying to
+%% redefine it, so the caller doesn't have to grep for the type name.
+merge_definitions(IncomingPath, AccDefs, Origin, FileDefs) ->
+    Duplicates = maps:keys(maps:with(maps:keys(AccDefs), FileDefs)),
     case Duplicates of
         [] ->
-            {ok, maps:merge(Defs1, Defs2)};
+            NewOrigin = lists:foldl(
+                fun(K, Acc) -> Acc#{K => IncomingPath} end,
+                Origin,
+                maps:keys(FileDefs)
+            ),
+            {ok, maps:merge(AccDefs, FileDefs), NewOrigin};
         _ ->
-            {error, {duplicate_types, Duplicates}}
+            Details = [
+                {Type, maps:get(Type, Origin, unknown), IncomingPath}
+             || Type <- Duplicates
+            ],
+            {error, {duplicate_types, Details}}
     end.
 
 %% Post-process parsed flatbuferl_schema: assign field IDs, validate

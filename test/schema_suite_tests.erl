@@ -1172,7 +1172,13 @@ include_test_() ->
         end},
         {"duplicate type detected", fun() ->
             Result = flatbuferl:parse_schema_file("test/schemas/duplicate.fbs"),
-            ?assertMatch({error, {duplicate_types, ['Vec3']}}, Result)
+            ?assertMatch({error, {duplicate_types, [{'Vec3', _Prev, _Cur}]}}, Result),
+            {error, {duplicate_types, [{'Vec3', Prev, Cur}]}} = Result,
+            %% Both files must be named so the caller doesn't have to grep
+            %% for the type — duplicate.fbs (entry) and common.fbs (include)
+            %% are the two sources of Vec3.
+            Files = lists:sort([filename:basename(Prev), filename:basename(Cur)]),
+            ?assertEqual(["common.fbs", "duplicate.fbs"], Files)
         end},
         {"missing include file", fun() ->
             ok = file:write_file(
@@ -1222,6 +1228,16 @@ include_test_() ->
             Out = flatbuferl:to_map(Ctx),
             ?assertEqual(1, maps:get(inner, maps:get(id, maps:get(left, Out)))),
             ?assertEqual(2, maps:get(inner, maps:get(id, maps:get(right, Out))))
+        end},
+        {"include path with subdirectory", fun() ->
+            %% Lexer must accept '/' inside quoted include paths so
+            %% schemas can be organised under subdirectories.
+            {ok, {Defs, Opts}} = flatbuferl:parse_schema_file(
+                "test/schemas/with_subdir_include.fbs"
+            ),
+            ?assert(maps:is_key('SubdirHost', Defs)),
+            ?assert(maps:is_key('SubdirThing', Defs)),
+            ?assertEqual('SubdirHost', maps:get(root_type, Opts))
         end}
     ].
 
