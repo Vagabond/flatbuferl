@@ -3,6 +3,7 @@ Definitions.
 FLOAT           = -?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)?
 INT             = -?[0-9]+
 STRING          = [a-zA-Z0-9_\.]+
+PATH            = [a-zA-Z0-9_\./\-]+
 BOOL            = (true|false)
 WS              = [\s\t]+
 NL              = [\n\r]+
@@ -30,6 +31,7 @@ null            : {token, {null, TokenLine}}.
 //[^\n]*        : skip_token.
 ///[^\n]*        : skip_token.
 /\*([^*]|\*[^/])*\*/ : skip_token.
+{PATH}          : {token, {string, TokenLine, TokenChars}}.
 
 \{    : {token, {'{',  TokenLine}}.
 \}    : {token, {'}',  TokenLine}}.
