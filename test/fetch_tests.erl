@@ -896,9 +896,11 @@ enum_fetch_ctx() ->
 
 fetch_enum_field_test() ->
     Ctx = enum_fetch_ctx(),
-    %% Fetch returns raw enum value (1), not the symbolic name
+    %% Fetch resolves enum ordinals through the schema's reverse_map
+    %% and surfaces the atom name to the caller — same shape that
+    %% flatbuferl:to_map/1 returns.
     Result = flatbuferl_fetch:fetch(Ctx, [color]),
-    ?assertEqual(1, Result).
+    ?assertEqual('Green', Result).
 
 %% =============================================================================
 %% Deeply Nested Tests

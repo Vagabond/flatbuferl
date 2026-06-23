@@ -211,9 +211,12 @@ read_scalar(Buffer, Pos, float32) ->
 read_scalar(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     {ok, Value};
-%% Enum - delegate to underlying type
-read_scalar(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
-    read_scalar(Buffer, Pos, BaseType);
+%% Enum - read the underlying scalar then map to the schema's atom
+%% name via reverse_map. Unknown ordinals (forward-compat with schemas
+%% that have grown new variants) pass through as the raw integer.
+read_scalar(Buffer, Pos, #enum_resolved{base_type = BaseType, reverse_map = ReverseMap}) ->
+    {ok, Int} = read_scalar(Buffer, Pos, BaseType),
+    {ok, maps:get(Int, ReverseMap, Int)};
 %% Union type - ubyte discriminator
 read_scalar(Buffer, Pos, #union_type_def{}) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
@@ -351,9 +354,9 @@ read_value(Buffer, Pos, #vector_def{
     VectorPos = Pos + VectorOffset,
     <<_:VectorPos/binary, Length:32/little-unsigned, _/binary>> = Buffer,
     read_compound_elements(Buffer, VectorPos + 4, Length, ElemType, ElemSize, []);
-%% Enum - read underlying scalar directly
-read_value(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
-    read_scalar(Buffer, Pos, BaseType);
+%% Enum - delegate to read_scalar, which surfaces the atom name.
+read_value(Buffer, Pos, #enum_resolved{} = EnumDef) ->
+    read_scalar(Buffer, Pos, EnumDef);
 %% Struct - read inline fixed-size data (enriched record format)
 read_value(Buffer, Pos, #struct_def{fields = Fields}) ->
     StructMap = read_struct_fields_fast(Buffer, Pos, Fields, #{}),
@@ -457,9 +460,11 @@ read_scalar_value(Buffer, Pos, float32) ->
 read_scalar_value(Buffer, Pos, float64) ->
     <<_:Pos/binary, Value:64/little-float, _/binary>> = Buffer,
     Value;
-%% Enum - delegate to underlying type
-read_scalar_value(Buffer, Pos, #enum_resolved{base_type = BaseType}) ->
-    read_scalar_value(Buffer, Pos, BaseType);
+%% Enum - read the underlying scalar then map to the schema's atom
+%% name via reverse_map. Unknown ordinals pass through as the raw int.
+read_scalar_value(Buffer, Pos, #enum_resolved{base_type = BaseType, reverse_map = ReverseMap}) ->
+    Int = read_scalar_value(Buffer, Pos, BaseType),
+    maps:get(Int, ReverseMap, Int);
 %% Union type - stored as uint8
 read_scalar_value(Buffer, Pos, #union_type_def{}) ->
     <<_:Pos/binary, Value:8/little-unsigned, _/binary>> = Buffer,
