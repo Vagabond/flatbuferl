@@ -1,0 +1,9 @@
+include "dotdot_common.fbs";
+include "dotdot_inc/sibling.fbs";
+
+table DotDotRoot {
+  direct: DotDotShared;
+  sibling: SiblingRef;
+}
+
+root_type DotDotRoot;

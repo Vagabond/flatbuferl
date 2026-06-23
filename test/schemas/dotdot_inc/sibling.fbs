@@ -1,0 +1,5 @@
+include "../dotdot_common.fbs";
+
+table SiblingRef {
+  shared: DotDotShared;
+}
