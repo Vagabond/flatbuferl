@@ -117,8 +117,12 @@ read_and_collect(AbsPath, AccDefs, Origin, InProgress, Done) ->
                             InProgress2 = sets:add_element(AbsPath, InProgress),
                             case
                                 collect_includes(
-                                    Includes, BaseDir, MergedDefs, MergedOrigin,
-                                    InProgress2, Done
+                                    Includes,
+                                    BaseDir,
+                                    MergedDefs,
+                                    MergedOrigin,
+                                    InProgress2,
+                                    Done
                                 )
                             of
                                 {ok, Defs2, Origin2, InProgress3, Done2} ->
