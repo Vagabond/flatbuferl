@@ -1222,6 +1222,16 @@ include_test_() ->
             Out = flatbuferl:to_map(Ctx),
             ?assertEqual(1, maps:get(inner, maps:get(id, maps:get(left, Out)))),
             ?assertEqual(2, maps:get(inner, maps:get(id, maps:get(right, Out))))
+        end},
+        {"include path with subdirectory", fun() ->
+            %% Lexer must accept '/' inside quoted include paths so
+            %% schemas can be organised under subdirectories.
+            {ok, {Defs, Opts}} = flatbuferl:parse_schema_file(
+                "test/schemas/with_subdir_include.fbs"
+            ),
+            ?assert(maps:is_key('SubdirHost', Defs)),
+            ?assert(maps:is_key('SubdirThing', Defs)),
+            ?assertEqual('SubdirHost', maps:get(root_type, Opts))
         end}
     ].
 

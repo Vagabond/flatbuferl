@@ -1,0 +1,7 @@
+include "sub/subdir_inc.fbs";
+
+table SubdirHost {
+  thing: SubdirThing;
+}
+
+root_type SubdirHost;
