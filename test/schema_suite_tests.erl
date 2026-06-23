@@ -1238,6 +1238,19 @@ include_test_() ->
             ?assert(maps:is_key('SubdirHost', Defs)),
             ?assert(maps:is_key('SubdirThing', Defs)),
             ?assertEqual('SubdirHost', maps:get(root_type, Opts))
+        end},
+        {"dedup the same file reached via different relative paths", fun() ->
+            %% dotdot_root.fbs pulls in dotdot_common.fbs directly and also
+            %% via dotdot_inc/sibling.fbs which uses "../dotdot_common.fbs".
+            %% Without canonicalization, filename:absname leaves the '..'
+            %% segment intact, so the Done-set check sees two different
+            %% strings and tries to merge DotDotShared twice — duplicate_types.
+            {ok, {Defs, _Opts}} = flatbuferl:parse_schema_file(
+                "test/schemas/dotdot_root.fbs"
+            ),
+            ?assert(maps:is_key('DotDotShared', Defs)),
+            ?assert(maps:is_key('SiblingRef', Defs)),
+            ?assert(maps:is_key('DotDotRoot', Defs))
         end}
     ].
 

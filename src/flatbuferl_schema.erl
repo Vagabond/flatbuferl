@@ -71,7 +71,7 @@ parse(Schema) when is_list(Schema) ->
 %% include order or how the includes are arranged across files.
 -spec parse_file(file:filename()) -> {ok, {map(), map()}} | {error, term()}.
 parse_file(Filename) ->
-    AbsPath = filename:absname(Filename),
+    AbsPath = canonicalize_path(filename:absname(Filename)),
     case collect_file(AbsPath, #{}, #{}, sets:new(), sets:new()) of
         {ok, Defs, _Origin, Opts, _InProgress, _Done} ->
             {ok, process({Defs, Opts})};
@@ -145,7 +145,7 @@ read_and_collect(AbsPath, AccDefs, Origin, InProgress, Done) ->
 collect_includes([], _BaseDir, Defs, Origin, InProgress, Done) ->
     {ok, Defs, Origin, InProgress, Done};
 collect_includes([Include | Rest], BaseDir, Defs, Origin, InProgress, Done) ->
-    IncludePath = filename:absname(binary_to_list(Include), BaseDir),
+    IncludePath = canonicalize_path(filename:absname(binary_to_list(Include), BaseDir)),
     case collect_file(IncludePath, Defs, Origin, InProgress, Done) of
         {ok, Defs2, Origin2, _IncludedOpts, InProgress2, Done2} ->
             collect_includes(Rest, BaseDir, Defs2, Origin2, InProgress2, Done2);
@@ -165,6 +165,26 @@ parse_string(Contents) when is_list(Contents) ->
         {error, _, _} = Err ->
             {error, Err}
     end.
+
+%% Lexically resolve '.' and '..' segments so the same physical file
+%% reached via different include paths (e.g. "common.fbs" from one dir
+%% and "../common.fbs" from a sibling) canonicalizes to the same key
+%% and the Done-set diamond dedup actually fires. filename:absname/2
+%% only prepends the base directory; it leaves '..' segments intact.
+canonicalize_path(Path) ->
+    filename:join(canon_parts(filename:split(Path), [])).
+
+canon_parts([], Acc) ->
+    lists:reverse(Acc);
+canon_parts(["." | Rest], Acc) ->
+    canon_parts(Rest, Acc);
+canon_parts([".." | Rest], [Top | RAcc]) when Top =/= "/", Top =/= ".." ->
+    canon_parts(Rest, RAcc);
+canon_parts([".." | Rest], ["/"] = Acc) ->
+    %% Can't go above the filesystem root — drop the '..'.
+    canon_parts(Rest, Acc);
+canon_parts([Part | Rest], Acc) ->
+    canon_parts(Rest, [Part | Acc]).
 
 %% Merge definitions, error on duplicates. Origin tracks the source
 %% file of each previously-merged type; on conflict the error names
