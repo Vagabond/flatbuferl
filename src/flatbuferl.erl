@@ -252,7 +252,9 @@ decode_fields(
             name = Name,
             vtable_slot_offset = VTS,
             resolved_type = #union_value_def{
-                reverse_map = ReverseMap, type_vtable_slot_offset = TypeVTS
+                reverse_map = ReverseMap,
+                type_map = TypeMap,
+                type_vtable_slot_offset = TypeVTS
             },
             deprecated = false
         }
@@ -273,7 +275,9 @@ decode_fields(
             {ok, TypeIndex} ->
                 case flatbuferl_reader:read_union_value_field(VTable, VTS, Buffer) of
                     {ok, TableRef} ->
-                        MemberType = maps:get(TypeIndex, ReverseMap),
+                        %% Resolve alias -> underlying table type for the decode.
+                        Member = maps:get(TypeIndex, ReverseMap),
+                        MemberType = maps:get(Member, TypeMap),
                         Acc#{Name => table_to_map(TableRef, Defs, MemberType, Buffer, Opts)};
                     missing ->
                         Acc
@@ -458,7 +462,12 @@ decode_fields(
             name = Name,
             vtable_slot_offset = VTS,
             resolved_type =
-                #vector_def{element_type = #union_value_def{reverse_map = ReverseMap}} = RT,
+                #vector_def{
+                    element_type = #union_value_def{
+                        reverse_map = ReverseMap,
+                        type_map = TypeMap
+                    }
+                } = RT,
             deprecated = false
         }
         | Rest
@@ -481,7 +490,9 @@ decode_fields(
                     {ok, TableRefs} ->
                         DecodedValues = lists:zipwith(
                             fun(TypeIdx, TableValueRef) ->
-                                MemberType = maps:get(TypeIdx, ReverseMap),
+                                %% Alias -> underlying table type for the decode.
+                                Member = maps:get(TypeIdx, ReverseMap),
+                                MemberType = maps:get(Member, TypeMap),
                                 table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
                             end,
                             TypeIndices,
@@ -502,7 +513,12 @@ decode_fields(
             name = Name,
             vtable_slot_offset = VTS,
             resolved_type =
-                #vector_def{element_type = #union_value_partial{reverse_map = ReverseMap}} = RT,
+                #vector_def{
+                    element_type = #union_value_partial{
+                        reverse_map = ReverseMap,
+                        type_map = TypeMap
+                    }
+                } = RT,
             deprecated = false
         }
         | Rest
@@ -525,7 +541,9 @@ decode_fields(
                     {ok, TableRefs} ->
                         DecodedValues = lists:zipwith(
                             fun(TypeIdx, TableValueRef) ->
-                                MemberType = maps:get(TypeIdx, ReverseMap),
+                                %% Alias -> underlying table type for the decode.
+                                Member = maps:get(TypeIdx, ReverseMap),
+                                MemberType = maps:get(Member, TypeMap),
                                 table_to_map(TableValueRef, Defs, MemberType, Buffer, Opts)
                             end,
                             TypeIndices,

@@ -1,0 +1,25 @@
+// Mirror of union_field.fbs but with aliased union members so the
+// discriminator name and the underlying table type differ. Used to
+// exercise the alias -> type lookup in the builder/reader and the
+// type_map fan-out.
+
+file_identifier "alia";
+
+table PushTokenExpo
+{
+  token:string;
+}
+
+table PushTokenFcm
+{
+  registration_id:string;
+}
+
+union PushToken { Expo: PushTokenExpo, Fcm: PushTokenFcm }
+
+table PushTokenRoot {
+  token:PushToken;
+  user:string;
+}
+
+root_type PushTokenRoot;

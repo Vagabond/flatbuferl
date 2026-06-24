@@ -56,8 +56,65 @@ enum_default_roundtrip_test() ->
 
 union_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("union Animal { Dog, Cat }"),
-    #union_def{members = ['Dog', 'Cat'], index_map = IndexMap} = maps:get('Animal', Defs),
-    ?assertEqual(#{'Dog' => 1, 'Cat' => 2}, IndexMap).
+    #union_def{
+        members = ['Dog', 'Cat'],
+        index_map = IndexMap,
+        type_map = TypeMap
+    } = maps:get('Animal', Defs),
+    ?assertEqual(#{'Dog' => 1, 'Cat' => 2}, IndexMap),
+    %% For non-aliased members the discriminator name *is* the table type,
+    %% so type_map is the identity.
+    ?assertEqual(#{'Dog' => 'Dog', 'Cat' => 'Cat'}, TypeMap).
+
+union_aliased_member_test() ->
+    %% `Alias: TableType` lets a union have multiple discriminator names
+    %% routed to the same (or distinct) underlying tables — flatc supports
+    %% this and we accept the same syntax. The discriminator is `Alias`
+    %% (what appears in serialised form and in `_type` queries); the
+    %% deserializer looks up the table via type_map.
+    {ok, {Defs, _Opts}} = flatbuferl:parse_schema(
+        "union PushToken { Expo: PushTokenExpo, Fcm: PushTokenFcm }"
+    ),
+    #union_def{
+        members = Members,
+        index_map = IndexMap,
+        reverse_map = ReverseMap,
+        type_map = TypeMap
+    } = maps:get('PushToken', Defs),
+    %% Discriminator names are the aliases, not the underlying types.
+    ?assertEqual(['Expo', 'Fcm'], Members),
+    ?assertEqual(#{'Expo' => 1, 'Fcm' => 2}, IndexMap),
+    ?assertEqual(#{1 => 'Expo', 2 => 'Fcm'}, ReverseMap),
+    %% type_map carries the alias -> underlying table mapping.
+    ?assertEqual(
+        #{'Expo' => 'PushTokenExpo', 'Fcm' => 'PushTokenFcm'},
+        TypeMap
+    ).
+
+union_mixed_aliased_and_bare_test() ->
+    %% Bare and aliased members can coexist in the same union; bare
+    %% members get an identity type_map entry.
+    {ok, {Defs, _Opts}} = flatbuferl:parse_schema(
+        "union Mixed { Foo, Aliased: Bar, Baz }"
+    ),
+    #union_def{
+        members = Members,
+        type_map = TypeMap
+    } = maps:get('Mixed', Defs),
+    ?assertEqual(['Foo', 'Aliased', 'Baz'], Members),
+    ?assertEqual(
+        #{'Foo' => 'Foo', 'Aliased' => 'Bar', 'Baz' => 'Baz'},
+        TypeMap
+    ).
+
+union_aliased_trailing_comma_test() ->
+    %% The trailing-comma allowance for union bodies works for aliased
+    %% members too.
+    {ok, {Defs, _Opts}} = flatbuferl:parse_schema(
+        "union PushToken { Expo: PushTokenExpo, }"
+    ),
+    #union_def{type_map = TypeMap} = maps:get('PushToken', Defs),
+    ?assertEqual(#{'Expo' => 'PushTokenExpo'}, TypeMap).
 
 vector_field_test() ->
     {ok, {Defs, _Opts}} = flatbuferl:parse_schema("table Inventory { items: [string]; }"),

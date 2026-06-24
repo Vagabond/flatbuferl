@@ -121,12 +121,21 @@
 }).
 
 %% Union definition (stored in Defs map)
+%%
+%% `members`, `index_map`, and `reverse_map` work in terms of the
+%% *discriminator name* — the identifier that appears in the schema,
+%% which for an aliased member like `Foo: Bar` is `Foo`. `type_map`
+%% resolves that discriminator name to the underlying table type
+%% (`Bar`). For non-aliased members the alias and type are identical,
+%% so `type_map[X] = X`.
 -record(union_def, {
     members :: [atom()],
     %% atom -> index (1-based)
     index_map :: #{atom() => pos_integer()},
     %% index -> atom (for fast decode)
-    reverse_map :: #{pos_integer() => atom()}
+    reverse_map :: #{pos_integer() => atom()},
+    %% discriminator atom -> underlying table type atom
+    type_map :: #{atom() => atom()}
 }).
 
 %% Union type field (stores the type index as uint8)
@@ -142,7 +151,11 @@
 -record(union_value_partial, {
     name :: atom(),
     index_map :: #{atom() => pos_integer()},
-    reverse_map :: #{pos_integer() => atom()}
+    reverse_map :: #{pos_integer() => atom()},
+    %% Mirrors union_def.type_map — discriminator -> underlying table type.
+    %% Decoders look up the table to deserialize through this map so
+    %% aliased members like `Foo: Bar` decode as Bar.
+    type_map :: #{atom() => atom()}
 }).
 
 %% Union value field - complete (stores reference to the table)
@@ -151,6 +164,10 @@
     index_map :: #{atom() => pos_integer()},
     %% Precomputed reverse map for fast decode (index -> atom)
     reverse_map :: #{pos_integer() => atom()},
+    %% Mirrors union_def.type_map — discriminator -> underlying table type.
+    %% Decoders look up the table to deserialize through this map so
+    %% aliased members like `Foo: Bar` decode as Bar.
+    type_map :: #{atom() => atom()},
     %% Precomputed type field ID (value_field_id - 1)
     type_field_id :: non_neg_integer(),
     %% Precomputed vtable slot offset for type field (type_field_id * 2)
