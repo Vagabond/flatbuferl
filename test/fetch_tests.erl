@@ -634,13 +634,15 @@ fetch_sparse_present_field_test() ->
 
 fetch_sparse_missing_field_test() ->
     Ctx = sparse_vtable_ctx(),
-    %% b has id:5, should be missing
-    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [b])).
+    %% b has id:5, absent on the wire. `int` with no explicit default →
+    %% natural default 0 per flatbuffers spec.
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [b])).
 
 fetch_sparse_high_id_missing_test() ->
     Ctx = sparse_vtable_ctx(),
-    %% c has id:10, vtable likely too small to even have slot
-    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [c])).
+    %% c has id:10, vtable likely too small to even have slot — same
+    %% outcome as absent: natural default 0 for int.
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [c])).
 
 %% =============================================================================
 %% Vector Out of Bounds Tests
@@ -967,10 +969,13 @@ sparse_with_many_missing_ctx() ->
 
 fetch_sparse_many_missing_test() ->
     Ctx = sparse_with_many_missing_ctx(),
+    %% All absent ints get their natural default (0). The vtable's silence
+    %% means "field at default" per flatbuffers semantics, not "field
+    %% literally unknowable."
     ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
-    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [b])),
-    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [c])),
-    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [d])).
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [b])),
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [c])),
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [d])).
 
 %% =============================================================================
 %% VTable Too Small Tests (Schema Evolution)
@@ -996,8 +1001,11 @@ vtable_too_small_test() ->
 
     %% Field 'a' exists and has value
     ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
-    %% Field 'b' has id:5 which is beyond vtable size - returns undefined
-    ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [b])).
+    %% Field 'b' has id:5 which is beyond the old buffer's vtable size.
+    %% That's the schema-evolution "added a field after the fact" case:
+    %% the field is logically absent, so we return its natural default 0
+    %% per flatbuffers semantics. Same outcome as a normal absent field.
+    ?assertEqual(0, flatbuferl_fetch:fetch(Ctx, [b])).
 
 %% Similar test for nested table reference fields
 vtable_too_small_ref_test() ->

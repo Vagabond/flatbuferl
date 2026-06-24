@@ -1540,8 +1540,13 @@ sparse_field_ctx() ->
 
 sparse_field_missing_test() ->
     Ctx = sparse_field_ctx(),
-    %% z has high field ID, vtable may be too small
-    ?assertEqual(false, flatbuferl:has(Ctx, [z])).
+    %% z is absent on the wire (vtable too small). Per flatbuffers spec,
+    %% scalar fields always have a value (the schema default — explicit
+    %% or type-natural). `has/2` therefore returns true for scalars
+    %% regardless of wire presence, because `get(Ctx, [z])` will always
+    %% succeed with the default value.
+    ?assert(flatbuferl:has(Ctx, [z])),
+    ?assertEqual(0, flatbuferl:get(Ctx, [z])).
 
 %% =============================================================================
 %% Union Vector to_map Tests (exercises union vector decode path)
@@ -2380,8 +2385,10 @@ tomap_vtable_too_small_scalar_test() ->
 
     %% Field 'a' exists and has value
     ?assertEqual(42, maps:get(a, Result)),
-    %% Field 'b' should not be in the result (vtable too small)
-    ?assertEqual(false, maps:is_key(b, Result)).
+    %% Field 'b' (added in the new schema) is absent in the old buffer's
+    %% vtable. Per flatbuffers semantics, an absent scalar surfaces with
+    %% its natural default — so to_map includes 'b' with the default 0.
+    ?assertEqual(0, maps:get(b, Result)).
 
 %% Test to_map with schema evolution - nested table field
 tomap_vtable_too_small_nested_test() ->
@@ -2523,9 +2530,11 @@ malformed_truncated_vtable_test() ->
 
     %% Field 'a' (id:0) should still be readable
     ?assertEqual(1, maps:get(a, Result)),
-    %% Fields 'b' (id:1) and 'c' (id:2) should be missing due to truncated vtable
-    ?assertEqual(false, maps:is_key(b, Result)),
-    ?assertEqual(false, maps:is_key(c, Result)).
+    %% Fields 'b' (id:1) and 'c' (id:2) are unreachable through the
+    %% truncated vtable — they surface as scalar defaults per flatbuffers
+    %% semantics (absent scalar → type-natural default 0).
+    ?assertEqual(0, maps:get(b, Result)),
+    ?assertEqual(0, maps:get(c, Result)).
 
 %% Test with vtable truncated to just the header (no field slots)
 malformed_vtable_header_only_test() ->
@@ -2542,9 +2551,10 @@ malformed_vtable_header_only_test() ->
     Ctx = flatbuferl:new(CorruptedBuffer, Schema),
     Result = flatbuferl:to_map(Ctx),
 
-    %% All fields should be missing
-    ?assertEqual(false, maps:is_key(a, Result)),
-    ?assertEqual(false, maps:is_key(b, Result)).
+    %% Both scalar fields are unreachable through the header-only vtable
+    %% but surface as their natural default 0.
+    ?assertEqual(0, maps:get(a, Result)),
+    ?assertEqual(0, maps:get(b, Result)).
 
 %% Test with nested table and truncated vtable
 malformed_nested_truncated_vtable_test() ->
@@ -2669,8 +2679,9 @@ malformed_field_offset_zero_test() ->
     Result = flatbuferl:to_map(Ctx),
 
     ?assertEqual(1, maps:get(a, Result)),
-    %% Now missing
-    ?assertEqual(false, maps:is_key(b, Result)),
+    %% b's offset was forced to 0 (= absent on the wire). Per flatbuffers
+    %% semantics, an absent scalar surfaces with its natural default 0.
+    ?assertEqual(0, maps:get(b, Result)),
     ?assertEqual(3, maps:get(c, Result)).
 
 %% Test with string field offset set to 0
@@ -2755,9 +2766,11 @@ schema_mismatch_scalar_test() ->
     Ctx = flatbuferl:new(Buffer, NewSchema),
     Result = flatbuferl:to_map(Ctx),
 
-    %% Only 'a' should be present
+    %% 'a' is present from the old buffer. The schema-evolution-added 'b'
+    %% (int) surfaces as its natural default 0 per flatbuffers spec.
+    %% 'c' (string) has no natural default — stays missing.
     ?assertEqual(42, maps:get(a, Result)),
-    ?assertEqual(false, maps:is_key(b, Result)),
+    ?assertEqual(0, maps:get(b, Result)),
     ?assertEqual(false, maps:is_key(c, Result)).
 
 %% Schema mismatch with nested tables

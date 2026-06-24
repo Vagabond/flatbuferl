@@ -453,7 +453,7 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
         id = Id,
         vtable_slot_offset = Id * 2,
         type = NormalizedType,
-        default = extract_default(Type),
+        default = field_default(Type, NormalizedType),
         required = maps:get(required, Attrs, false),
         deprecated = maps:get(deprecated, Attrs, false),
         inline_size = InlineSize,
@@ -474,7 +474,7 @@ optimize_field_to_record({Name, Type}, Defs) ->
         id = 0,
         vtable_slot_offset = 0,
         type = NormalizedType,
-        default = extract_default(Type),
+        default = field_default(Type, NormalizedType),
         required = false,
         deprecated = false,
         inline_size = InlineSize,
@@ -763,6 +763,50 @@ extract_default({Type, D}) when
     D;
 extract_default(_) ->
     undefined.
+
+%% Compute the field's effective default.
+%%
+%% Per the flatbuffers spec, scalar fields are wire-omitted when they hold
+%% their type's default — readers must substitute the default. If the
+%% schema declared an explicit default (e.g. `valid: bool = true`), use
+%% that. Otherwise fall back to the type-natural default: `false` for bool,
+%% `0` for ints/uints, `0.0` for floats.
+%%
+%% Reference (non-scalar) types — string, table, vector, struct, union —
+%% have no implicit default. Absence on the wire is its own state and
+%% should surface as `undefined` to callers. For those, this returns
+%% `undefined`.
+%%
+%% Enums and structs that arrive here without explicit defaults also
+%% return `undefined` from this function: enum defaults get a dedicated
+%% normalisation pass (`normalize_enum_defaults`) and struct defaults
+%% don't exist in flatbuffers.
+field_default(Type, NormalizedType) ->
+    case extract_default(Type) of
+        undefined ->
+            %% Resolve user-facing aliases (byte → int8, int → int32, etc.)
+            %% to the canonical name before looking up the natural default.
+            natural_default(normalize_scalar_type(NormalizedType));
+        Explicit ->
+            Explicit
+    end.
+
+%% Type-natural default for primitive scalar types (per flatbuffers spec).
+%% Returns `undefined` for non-primitive types — those either have a
+%% schema-declared default (handled by extract_default) or no default
+%% at all (ref types).
+natural_default(bool) -> false;
+natural_default(int8) -> 0;
+natural_default(uint8) -> 0;
+natural_default(int16) -> 0;
+natural_default(uint16) -> 0;
+natural_default(int32) -> 0;
+natural_default(uint32) -> 0;
+natural_default(int64) -> 0;
+natural_default(uint64) -> 0;
+natural_default(float32) -> 0.0;
+natural_default(float64) -> 0.0;
+natural_default(_) -> undefined.
 
 %% Size of field as stored inline in table (refs are 4-byte uoffsets)
 field_inline_size(string, _Defs) ->
