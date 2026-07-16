@@ -1086,3 +1086,35 @@ vtable_too_small_vector_test() ->
 
     ?assertEqual(42, flatbuferl_fetch:fetch(Ctx, [a])),
     ?assertEqual(undefined, flatbuferl_fetch:fetch(Ctx, [items])).
+
+%% =============================================================================
+%% flatbuferl_binary via the fetch/union path
+%% =============================================================================
+
+fetch_binary_union_value_test() ->
+    Schema =
+        "attribute \"flatbuferl_binary\";\n"
+        "table Alpha { payload: [ubyte] (flatbuferl_binary, required); }\n"
+        "table Beta { payload: [ubyte] (flatbuferl_binary, required); }\n"
+        "union Body { Alpha, Beta }\n"
+        "table Envelope {\n"
+        "  body: Body;\n"
+        "  tag: [ubyte] (flatbuferl_binary, required);\n"
+        "}\n"
+        "root_type Envelope;\n",
+    {ok, S} = flatbuferl:parse_schema(Schema),
+    Payload = <<10, 20, 30, 255>>,
+    Data = #{
+        body => #{payload => Payload},
+        body_type => 'Alpha',
+        tag => <<1, 2, 3>>
+    },
+    Buffer = iolist_to_binary(flatbuferl:from_map(Data, S)),
+    Ctx = flatbuferl:new(Buffer, S),
+    ?assertEqual(
+        ['Alpha', Payload], flatbuferl_fetch:fetch(Ctx, [body, ['_type', payload]])
+    ),
+    [_, Got] = flatbuferl_fetch:fetch(Ctx, [body, ['_type', payload]]),
+    ?assert(is_binary(Got)),
+    ?assertEqual(Payload, flatbuferl_fetch:fetch(Ctx, [body, payload])),
+    ?assertEqual(<<1, 2, 3>>, flatbuferl_fetch:fetch(Ctx, [tag])).
