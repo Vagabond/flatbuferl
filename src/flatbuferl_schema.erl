@@ -467,7 +467,8 @@ optimize_field_to_record({Name, Type, Attrs}, Defs) ->
     InlineSize = field_inline_size(NormalizedType, Defs),
     ResolvedType0 = resolve_type(NormalizedType, Defs),
     %% For union_value_def, set type_field_id and type field names now
-    ResolvedType = finalize_resolved_type(ResolvedType0, Id, Name),
+    ResolvedType1 = finalize_resolved_type(ResolvedType0, Id, Name),
+    ResolvedType = mark_binary_vector(ResolvedType1, Attrs, Name),
     #field_def{
         name = Name,
         binary_name = atom_to_binary(Name),
@@ -504,6 +505,31 @@ optimize_field_to_record({Name, Type}, Defs) ->
         resolved_type = ResolvedType,
         layout_key = InlineSize * 65536
     }.
+
+%% Honor the `flatbuferl_binary` field attribute: a byte/ubyte vector so
+%% tagged decodes to a zero-copy sub-binary instead of a list of integers.
+%% Only valid on single-byte element vectors -- little-endian layout makes
+%% wider scalars unsafe to alias, so tagging one is a schema error, as is
+%% tagging a non-vector field.
+mark_binary_vector(#vector_def{element_type = Elem} = Vec, Attrs, Name) ->
+    case wants_binary(Attrs) of
+        false ->
+            Vec;
+        true when Elem =:= uint8; Elem =:= int8 ->
+            Vec#vector_def{as_binary = true};
+        true ->
+            error({flatbuferl_binary_on_non_byte_vector, Name, Elem})
+    end;
+mark_binary_vector(Other, Attrs, Name) ->
+    case wants_binary(Attrs) of
+        false -> Other;
+        true -> error({flatbuferl_binary_on_non_vector, Name})
+    end.
+
+%% A field opts into sub-binary decoding solely via the flatbuferl-specific
+%% `flatbuferl_binary` attribute.
+wants_binary(Attrs) ->
+    maps:get(flatbuferl_binary, Attrs, false) =:= true.
 
 %% Convert partial union_value to complete union_value_def with field ID info
 finalize_resolved_type(

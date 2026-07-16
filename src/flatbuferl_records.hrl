@@ -88,7 +88,12 @@
     is_primitive :: boolean(),
     element_size :: pos_integer(),
     %% True if element_type is a table (for skipping Defs lookup at decode time)
-    is_table_element = false :: boolean()
+    is_table_element = false :: boolean(),
+    %% True to decode the vector as a sub-binary instead of a list of
+    %% integers, for byte/ubyte fields tagged with the `flatbuferl_binary`
+    %% attribute. A zero-copy slice of the buffer -- see flatbuferl_reader
+    %% read_value.
+    as_binary = false :: boolean()
 }).
 
 %% Fixed-size array definition with precomputed info

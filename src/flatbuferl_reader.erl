@@ -339,6 +339,14 @@ read_value(Buffer, Pos, string) ->
     <<_:StringPos/binary, Length:32/little-unsigned, StringData:Length/binary, _/binary>> = Buffer,
     {ok, StringData};
 %% === Compound types ===
+%% Byte vector tagged `flatbuferl_binary`: return a zero-copy sub-binary of
+%% the element bytes instead of a list. Element size is 1 (guaranteed
+%% byte/ubyte by the schema layer), so the element count is the byte length.
+read_value(Buffer, Pos, #vector_def{as_binary = true}) ->
+    <<_:Pos/binary, VectorOffset:32/little-unsigned, _/binary>> = Buffer,
+    VectorPos = Pos + VectorOffset,
+    <<_:VectorPos/binary, Length:32/little-unsigned, Bin:Length/binary, _/binary>> = Buffer,
+    {ok, Bin};
 %% Vector with enriched record (from schema)
 read_value(Buffer, Pos, #vector_def{
     element_type = ElemType, element_size = ElemSize, is_primitive = true

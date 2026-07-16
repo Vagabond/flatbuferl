@@ -371,3 +371,46 @@ field_hook_reject_test() ->
     ?assertError(
         {field_hook_error, 'Foo', name, empty}, flatbuferl:from_map(#{name => <<>>}, Schema)
     ).
+
+%% =============================================================================
+%% flatbuferl_binary attribute: byte/ubyte vectors decode as a sub-binary
+%% =============================================================================
+
+binary_vector_roundtrip_test() ->
+    %% A [ubyte] field tagged (flatbuferl_binary) round-trips as a binary,
+    %% not a list of integers.
+    Schema =
+        "attribute \"flatbuferl_binary\";\n"
+        "table Blob { payload: [ubyte] (flatbuferl_binary); }\n"
+        "root_type Blob;\n",
+    {ok, S} = flatbuferl:parse_schema(Schema),
+    Payload = <<0, 1, 2, 254, 255>>,
+    Buffer = iolist_to_binary(flatbuferl:from_map(#{payload => Payload}, S)),
+    Ctx = flatbuferl:new(Buffer, S),
+    Got = flatbuferl:get(Ctx, [payload]),
+    ?assert(is_binary(Got)),
+    ?assertEqual(Payload, Got).
+
+plain_ubyte_vector_still_list_test() ->
+    %% Without the attribute, a [ubyte] field keeps the legacy list decode,
+    %% so existing consumers are unaffected.
+    Schema =
+        "table Blob { payload: [ubyte]; }\n"
+        "root_type Blob;\n",
+    {ok, S} = flatbuferl:parse_schema(Schema),
+    Buffer = iolist_to_binary(flatbuferl:from_map(#{payload => <<1, 2, 3>>}, S)),
+    Ctx = flatbuferl:new(Buffer, S),
+    Got = flatbuferl:get(Ctx, [payload]),
+    ?assert(is_list(Got)),
+    ?assertEqual([1, 2, 3], Got).
+
+binary_attr_on_non_byte_vector_is_error_test() ->
+    %% flatbuferl_binary is only valid on single-byte element vectors;
+    %% little-endian layout makes wider scalars unsafe to alias.
+    Schema =
+        "attribute \"flatbuferl_binary\";\n"
+        "table Bad { xs: [uint] (flatbuferl_binary); }\n"
+        "root_type Bad;\n",
+    ?assertError(
+        {flatbuferl_binary_on_non_byte_vector, xs, _}, flatbuferl:parse_schema(Schema)
+    ).
