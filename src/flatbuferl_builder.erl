@@ -1170,7 +1170,14 @@ calc_ref_align_padding(Type, Value, Pos, Defs, LayoutCache) ->
                     (NeededMod - (Pos rem 8) + 8) rem 8
             end;
         false ->
-            vector_8byte_align_padding(Type, Pos)
+            case vector_8byte_align_padding(Type, Pos) of
+                0 ->
+                    %% String/vector length u32 must be 4-aligned (8-byte
+                    %% element data is handled above).
+                    (4 - (Pos rem 4)) rem 4;
+                Pad ->
+                    Pad
+            end
     end.
 
 %% Find the first 8-byte field offset in a nested table value.

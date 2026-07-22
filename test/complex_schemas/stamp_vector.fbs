@@ -1,0 +1,14 @@
+namespace protocol;
+
+// Alignment regression fixture: a vector of same-shaped tables with
+// string and byte-vector fields.
+table Stamp {
+  producer: string;
+  name: string;
+  value: [ubyte];
+}
+
+table Cmd {
+  sender: [Stamp] (required);
+  value: [ubyte];
+}
