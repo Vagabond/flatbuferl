@@ -1,0 +1,24 @@
+namespace protocol;
+
+// Alignment regression fixture: a vector of tables with u64 fields, inside a
+// union member table, the shape of mearumtime's bulk request.
+table Item {
+  name: string (required);
+  data: [ubyte];
+  a: uint64;
+  b: uint64;
+}
+
+table Bulk {
+  tag: string;
+  items: [Item] (required);
+}
+
+union Body { Bulk }
+
+table Envelope {
+  id: uint64;
+  body: Body (required);
+}
+
+root_type Envelope;

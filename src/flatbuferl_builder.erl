@@ -1170,14 +1170,38 @@ calc_ref_align_padding(Type, Value, Pos, Defs, LayoutCache) ->
                     (NeededMod - (Pos rem 8) + 8) rem 8
             end;
         false ->
-            case vector_8byte_align_padding(Type, Pos) of
-                0 ->
-                    %% String/vector length u32 must be 4-aligned (8-byte
-                    %% element data is handled above).
-                    (4 - (Pos rem 4)) rem 4;
-                Pad ->
-                    Pad
+            case table_vector_8byte_align_padding(Type, Pos, Defs) of
+                0 -> ref_align_padding(Type, Pos);
+                Pad8 -> Pad8
             end
+    end.
+
+%% A vector of tables with 8-byte fields starts on an 8-byte boundary, since
+%% its elements align their fields relative to the vector start.
+table_vector_8byte_align_padding(#vector_def{element_type = Type}, Pos, Defs) when
+    is_atom(Type)
+->
+    case maps:get(Type, Defs, undefined) of
+        #table_def{scalars = ScalarDefs} ->
+            case lists:any(fun(#field_def{inline_size = S}) -> S == 8 end, ScalarDefs) of
+                true -> (8 - (Pos rem 8)) rem 8;
+                false -> 0
+            end;
+        _ ->
+            0
+    end;
+table_vector_8byte_align_padding(_, _, _) ->
+    0.
+
+%% Padding before a string or vector of anything but tables with 8-byte fields.
+ref_align_padding(Type, Pos) ->
+    case vector_8byte_align_padding(Type, Pos) of
+        0 ->
+            %% String/vector length u32 must be 4-aligned (8-byte
+            %% element data is handled above).
+            (4 - (Pos rem 4)) rem 4;
+        Pad ->
+            Pad
     end.
 
 %% Find the first 8-byte field offset in a nested table value.
@@ -1568,7 +1592,8 @@ encode_table_vector_with_sharing(TableType, Values, Defs, #layout_cache{tables =
                 end,
             %% Total size includes 4-byte soffset
             TotalSize = 4 + BodySize,
-            {OrigIdx, VTable, TotalSize, BodyIo, IsOwner}
+            First8 = find_first_8byte_field_offset(AllFields, Slots),
+            {OrigIdx, VTable, TotalSize, {First8, BodyIo}, IsOwner}
         end,
         ElemLayouts
     ),
@@ -1640,23 +1665,16 @@ encode_table_vector_with_sharing(TableType, Values, Defs, #layout_cache{tables =
                     PaddedPos = DataPos + AlignPad,
                     {InfoAcc, VTPos#{VTable => PaddedPos}, PadMap#{VTable => AlignPad},
                         PaddedPos + VTSize};
-                {vtable_after, OrigIdx, TotalSize, BodyIo, _VTable} ->
-                    %% soffset is at start of body
-                    SOffsetPos = DataPos,
+                {_Kind, OrigIdx, TotalSize, {First8, BodyIo}, _VTable} ->
+                    %% soffset is at start of body, after any padding that
+                    %% puts the element's 8-byte fields on an 8-byte boundary
+                    Pad = table_elem_align_padding(First8, DataPos),
+                    SOffsetPos = DataPos + Pad,
                     {
                         [{OrigIdx, SOffsetPos, BodyIo} | InfoAcc],
                         VTPos,
-                        PadMap,
-                        DataPos + TotalSize
-                    };
-                {vtable_before, OrigIdx, TotalSize, BodyIo, _VTable} ->
-                    %% soffset is at start of body
-                    SOffsetPos = DataPos,
-                    {
-                        [{OrigIdx, SOffsetPos, BodyIo} | InfoAcc],
-                        VTPos,
-                        PadMap,
-                        DataPos + TotalSize
+                        PadMap#{{elem, OrigIdx} => Pad},
+                        SOffsetPos + TotalSize
                     }
             end
         end,
@@ -1688,26 +1706,28 @@ encode_table_vector_with_sharing(TableType, Values, Defs, #layout_cache{tables =
                     %% Insert padding before vtable for alignment
                     PadLen = maps:get(VTable, PaddingMap, 0),
                     [<<0:(PadLen * 8)>>, VTable];
-                {vtable_after, OrigIdx, _TotalSize, BodyIo, VTable} ->
-                    %% Negative soffset (vtable is after this element)
+                {_Kind, OrigIdx, _TotalSize, {_First8, BodyIo}, VTable} ->
+                    %% Negative when the vtable comes after this element,
+                    %% positive when it comes before
                     VTablePos = maps:get(VTable, VTablePositions),
                     SOffsetPos = maps:get(OrigIdx, SOffsetPosMap),
-                    %% Negative
                     SOffset = SOffsetPos - VTablePos,
-                    [<<SOffset:32/little-signed>>, BodyIo];
-                {vtable_before, OrigIdx, _TotalSize, BodyIo, VTable} ->
-                    %% Positive soffset (vtable is before this element)
-                    VTablePos = maps:get(VTable, VTablePositions),
-                    SOffsetPos = maps:get(OrigIdx, SOffsetPosMap),
-                    %% Positive
-                    SOffset = SOffsetPos - VTablePos,
-                    [<<SOffset:32/little-signed>>, BodyIo]
+                    Pad = maps:get({elem, OrigIdx}, PaddingMap),
+                    [<<0:(Pad * 8)>>, <<SOffset:32/little-signed>>, BodyIo]
             end
         end,
         SortedByVTable
     ),
 
     [<<Len:32/little>>, Offsets, DataIo].
+
+%% Padding before a table vector element so its soffset is 4-byte aligned and
+%% its first 8-byte field, if any, is 8-byte aligned. Pos is relative to the
+%% vector start, which the parent places on an 8-byte boundary.
+table_elem_align_padding(none, Pos) ->
+    (4 - (Pos rem 4)) rem 4;
+table_elem_align_padding(First8, Pos) ->
+    (8 - ((Pos + First8) rem 8)) rem 8.
 
 %% Encode table body with precomputed layout (avoids duplicate computation)
 %% PaddingMode: normal | minimal (for vtable sharing)
