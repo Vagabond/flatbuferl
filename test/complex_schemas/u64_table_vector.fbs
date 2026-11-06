@@ -1,7 +1,7 @@
 namespace protocol;
 
 // Alignment regression fixture: a vector of tables with u64 fields, inside a
-// union member table, the shape of mearumtime's bulk request.
+// union member table.
 table Item {
   name: string (required);
   data: [ubyte];

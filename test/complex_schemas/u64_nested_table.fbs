@@ -1,0 +1,40 @@
+namespace protocol;
+
+// Alignment regression fixture: a table with u64 fields nested directly in
+// a union member table that also holds a 4-byte struct.
+struct Seed {
+  inner: [ubyte: 32];
+}
+
+struct Txn {
+  inner: uint32;
+}
+
+table Id {
+  bytes: [ubyte] (required, flatbuferl_binary);
+}
+
+table Round {
+  seed: Seed (required);
+  timestamp: uint64;
+  number: uint64;
+  members: [Id];
+  leaders: [Id];
+  heard: [Id];
+}
+
+table Req {
+  name: string (required);
+  txn: Txn (required);
+  fuel: uint64;
+  round: Round (required);
+}
+
+union Body { Req }
+
+table Envelope {
+  id: uint64;
+  body: Body (required);
+}
+
+root_type Envelope;
